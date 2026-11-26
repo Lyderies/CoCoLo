@@ -418,5 +418,6 @@
  "codex:tests.test_s13d_regressions": "component",
  "codex:tests.test_idle_cpu_budget": "scenario",
  "codex:tests.test_health_ledger": "scenario",
- "codex:tests.test_health_ledger_fix": "scenario"
+ "codex:tests.test_health_ledger_fix": "scenario",
+ "codex:tests.test_s44a_usage_install": "scenario"
 }

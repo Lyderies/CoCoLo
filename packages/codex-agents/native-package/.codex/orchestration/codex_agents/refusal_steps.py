@@ -8,6 +8,16 @@ from __future__ import annotations
 DEFAULT = "Run learning-status to see what is held, then try again."
 
 EXACT = {
+    # S44a: the usage report's refusals, each naming what to check.
+    'usage_project_root_invalid': "The project root is not a folder this command can read: run it from the project "
+                                  "folder with --project-root ., or give the project's full path.",
+    'usage_project_not_registered': "This state does not know that project: give the project root CoCoLo was set "
+                                    "up in, then try again.",
+    'usage_state_unavailable': "CoCoLo's learning state could not be opened safely (its folder or key file has the "
+                               "wrong owner or permissions, or is missing): run learning-status for the details.",
+    'usage_store_unavailable': "A usage store could not be read: try again in a moment, or run learning-status.",
+    'usage_window_invalid': "Give --since and --until as dates, with since earlier than until and at most 366 "
+                            "days apart.",
     'account_busy': "The account's records were busy: try again in a moment.",  # M4b E1a-2
     'open_account_busy': "The account's records were busy: try again in a moment.",  # M4b E1a-2
     'status_ledger_busy': "The collector's records were busy: run learning-status again in a moment.",  # S1-H1a-6c

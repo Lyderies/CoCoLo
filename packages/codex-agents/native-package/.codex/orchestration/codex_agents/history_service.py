@@ -425,6 +425,11 @@ class HistoryService:
                 from .project_holds_report import holds_report
                 self._history()
                 result = holds_report(self._store, runtime_digest=self._runtime)
+            elif request.operation == 'history.run_usage':
+                from .project_usage_report import service_run_usage
+                self._history()
+                self._store._require_owner(read_only=True)
+                result = service_run_usage(self._store, int(self._clock()))
             elif request.operation == 'history.orchestration_counts':
                 from .project_orchestration_report import orchestration_counts
                 self._history()

@@ -13,8 +13,10 @@ terminal time of its attempt), once, in whichever store holds it.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import stat
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -139,7 +141,7 @@ def _text(value):
     return value if type(value) is str and 0 < len(value) <= 128 else None
 
 
-def _rows(connection, project_id, since_ms, until_ms, limit):
+def _rows(connection, project_id, since_ms, until_ms, limit, *, with_outcomes=True, check=lambda: None):
     """This store's runs of the window as (time, run, provider, model, effort, role, outcome, tokens...)."""
     usage_rows = connection.execute(
         "SELECT content,observed_at_ms FROM records WHERE project_id=? AND record_type IN (?,?) AND source='provider' "
@@ -148,6 +150,7 @@ def _rows(connection, project_id, since_ms, until_ms, limit):
     ).fetchall()
     usage = {}
     for blob, observed in usage_rows:
+        check()
         value = _record(blob)
         if value is not None and type(observed) is int:
             usage.setdefault(value["run_id"], (value, observed))
@@ -160,17 +163,21 @@ def _rows(connection, project_id, since_ms, until_ms, limit):
     ).fetchall()
     windowed = {}
     for blob, observed in outcome_rows:
+        check()
         value = _record(blob)
         if value is not None and type(observed) is int and value["run_id"] not in usage:
             windowed.setdefault(value["run_id"], (value, observed))
     stored = _by_run(connection, project_id, _USAGE_TYPES, "provider", windowed) if windowed else {}
-    outcomes = _by_run(connection, project_id, ("outcome",), "host", usage) if usage else {}
+    outcomes = _by_run(connection, project_id, ("outcome",), "host", usage) if usage and with_outcomes else {}
     rows = []
     for run_id, (record, observed) in usage.items():
+        check()
         outcome = outcomes.get(run_id, (None, None))[0]
         rows.append((observed, run_id, record.get("provider"), _text(record.get("requested_model")), outcome,
                      _usage_tokens(record)))
+    check()
     for run_id, (outcome, observed) in windowed.items():
+        check()
         if run_id not in stored:
             rows.append((observed, run_id, None, None, outcome, _outcome_tokens(outcome)))
     return rows, len(usage_rows) > limit or len(outcome_rows) > limit
@@ -181,8 +188,15 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
     if (type(since_ms) is not int or type(until_ms) is not int or not 0 <= since_ms < until_ms
             or until_ms - since_ms > MAX_WINDOW_MS or type(limit) is not int or not 1 <= limit <= MAX_ROWS):
         raise UsageReportError("usage_window_invalid")
+    # S44a: the root the owner types is `.`, which the report took for "not absolute" and called a state problem
+    # (learning-status resolves it first). A relative root is read from the folder the command runs in; every
+    # check on the path stays, and a root that fails one is named as the project root, not as the state.
     try:
-        root = _canonical_project_root(Path(project_root))
+        path = Path(project_root)
+        root = _canonical_project_root(path if path.is_absolute() else Path(os.getcwd()) / path)
+    except (StateError, OSError):
+        raise UsageReportError("usage_project_root_invalid") from None
+    try:
         key = state.digest_key()
     except (StateError, OSError):
         raise UsageReportError("usage_state_unavailable") from None
@@ -190,6 +204,7 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
     sources = {}
     gathered = {}
     cut = False
+    recorded = []  # each store's (first, last) time of any run it holds for the project
     for name, path in (("project_store", state.root / "projects" / project_id / "history.sqlite3"),
                        ("ledger", state.root / "learning.sqlite3")):
         connection = _readonly(path)
@@ -198,6 +213,7 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
             continue
         try:
             rows, more = _rows(connection, project_id, since_ms, until_ms, limit)
+            recorded.append(_recorded_span(connection, project_id))
         except sqlite3.Error:
             raise UsageReportError("usage_store_unavailable") from None
         finally:
@@ -243,8 +259,188 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
     return {
         "window": {"since_ms": since_ms, "until_ms": until_ms, "since": _iso(since_ms), "until": _iso(until_ms)},
         "row_limit": limit, "truncated": cut, "sources": sources,
+        "window_data": _window_data(runs, recorded, since_ms, until_ms),
+        "usage_coverage": _coverage(runs),
         "models": [models[key_] for key_ in sorted(models)], "runs": runs,
     }
+
+
+def _recorded_span(connection, project_id):
+    """(first, last) time any run of the project was recorded in this store, or (None, None).
+
+    A run counts at its usage record's time; a run with no usage record at all (an earlier version's) counts at
+    its outcome's time, as the rows of a window do. Both kinds count here, so the span never skips one.
+    """
+    marks = ",".join("?" for _ in _USAGE_TYPES)
+    times = []
+    usage_runs = set()
+    for blob, observed in connection.execute(
+            f"SELECT content,observed_at_ms FROM records WHERE project_id=? AND record_type IN ({marks}) "
+            "AND source='provider'", (project_id, *_USAGE_TYPES)):
+        value = _record(blob)
+        if value is not None and type(observed) is int:
+            usage_runs.add(value["run_id"])
+            times.append(observed)
+    for blob, observed in connection.execute(
+            "SELECT content,observed_at_ms FROM records WHERE project_id=? AND record_type='outcome' "
+            "AND source='host'", (project_id,)):
+        value = _record(blob)
+        if value is not None and type(observed) is int and value["run_id"] not in usage_runs:
+            times.append(observed)
+    return (min(times), max(times)) if times else (None, None)
+
+
+def _window_data(runs, recorded, since_ms, until_ms):
+    """Whether the window holds usage data, and if not why, in plain words (S44a-3)."""
+    firsts = [first for first, _ in recorded if first is not None]
+    lasts = [last for _, last in recorded if last is not None]
+    first, last = (min(firsts), max(lasts)) if firsts else (None, None)
+    data = {"first_run_recorded": None if first is None else _iso(first),
+            "last_run_recorded": None if last is None else _iso(last), "runs_without_usage": 0}
+    if runs:
+        data.update(state="has_runs", runs_without_usage=sum(1 for run in runs if not run["usage_complete"]))
+        data["note"] = ("Runs without complete usage are listed with the tokens they did report and the others left "
+                        "empty, never as zero."
+                        if data["runs_without_usage"] else "Every run in this window has complete usage.")
+    elif first is None:
+        data.update(state="nothing_recorded", note="No run has any usage or outcome recorded for this project, so "
+                    "there is no usage data for any window.")
+    elif until_ms <= first:
+        data.update(state="before_usage_recorded", note=f"This window ends before the first run was recorded "
+                    f"({_iso(first)}); usage was not recorded then, so there is no usage data for it.")
+    else:
+        data.update(state="no_runs_in_window", note=f"No run was recorded in this window; there is no usage data "
+                    f"for it. Runs were recorded from {_iso(first)} to {_iso(last)}.")
+    return data
+
+
+PRIMARY_SESSION_NOTE = (
+    "The primary session's own tokens are not given to CoCoLo: the Codex hooks carry no token counts, which is why "
+    "learning-status shows ingestion.coverage root_usage and child_usage as false (that describes hook events, not "
+    "the runs). Only each child's own tokens are recorded.")
+
+
+def _coverage(runs):
+    """Per provider, whether the window's child runs reported their usage.
+
+    reported: every run has complete usage; partial: some usage came in (a run with only some of its counts
+    counts too); not_reported: runs, but no count at all; no_runs: none.
+    """
+    children = {}
+    for provider in ("codex", "claude"):
+        mine = [run for run in runs if run["provider"] == provider]
+        complete = sum(1 for run in mine if run["usage_complete"])
+        some = sum(1 for run in mine if run["usage_complete"] or any(run[field] is not None for field in _TOKENS))
+        state = ("no_runs" if not mine else "reported" if complete == len(mine)
+                 else "not_reported" if some == 0 else "partial")
+        children[provider] = {"state": state, "runs": len(mine), "runs_with_complete_usage": complete}
+    return {"child_runs": children,
+            "primary_session": {"state": "not_reported", "note": PRIMARY_SESSION_NOTE}}
+
+
+STATUS_USAGE_DAYS = 7
+
+
+RUN_USAGE_SECONDS = 1.0  # the service's work for one status reading; the client waits 2 s
+RUN_USAGE_PROGRESS = 1_000  # SQLite VM steps between deadline checks
+_monotonic = time.monotonic  # the service's clock; tests replace it
+
+
+class _RunUsageExpired(Exception):
+    """The single run-usage deadline passed during Python work."""
+
+
+RUN_USAGE_UNKNOWN = {"state": "unknown", "runs": None, "runs_with_complete_usage": None}
+
+
+def service_run_usage(history, now_ms: int) -> dict:
+    """The last days' child runs of this project's own store, per provider (the service's reading for status).
+
+    Bounded in rows (MAX_ROWS; `truncated` says when more were cut) and in time (RUN_USAGE_SECONDS, checked inside
+    SQLite): when the time runs out the reply says so (`partial_reason`, every provider `unknown`, never zero) and the
+    store is left as it was. Content-free: counts and states only.
+    """
+    connection = history._connection
+    deadline = _monotonic() + RUN_USAGE_SECONDS
+
+    def check():
+        if _monotonic() > deadline:
+            raise _RunUsageExpired
+
+    connection.set_progress_handler(lambda: 1 if _monotonic() > deadline else 0, RUN_USAGE_PROGRESS)
+    try:
+        rows, more = _rows(connection, history.project_id, max(0, now_ms - STATUS_USAGE_DAYS * 86_400_000),
+                           now_ms + 1, MAX_ROWS, with_outcomes=False, check=check)
+        reply = _service_reply(rows, more, check)
+        check()
+        return reply
+    except (sqlite3.OperationalError, _RunUsageExpired):
+        return {"window_days": STATUS_USAGE_DAYS, "truncated": True,
+                "child_runs": {"codex": dict(RUN_USAGE_UNKNOWN), "claude": dict(RUN_USAGE_UNKNOWN)},
+                "primary_session": {"state": "not_reported", "note": PRIMARY_SESSION_NOTE},
+                "partial_reason": "Reading this project's stored runs took longer than the service allows for "
+                                  "status, so coverage is unknown (not zero): run learning-usage-report."}
+    finally:
+        connection.set_progress_handler(None, 0)
+
+
+def _service_reply(rows, more, check) -> dict:
+    runs = []
+    for observed, run_id, provider, model, outcome, (complete, inputs, outputs, creation, cached) in rows[:MAX_ROWS]:
+        check()
+        name = _text(outcome.get("model")) if outcome else None
+        if provider is None:
+            try:
+                provider = provider_for_model(name or model)
+            except ContractError:
+                provider = "unknown"
+        runs.append({"provider": provider, "usage_complete": bool(complete), "input_tokens": _integer_or_none(inputs),
+                     "output_tokens": _integer_or_none(outputs), "cache_creation_input_tokens": _integer_or_none(creation),
+                     "cache_read_input_tokens": _integer_or_none(cached)})
+    return {"window_days": STATUS_USAGE_DAYS, "truncated": more or len(rows) > MAX_ROWS, **_coverage(runs)}
+
+
+def checked_run_usage(value) -> None:
+    """Reject open fields and malformed values of the service's run-usage reply before presentation."""
+    from .history_contracts import HistoryError, valid_integer
+
+    def require(condition):
+        if not condition:
+            raise HistoryError("history_invalid_response")
+
+    base = {"window_days", "truncated", "child_runs", "primary_session"}
+    require(type(value) is dict and value.keys() in (base, base | {"partial_reason"}))
+    partial = "partial_reason" in value
+    require(not partial or (type(value["partial_reason"]) is str and 0 < len(value["partial_reason"]) <= 300
+                            and value["truncated"] is True))
+    require(value["window_days"] == STATUS_USAGE_DAYS and type(value["truncated"]) is bool)
+    children = value["child_runs"]
+    require(type(children) is dict and children.keys() == {"codex", "claude"})
+    for entry in children.values():
+        require(type(entry) is dict and entry.keys() == {"state", "runs", "runs_with_complete_usage"})
+        if partial:
+            require(entry == RUN_USAGE_UNKNOWN)
+            continue
+        require(entry["state"] in ("no_runs", "reported", "partial", "not_reported"))
+        require(valid_integer(entry["runs"], maximum=MAX_ROWS) and valid_integer(entry["runs_with_complete_usage"],
+                                                                                maximum=entry["runs"]))
+    require(value["primary_session"] == {"state": "not_reported", "note": PRIMARY_SESSION_NOTE})
+
+
+def status_run_usage(service_reply) -> dict:
+    """What learning-status shows beside the hook coverage flags, from the project's running service.
+
+    The status client opens no database: `service_reply` is the service's answer, or None when the service is not
+    running. Unknown is shown as unknown (null, with the reason), never as zero.
+    """
+    if service_reply is None:
+        return {"state": "unavailable", "window_days": STATUS_USAGE_DAYS, "truncated": None, "child_runs": None,
+                "primary_session": None, "report_command": "learning-usage-report",
+                "note": "This project's service is not running or did not answer, so recent run usage is unknown "
+                        "(not zero). learning-usage-report reads it from the stored records."}
+    return {"state": "available", **service_reply, "report_command": "learning-usage-report",
+            "note": f"Per provider, whether the last {STATUS_USAGE_DAYS} days' child runs reported their usage; "
+                    f"learning-usage-report lists the runs and tokens. {PRIMARY_SESSION_NOTE}"}
 
 
 def _iso(milliseconds: int) -> str:

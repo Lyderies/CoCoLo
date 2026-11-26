@@ -44,6 +44,8 @@ HISTORY_OPERATIONS = frozenset({
     "history.capacity_report", "history.holds_report",
     # T7 S2 (L14.1): this project's orchestrations by state, for learning-status (the store holds them, not the ledger).
     "history.orchestration_counts",
+    # S44a: the last days' child runs per provider, whether they reported usage, for learning-status.
+    "history.run_usage",
     # D1: a published attempt's terminal reference, found in the store from its run handle, attempt and inputs.
     "history.result_reference",
 })
@@ -143,6 +145,9 @@ def _validate_request(request: HistoryRequest) -> None:
             raise HistoryError('history_invalid_request')
     elif operation == 'history.orchestration_counts':
         if not _closed(payload, set()) or request.request_id != 'orchestrations':
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.run_usage':
+        if not _closed(payload, set()) or request.request_id != 'run-usage':
             raise HistoryError('history_invalid_request')
     elif operation == 'history.orchestration_report':
         if (not _closed(payload, {'orchestration_id'}) or type(payload['orchestration_id']) is not str
@@ -350,6 +355,9 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
     elif operation == 'history.holds_report':
         from .holds_report_contracts import checked_holds_report
         checked_holds_report(result)
+    elif operation == 'history.run_usage':
+        from .project_usage_report import checked_run_usage
+        checked_run_usage(result)
     elif operation == 'history.orchestration_counts':
         if not _closed(result, {'active', 'paused', 'closed'}) or any(
                 not valid_integer(result[name], maximum=1 << 32) for name in ('active', 'paused', 'closed')):
@@ -651,6 +659,10 @@ class HistoryClient:
     def orchestration_counts(self) -> dict:
         """This project's orchestrations by state: active, paused and closed (T7 S2, L14.1)."""
         return self._call('history.orchestration_counts', 'orchestrations', {})
+
+    def run_usage(self) -> dict:
+        """The last days' child runs of this project per provider: did they report usage (S44a)."""
+        return self._call('history.run_usage', 'run-usage', {})
 
     def orchestration_report(self, orchestration_id: str) -> dict:
         """Content-free statistics for one orchestration this project's service ran."""

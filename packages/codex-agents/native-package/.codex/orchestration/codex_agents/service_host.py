@@ -74,7 +74,7 @@ _KINDS = ('control', 'project', 'driver')
 OWNER_HISTORY_OPERATIONS = frozenset({'history.learning_cycle', 'history.learning_report',
                                       'history.learning_feedback', 'history.learning_review_case',
                                       'history.orchestration_report', 'history.capacity_report', 'history.holds_report',
-                                      'history.orchestration_counts'})
+                                      'history.orchestration_counts', 'history.run_usage'})
 DRIVER_ENDPOINT = 'run.sock'  # Beside the control socket; client_runtime uses the same name.
 # D1: refusals of the stored record context a caller is told as they are; any other failure is "not authorized".
 _PLAIN_CONTEXT_REFUSALS = frozenset({'history_worker_context_unavailable', 'history_result_expired',
@@ -572,7 +572,7 @@ class ProjectServiceHost:
                                         host_result_context=original)
         if request.operation in {'history.learning_cycle', 'history.learning_report', 'history.learning_review_case',
                                  'history.orchestration_report', 'history.capacity_report', 'history.holds_report',
-                                 'history.orchestration_counts'}:
+                                 'history.orchestration_counts', 'history.run_usage'}:
             # The project's own learning: any enrolled primary of this project may run and
             # read it. Reviewing a case is the owner's command, by the same convention as
             # every earlier version (the installed deny rules keep it from model sessions).

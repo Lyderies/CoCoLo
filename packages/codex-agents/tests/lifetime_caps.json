@@ -1660,6 +1660,11 @@
    "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
    "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
   },
+  "project_usage_report.py::_service_reply": {
+   "checks": 1,
+   "ends": "a read-only reading for learning-status over the last 7 days: its rows are never kept and never written; it reads at most 2,000 runs plus one and says truncated, and stops after 1 second of SQLite work (replying partial, providers unknown) so it never outlasts the client's 2-second wait",
+   "test": "test_s44a_2_the_service_reading_returns_at_most_its_row_cap_and_says_truncated"
+  },
   "provider_observation_contracts.py::checked_observation_reply": {
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
