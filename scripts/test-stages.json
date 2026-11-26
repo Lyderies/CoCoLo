@@ -436,5 +436,15 @@
  "codex:tests.test_health_resources": "integration",
  "codex:tests.test_health_resources_open": "integration",
  "root:test_run_measurement": "integration",
- "codex:tests.test_s14e_custody": "integration"
+ "codex:tests.test_s14e_custody": "integration",
+ "codex:tests.test_s15_lease_churn": "integration",
+ "codex:tests.test_s15_memory_matrix": "integration",
+ "codex:tests.test_s15_reservation_recovery": "integration",
+ "codex:tests.test_s15_settlement_matrix": "integration",
+ "codex:tests.test_s15_release_paths": "integration",
+ "codex:tests.test_s15_session_caps": "integration",
+ "codex:tests.test_s15_contract_caps": "integration",
+ "codex:tests.test_s15_probe_caps": "integration",
+ "codex:tests.test_s15_owner_caps": "integration",
+ "codex:tests.test_s15_failure_matrix": "integration"
 }

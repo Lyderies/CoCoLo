@@ -327,6 +327,15 @@ class AccountBillingAdmission:
         # the commit (the row is history); it is not a live generation and does not block a new judgment. Its
         # custody stays charged where it is held and ends with the restart (as known_reply's read never touched it).
         if existing is not None and existing.history is not None:
+            # S15-O0C-REPEAT-EXPIRY: a repeat generation ends at its deadline (see _forget_closed), on either clock;
+            # an expired one is never returned as live. Ordinary cleanup drops it (a fresh generation follows); one
+            # cleanup must keep (a held or running job) is refused, as prepare() would refuse it.
+            if time.monotonic_ns() >= existing.deadline_ns or self._now() >= existing.deadline:
+                self._forget_closed_contained()
+                if self._pending.get((project, key)) is existing:
+                    raise ProbeAdmissionError('probe_conflict')
+                existing = None
+        if existing is not None and existing.history is not None:
             if existing.history != row or existing.context is not context or existing.snapshot != snapshot:
                 raise ProbeAdmissionError('probe_conflict')
             self._authorize(context, snapshot, before_commit)

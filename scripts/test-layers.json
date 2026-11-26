@@ -436,5 +436,15 @@
  "codex:tests.test_health_resources": "scenario",
  "codex:tests.test_health_resources_open": "scenario",
  "root:test_run_measurement": "scenario",
- "codex:tests.test_s14e_custody": "scenario"
+ "codex:tests.test_s14e_custody": "scenario",
+ "codex:tests.test_s15_lease_churn": "component",
+ "codex:tests.test_s15_memory_matrix": "component",
+ "codex:tests.test_s15_reservation_recovery": "component",
+ "codex:tests.test_s15_settlement_matrix": "component",
+ "codex:tests.test_s15_release_paths": "scenario",
+ "codex:tests.test_s15_session_caps": "component",
+ "codex:tests.test_s15_contract_caps": "component",
+ "codex:tests.test_s15_probe_caps": "scenario",
+ "codex:tests.test_s15_owner_caps": "scenario",
+ "codex:tests.test_s15_failure_matrix": "scenario"
 }

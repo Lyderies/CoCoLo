@@ -1,0 +1,55 @@
+{
+ "authority": "docs/requirements/s15/STATUS.md",
+ "requirements": [
+  {
+   "id": "S15-B0-2",
+   "statement": "B0-6 / B4s, owner decisions 132/377: a reservation stranded by a service restart releases and settles exactly once, frees capacity, and writes no terminal or terminal-outbox row; the original B0-2 terminal test stays skipped.",
+   "source": "tests/requirements/s15.json#S15-B0-2"
+  },
+  {
+   "id": "S15-O0C-GUARD",
+   "statement": "Decisions 382/383: every lifetime-cap registry entry has kind and nonempty ends; count, bytes and time bind an existing real past-limit test; validation, read_only and precondition require ends only. Listed checks must exactly equal the current source scan, including zero. Remove a stale cap only with complete-function evidence that its cap code is gone.",
+   "source": "tests/requirements/s15.json#S15-O0C-GUARD"
+  },
+  {
+   "id": "S15-O0C-P3",
+   "statement": "O0c / B0-6 P3: failed-before-launch lease lifecycles beyond the lease verification limit must leave live capacity counts readable after their real, exactly-once releases.",
+   "source": "tests/requirements/s15.json#S15-O0C-P3"
+  },
+  {
+   "id": "S15-RS8-SETTLEMENT",
+   "statement": "RS-8 / B0-6: lease, reservation, open-binding and result-custody settlement rows recover across pre-settlement stops, cuts before and after release, and lost post-commit replies, with stable replay and baseline live capacity.",
+   "source": "tests/requirements/s15.json#S15-RS8-SETTLEMENT"
+  },
+  {
+   "id": "S15-RS8-MEMORY",
+   "statement": "RS-8 / B0-6: driver-entry and preparation memory rows retain custody for a live instance, recover across lost registration replies and cuts before and after recovery release, preserve replay after clock rollback, and permit unattended orchestration close.",
+   "source": "tests/requirements/s15.json#S15-RS8-MEMORY"
+  },
+  {
+   "id": "S15-RS8-MUTATION",
+   "statement": "RS-8: independently disabling each covered settlement, memory, account-trigger, project-final, local worker/result/execution/monitor or preparation release makes the identical positive row oracle fail.",
+   "source": "tests/requirements/s15.json#S15-RS8-MUTATION"
+  },
+  {
+   "id": "S15-RS8-RELEASE-PATHS",
+   "statement": "RS-8 / B0-6: account binding/slot/probe, project lease/reservation/open-binding/custody, driver/preparation/orchestration and local host worker/result/execution/monitor release paths retain uncertain custody, release once under their real predicates, and preserve first-release replay across applicable failure exits. Native container rows remain explicit S27a-d carry-ins.",
+   "source": "tests/requirements/s15.json#S15-RS8-RELEASE-PATHS"
+  },
+  {
+   "id": "S15-O0C-BINDINGS",
+   "statement": "O0c / decision 382: actual count, byte and time populations cross each registered limit, using existing tests or reduced-limit fixtures with real owner/store/codec work, bounded refusal or draining, and later usable scopes.",
+   "source": "tests/requirements/s15.json#S15-O0C-BINDINGS"
+  },
+  {
+   "id": "S15-O0C-FIRST-RECORD",
+   "statement": "O0c / decision 382: the session first-record parser accepts an exact MAX_FIRST_RECORD_BYTES JSON record and refuses one byte beyond the production limit, including when the excess and newline arrive in the next read block.",
+   "source": "tests/requirements/s15.json#S15-O0C-FIRST-RECORD"
+  },
+  {
+   "id": "S15-O0C-REPEAT-EXPIRY",
+   "statement": "O0c / decision 382 / RS-A F6: real repeat probe generations fill both pending quotas, refuse an extra generation, and after both clocks pass their deadline an unprepared expired generation releases its owner custody so the same committed request can start a fresh judgment.",
+   "source": "tests/requirements/s15.json#S15-O0C-REPEAT-EXPIRY"
+  }
+ ]
+}

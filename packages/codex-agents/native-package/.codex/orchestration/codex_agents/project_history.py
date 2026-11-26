@@ -78,7 +78,7 @@ MAX_DELIVERY_PAGE_BYTES = 16_384
 RESULT_PURGE_GRACE_MS = 3_600_000
 # RSF-S7 / decision 214: outlive both payload and journal retention, then the tombstone margin.
 SETTLEMENT_REPLAY_WINDOW_MS = max(MAX_RESULT_RETENTION_MS, TOMBSTONE_MS) + TOMBSTONE_MS
-# How many lease rows, live or finished, a reservation verifies at most (0.3.4 R1d).
+# How many lease rows a reservation verifies at most (0.3.4 R1d): the live ones since S15-O0C-P3.
 MAX_LEASE_ROWS = 4_096
 REPLAY_PASS_LIMIT = 4  # D4 (RS-D draft 3 §6): stored publications completed by one pass, each at most 1 MiB of body
 # How many results one reservation may retire before it is refused for capacity (0.3.4 R8).
@@ -1669,12 +1669,32 @@ class ProjectHistory:
         # tombstone or bound row. SQL labels alone cannot free reserved space.
         # This bounds the verification work, not results (0.3.4 R1d): finished lease rows stay until their
         # purge, so the 64-entry limit here refused a 65th run inside about 7.5 hours.
-        positions = self._connection.execute("SELECT rowid FROM result_leases WHERE project_id=? LIMIT ?",
-                                             (self.project_id, MAX_LEASE_ROWS + 1)).fetchall()
-        if len(positions) > MAX_LEASE_ROWS:
+        # S15-O0C-P3 (as RS-B-B6-2, decision 210): only the live leases are verified, found by verified
+        # identities (the live state its seal covers, and every held lease register row), never every retained
+        # finished row. Scanning those admitted MAX_LEASE_ROWS + 1 leases, then refused every capacity read until
+        # the purge. A live lease relabelled finished keeps its held register row, so it is still read here and
+        # its seal refuses it.
+        project, bound = self.project_id, MAX_LEASE_ROWS + 1
+        live = self._connection.execute(
+            "SELECT rowid FROM result_leases INDEXED BY lease_expiry "
+            "WHERE project_id=? AND state IN ('reserved','claim_pending') LIMIT ?", (project, bound)).fetchall()
+        held = self._connection.execute(
+            "SELECT identity FROM project_holds INDEXED BY project_holds_kind_due "
+            "WHERE kind='lease' AND state<>'released' AND project_id=? LIMIT ?", (project, bound)).fetchall()
+        if len(live) > MAX_LEASE_ROWS or len(held) > MAX_LEASE_ROWS:
             raise HistoryError("history_result_capacity")
-        for position in positions:
-            row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position[0],)).fetchone()
+        rows = {position: None for (position,) in live}
+        for (identity,) in held:
+            run_handle, separator, attempt = str(identity).rpartition(":")
+            row = self._connection.execute(
+                "SELECT rowid AS position,* FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                (project, run_handle, int(attempt) if separator and attempt.isdigit() else -1)).fetchone()
+            if row is None:
+                raise HistoryError("history_incompatible")  # SH-7: a held lease register row has its lease
+            rows[row["position"]] = row
+        for position, row in rows.items():
+            if row is None:
+                row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position,)).fetchone()
             value = self._lease(row)
             if value.state not in {"bound", "expired"}:
                 entries += 1

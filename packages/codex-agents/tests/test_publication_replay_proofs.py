@@ -138,12 +138,14 @@ class PublicationProofSensitivityTests(unittest.TestCase):
         expected = {
             'project_result_contexts.py::context_rows': {
                 'checks': 1,
+                'kind': 'count',
                 'ends': 'a page read inside repairs(): at most limit+1 context rows of one state after the cursor, one index range; rows leave as their retirement finishes (ended/expired); BOUNDED',
                 'test': 'test_R2_a_truncated_report_says_so_and_its_continuation_reaches_every_remaining_entry'},
             'project_result_contexts.py::reservation_rows': {
                 'checks': 1,
+                'kind': 'count',
                 'ends': 'a page read inside repairs(): at most limit+1 retiring reservations without a context row after the cursor; rows leave as their retirement finishes; BOUNDED',
-                'test': 'test_R2_a_reservation_only_directory_is_listed_before_earlier_retrying_contexts'},
+                'test': 'test_reaudited_reservation_only_repairs_page_past_their_own_row_limit'},
         }
         for site, entry in expected.items():
             with self.subTest(site=site):

@@ -705,7 +705,7 @@ FAILED root:test_test_framework_affected (exit 1) -> /private/tmp/ptdr5x5vn6/216
 ERROR: test_synthetic_worker_and_child_data_union_across_split_module (test_test_framework_affected.RecordingTests.test_synthetic_worker_and_child_data_union_across_split_module)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/Users/timwhatley/Code/temp/cocolo-b4t/tests/test_test_framework_affected.py", line 181, in test_synthetic_worker_and_child_data_union_across_split_module
+  File "~/Code/temp/cocolo-b4t/tests/test_test_framework_affected.py", line 181, in test_synthetic_worker_and_child_data_union_across_split_module
     import coverage
 ModuleNotFoundError: No module named 'coverage'
 
@@ -726,7 +726,7 @@ F..
 FAIL: test_current_runtime_is_recorded_for_the_current_version (tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/Users/timwhatley/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_runtime_release.py", line 35, in test_current_runtime_is_recorded_for_the_current_version
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_runtime_release.py", line 35, in test_current_runtime_is_recorded_for_the_current_version
     self.assertEqual(
     ~~~~~~~~~~~~~~~~^
         releases[version], COLLECTOR_RUNTIME_DIGEST,

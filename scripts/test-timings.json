@@ -3191,5 +3191,15 @@
  "codex:tests.test_health_resources": 3,
  "codex:tests.test_health_resources_open": 10,
  "root:test_run_measurement": 15.0,
- "codex:tests.test_s14e_custody": 30.0
+ "codex:tests.test_s14e_custody": 30.0,
+ "codex:tests.test_s15_lease_churn": 1.0,
+ "codex:tests.test_s15_memory_matrix": 1.0,
+ "codex:tests.test_s15_reservation_recovery": 0.44,
+ "codex:tests.test_s15_settlement_matrix": 1.0,
+ "codex:tests.test_s15_release_paths": 2.0,
+ "codex:tests.test_s15_session_caps": 1.0,
+ "codex:tests.test_s15_contract_caps": 0.8,
+ "codex:tests.test_s15_probe_caps": 1.0,
+ "codex:tests.test_s15_owner_caps": 10.4,
+ "codex:tests.test_s15_failure_matrix": 14.0
 }

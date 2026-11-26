@@ -1192,7 +1192,7 @@
    "codex:tests.test_hold_lifecycle.LostServiceHoldTests.test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal"
   ],
   "source": "packages/codex-agents/tests/test_hold_lifecycle.py#LEGACY-HOLD-LIFECYCLE-B0-2",
-  "statement": "**LEGACY-HOLD-LIFECYCLE-B0-2 \u2014 Deferred run supervisor reservation settlement.**\nA reservation left by a stopped service exists and eventually receives its lost terminal. B0-2 gates the run\nsupervisor and remains skipped under the owner's narrowed B0 scope of 2026-11-20. Its registered executable\nobligation remains not_run and supplies no passing coverage until that deferred work is executed."
+  "statement": "**LEGACY-HOLD-LIFECYCLE-B0-2 \u2014 Deferred terminal expectation.**\nThe original terminal assertions remain skipped by owner decisions 132/377: B4s settlement writes no\nterminal record by specification. S15 proves release, capacity recovery and replay separately."
  },
  "LOCKHOLD-1": {
   "checks": [
@@ -2086,6 +2086,7 @@
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_failure_before_preparation_withdraws_its_open_once",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_lost_reply_is_asked_again_and_withdraws_once",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_never_leased_cancel_withdraws_its_open_once",
+   "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_refused_run_view_expires_after_the_view_window",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_an_idle_registered_run_is_retired_and_withdrawn",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_the_entry_is_retired_only_after_its_row_is_releasing",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_D108_a_format_18_project_store_upgrades_to_19_and_keeps_its_rows_and_its_refusals",
@@ -4480,6 +4481,7 @@
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_one_byte_limits_rejected",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_loader_rejects_malformed_deep_json_with_plain_warning",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_and_initial_status",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_byte_cap_rejects_valid_json_one_byte_over",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_typed_bounds_and_no_import_io"
   ],
   "source": "tests/requirements/s9.json#S9-HM4-4",
@@ -5309,5 +5311,188 @@
   ],
   "source": "tests/requirements/s14d.json#S14D-5",
   "statement": "The runner does no I/O at import, and its tests use tiny fake measure scripts with low caps so each cap trips within seconds."
+ },
+ "S15-B0-2": {
+  "checks": [
+   "codex:tests.test_s15_reservation_recovery.ReservationRecoveryTests.test_successor_settlement_releases_once_frees_capacity_and_writes_no_terminal"
+  ],
+  "source": "tests/requirements/s15.json#S15-B0-2",
+  "statement": "B0-6 / B4s, owner decisions 132/377: a reservation stranded by a service restart releases and settles exactly once, frees capacity, and writes no terminal or terminal-outbox row; the original B0-2 terminal test stays skipped."
+ },
+ "S15-O0C-GUARD": {
+  "checks": [
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_function_gaining_a_limit_is_caught",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_test_must_exist",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_kinds_require_bounds_only_for_count_bytes_and_time",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_overlisted_and_zero_site_check_counts_are_caught"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-GUARD",
+  "statement": "Decisions 382/383: every lifetime-cap registry entry has kind and nonempty ends; count, bytes and time bind an existing real past-limit test; validation, read_only and precondition require ends only. Listed checks must exactly equal the current source scan, including zero. Remove a stale cap only with complete-function evidence that its cap code is gone."
+ },
+ "S15-O0C-P3": {
+  "checks": [
+   "codex:tests.test_s15_lease_churn.LeaseChurnTests.test_failed_before_launch_past_lease_verification_limit_keeps_live_counts_readable"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-P3",
+  "statement": "O0c / B0-6 P3: failed-before-launch lease lifecycles beyond the lease verification limit must leave live capacity counts readable after their real, exactly-once releases."
+ },
+ "S15-RS8-MEMORY": {
+  "checks": [
+   "codex:tests.test_s15_memory_matrix.MemoryMatrixTests.test_both_memory_kinds_cross_crashes_and_lost_registration_reply"
+  ],
+  "source": "tests/requirements/s15.json#S15-RS8-MEMORY",
+  "statement": "RS-8 / B0-6: driver-entry and preparation memory rows retain custody for a live instance, recover across lost registration replies and cuts before and after recovery release, preserve replay after clock rollback, and permit unattended orchestration close."
+ },
+ "S15-RS8-MUTATION": {
+  "checks": [
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_account_release_trigger_disabled_fails_the_ordinary_release_oracle",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_each_local_host_deletion_disabled_fails_the_same_failure_oracle",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_each_monitor_exit_with_forgetting_disabled_fails_the_same_oracle",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_each_preparation_retirement_disabled_fails_the_same_cleanup_oracle",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_each_project_final_release_disabled_fails_the_same_row",
+   "codex:tests.test_s15_memory_matrix.MemoryMatrixTests.test_each_memory_recovery_release_disabled_once_fails_its_row",
+   "codex:tests.test_s15_release_paths.ReleasePathTests.test_each_additional_release_disabled_once_fails_the_same_row",
+   "codex:tests.test_s15_settlement_matrix.SettlementMatrixTests.test_each_settlement_release_disabled_once_fails_its_own_row"
+  ],
+  "source": "tests/requirements/s15.json#S15-RS8-MUTATION",
+  "statement": "RS-8: independently disabling each covered settlement, memory, account-trigger, project-final, local worker/result/execution/monitor or preparation release makes the identical positive row oracle fail."
+ },
+ "S15-RS8-SETTLEMENT": {
+  "checks": [
+   "codex:tests.test_s15_settlement_matrix.SettlementMatrixTests.test_lease_and_reservation_cross_cuts_before_and_after_release_and_lost_reply"
+  ],
+  "source": "tests/requirements/s15.json#S15-RS8-SETTLEMENT",
+  "statement": "RS-8 / B0-6: lease, reservation, open-binding and result-custody settlement rows recover across pre-settlement stops, cuts before and after release, and lost post-commit replies, with stable replay and baseline live capacity."
+ },
+ "S15-O0C-BINDINGS": {
+  "checks": [
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_admission_identity_billing_and_restriction_ages_cross_each_horizon",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_captured_receipt_bytes_cross_each_independent_limit",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_clean_depth_crosses_limit_and_later_shallow_values_still_work",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_client_result_body_and_worker_export_cross_byte_limits_before_io",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_collector_binding_population_and_request_bytes_cross_real_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_driver_intake_and_dispatch_token_populations_cross_their_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_enrollment_consumer_verifier_and_frontend_cross_byte_limits_without_sockets",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_enrollment_subject_context_and_preamble_cross_reduced_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_escalation_ladder_crosses_reduced_limit_before_any_selection",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_exit_locations_cross_reduced_limit_without_losing_valid_records",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_gate_command_patch_nesting_and_pattern_cross_independent_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_json_value_and_service_encoder_cross_exact_reduced_byte_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_launch_journal_file_marker_and_rotation_cross_byte_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_managed_project_and_legacy_signer_files_cross_byte_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_manifest_and_directory_populations_cross_reduced_count_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_original_wire_peeks_and_proxy_head_cross_actual_byte_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_pipe_response_proc_reader_and_signature_payload_cross_byte_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_probe_event_counter_and_earlier_fence_refusals_reach_their_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_probe_record_and_result_values_cross_independent_byte_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_proof_pruning_bounds_each_pass_and_drains_past_the_limit",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_provider_model_and_helper_arrays_cross_reduced_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_real_settings_and_exit_files_cross_exact_byte_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_request_codecs_accept_exact_frame_and_refuse_one_byte_past",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_runtime_library_identity_and_snapshot_cross_actual_byte_budgets",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_scalar_text_and_client_version_cross_reduced_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_signature_writer_refuses_actual_bytes_past_each_independent_budget",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_account_binding_sweep_and_project_qa_purge_drain_past_batch_one",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_account_output_upgrade_gate_and_repair_receipt_quota_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_actual_cleanup_and_execution_grant_encoders_and_verifiers_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_actual_denial_and_bound_lease_evidence_cross_reader_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_actual_open_provenance_and_assignment_capture_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_actual_run_provenance_and_retained_record_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_actual_storage_evidence_encoder_and_both_readers_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_backup_plan_worker_artifact_and_account_check_receipts_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_container_journal_stop_detail_crosses_bytes_without_claiming_engine_evidence",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_control_dispatch_orchestration_and_read_response_decoders_cross_frames",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_derived_learning_record_feedback_and_membership_cross_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_dispatch_metadata_lifetime_refuses_overflow_and_new_service_has_fresh_slots",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_execution_and_bridge_slots_cross_limits_then_release_for_fresh_work",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_git_patch_merge_path_count_and_committed_executable_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_history_record_binding_and_result_file_cross_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_ingress_owner_group_defence_refuses_one_ticket_past_its_actual_population_limit",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_legacy_and_scalar_claim_contexts_cross_observation_age_independently",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_merge_library_file_and_aggregate_validation_cross_actual_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_native_worker_result_writer_and_retained_reader_cross_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_observation_worker_retained_reply_and_purge_cross_independent_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_open_scope_proof_and_account_reply_cross_independent_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_orchestration_positions_reports_and_recovery_cross_reduced_counts",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_original_contexts_cross_their_own_snapshot_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_original_open_delivery_quota_refuses_excess_and_cancel_take_frees_it",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_original_open_receipt_writer_crosses_its_own_byte_limit_with_atomic_rollback",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_owner_file_generation_attestation_and_intake_bytes_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_persistence_capture_defences_refuse_actual_bytes_past_each_limit",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_preparation_payload_and_real_build_refuse_past_input_budget",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_probe_reply_build_crosses_byte_limit_with_genuine_retained_record_references",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_project_host_socket_path_cap_refuses_before_runtime_or_listener_creation",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_project_request_execution_bounds_real_response_and_frees_the_failed_slot",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_qa_count_cap_refuses_a_genuine_pair_at_zero_then_restoration_commits_it",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_qa_following_chunk_replay_and_record_contract_cross_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_billing_submit_crosses_max_projects_before_any_second_reservation",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_by_run_reader_stops_at_its_actual_duplicate_record_limit",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_core_snapshot_and_selected_case_limits_are_independent",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_health_registration_exceeds_the_registration_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_health_state_reader_crosses_its_own_byte_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_kernel_wait_crosses_its_birth_pin_deadline",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_live_lease_and_reservation_verifiers_cross_their_row_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_lost_closure_checker_crosses_size_with_a_valid_closure",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_orchestration_lookup_pages_past_its_actual_page_size",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_probe_expiry_pages_past_one_reserved_or_orphaned_admitted_row",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_probe_worker_prepare_crosses_its_input_byte_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_reservation_only_repairs_page_past_their_own_row_limit",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_retained_settlement_evidence_crosses_the_history_writers_own_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_service_probe_applies_its_connect_timeout_and_retains_uncertainty",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_snapshot_step_with_an_expired_deadline_does_not_grant_work",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_start_child_recording_exhausts_its_actual_retry_count",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_takeover_journal_writer_refuses_its_own_byte_limit",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_takeover_plan_refuses_oversize_prior_authorization_before_any_peer",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_takeover_validator_crosses_authorization_bytes_directly",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_usage_record_reader_crosses_its_record_byte_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_workspace_finish_checks_marker_bytes_before_unlink",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_release_ack_and_claim_preflight_refuse_oversized_bytes_before_authority_work",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_staged_import_pages_and_source_chunk_bytes_cross_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_worker_decode_report_and_output_cross_independent_byte_limits",
+   "codex:tests.test_s15_session_caps.SessionCapTests.test_day_scan_stops_at_two_of_three_real_days_and_can_scan_again",
+   "codex:tests.test_s15_session_caps.SessionCapTests.test_folder_entry_scan_stops_with_more_real_entries_than_the_limit",
+   "codex:tests.test_s15_session_caps.SessionCapTests.test_recent_session_scan_reads_only_two_of_three_real_rollouts",
+   "codex:tests.test_s15_session_caps.SessionCapTests.test_setup_project_scan_stops_at_two_of_three_real_bindings",
+   "codex:tests.test_service_queue.ProjectFairQueueTests.test_both_population_caps_refuse_excess_and_drain_restores_admission",
+   "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_native_cursor_tracker_closes_the_first_cursor_past_its_limit"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-BINDINGS",
+  "statement": "O0c / decision 382: actual count, byte and time populations cross each registered limit, using existing tests or reduced-limit fixtures with real owner/store/codec work, bounded refusal or draining, and later usable scopes."
+ },
+ "S15-RS8-RELEASE-PATHS": {
+  "checks": [
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_account_holds_cross_transaction_cuts_and_lost_release_reply",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_actual_failure_before_launch_frees_worker_result_execution_and_monitor",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_host_and_probe_preparation_cancellation_and_failure_remove_actual_workspaces",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_lost_and_duplicate_dispatch_replies_keep_one_original_without_new_custody",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_lost_claim_reply_restarts_owner_without_another_claim_or_slot",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_monitor_exit_matrix_requires_terminal_and_cleanup_before_forgetting",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_project_withdrawal_completion_and_closed_custody_replay_keep_first_release",
+   "codex:tests.test_s15_failure_matrix.FailureMatrixTests.test_refused_open_claim_and_dispatch_do_not_acquire_downstream_holds",
+   "codex:tests.test_s15_release_paths.ReleasePathTests.test_release_paths_replay_without_changing_the_first_release"
+  ],
+  "source": "tests/requirements/s15.json#S15-RS8-RELEASE-PATHS",
+  "statement": "RS-8 / B0-6: account binding/slot/probe, project lease/reservation/open-binding/custody, driver/preparation/orchestration and local host worker/result/execution/monitor release paths retain uncertain custody, release once under their real predicates, and preserve first-release replay across applicable failure exits. Native container rows remain explicit S27a-d carry-ins."
+ },
+ "S15-O0C-FIRST-RECORD": {
+  "checks": [
+   "codex:tests.test_s15_session_caps.SessionCapTests.test_first_record_exact_boundary_at_reduced_limit",
+   "codex:tests.test_s15_session_caps.SessionCapTests.test_first_record_rejects_one_byte_past_its_real_byte_limit"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-FIRST-RECORD",
+  "statement": "O0c / decision 382: the session first-record parser accepts an exact MAX_FIRST_RECORD_BYTES JSON record and refuses one byte beyond the production limit, including when the excess and newline arrive in the next read block."
+ },
+ "S15-O0C-REPEAT-EXPIRY": {
+  "checks": [
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generation_that_cleanup_must_keep_is_refused_not_returned",
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_free_the_count_cap_for_the_same_request",
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_release_quota_when_a_different_request_retries",
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_wall_clock_only_expiry_without_a_permit_refuses_until_monotonic_cleanup"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-REPEAT-EXPIRY",
+  "statement": "O0c / decision 382 / RS-A F6: real repeat probe generations fill both pending quotas, refuse an extra generation, and after both clocks pass their deadline an unprepared expired generation releases its owner custody so the same committed request can start a fresh judgment."
  }
 }
