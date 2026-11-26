@@ -277,8 +277,23 @@ jobs:
           python-version: "3.11"
       - name: Prepare pinned test-only tools
         run: python -m pip install --require-hashes -r requirements-test.txt
-      - name: Release-gate replays (soak profile, named modules)
-        run: python scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live
+      # Decision 420: one soak invocation over every soak-layer module, so its run record carries every soak-linked
+      # check. The soak requirement gate below needs all of them to have run and passed. This job's gate is REQUIRED
+      # for tags and main (it runs on both); branch protection is unchanged. Tags add --release, which also fails on
+      # any requirement still marked planned.
+      - name: Release-gate replays (soak profile, every soak module)
+        run: python scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live --module codex:tests.test_merge_library_soak --save-timings "$RUNNER_TEMP/soak.json"
+      - name: Enforce every soak-linked requirement check
+        env:
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '' }}
+        run: python scripts/parallel_tests.py --requirement-gate "$RUNNER_TEMP/soak.json.run.json" $RELEASE
+      - name: Retain soak run evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gate-soak-macos-latest
+          path: ${{ runner.temp }}/soak.json.run.json
+          if-no-files-found: error
 
   integration-budget:
     needs: integration
@@ -379,8 +394,14 @@ jobs:
           pattern: integration-timings-*
           path: gate
           merge-multiple: true
+      # Decision 420: this gate judges each check only in the profile that selects its layer. The ci profile never
+      # selects soak checks, so a requirement whose only unrun checks are soak-layer is reported "awaiting soak gate"
+      # (listed, not a pass; the release-replay job's soak gate must prove it). Requirements marked planned are listed
+      # in their own list; tags add --release, which fails on any planned requirement.
       - name: Enforce every requirement from complete run evidence
-        run: python scripts/parallel_tests.py --requirement-gate gate/*.run.json
+        env:
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '' }}
+        run: python scripts/parallel_tests.py --requirement-gate gate/*.run.json $RELEASE
 
   assertion-diff:
     continue-on-error: true

@@ -118,6 +118,10 @@ def validate_metadata(*, inventory, stages, layers, catalogue):
             errors.append(requirement + ': requirement cannot be marked inactive')
         if not row.get('statement', '').strip() or not row.get('source', '').strip():
             errors.append(f'{requirement}: requirement has no statement or source')
+        if row.get('status', 'planned') != 'planned':
+            errors.append(f'{requirement}: unknown requirement status {row["status"]!r}')
+        elif row.get('status') == 'planned' and row.get('checks'):
+            errors.append(f'{requirement}: planned requirement lists checks; remove the planned status once it has proof')
         if len(row.get('checks', [])) != len(set(row.get('checks', []))):
             errors.append(f'{requirement}: duplicate check')
         for name in row.get('checks', []):
@@ -135,6 +139,34 @@ def coverage(catalogue, outcomes):
                                'failed' if any(s not in ('passed', 'not_run', 'skipped') for s in states) else
                                'skipped' if 'skipped' in states else
                                'not_run' if 'not_run' in states else 'passed')
+    return result
+
+
+def check_layer(name, layers):
+    """Layer of the module a check belongs to (longest 'suite:module' prefix), or None for a registry-only name."""
+    best = max((key for key in layers if name == key or name.startswith(key + '.')), key=len, default=None)
+    return layers.get(best)
+
+
+def profile_coverage(catalogue, outcomes, layers, profile):
+    """Decision 420: judge each check only in the run profile that selects its layer.
+
+    ci/dev profile: soak-layer checks are not judged; a requirement whose judged checks all passed but which still has
+    soak checks is 'awaiting_soak' (visible, never a pass). soak profile: only soak-linked checks are judged and
+    requirements with no soak link are left out. A requirement marked planned is 'planned' in every profile."""
+    result = {}
+    for requirement, row in catalogue.items():
+        if row.get('status') == 'planned':
+            result[requirement] = 'planned'
+            continue
+        soak = [n for n in row['checks'] if check_layer(n, layers) == 'soak']
+        ordinary = [n for n in row['checks'] if n not in soak]
+        if profile == 'soak':
+            if soak:
+                result[requirement] = coverage({requirement: {'checks': soak}}, outcomes)[requirement]
+            continue
+        status = coverage({requirement: {'checks': ordinary}}, outcomes)[requirement]
+        result[requirement] = 'awaiting_soak' if soak and status in ('passed', 'unchecked') else status
     return result
 
 
@@ -217,7 +249,7 @@ def combine_measurements(reports):
     return result
 
 
-def combine_run_records(reports):
+def combine_run_records(reports, release=False):
     """Complete stage evidence for one invocation; not_run is never green."""
     if not reports:
         raise ValueError('missing run records')
@@ -231,7 +263,9 @@ def combine_run_records(reports):
         groups.setdefault(report['plan_digest'], []).append(report)
     complete = [combine_measurements(group) for group in groups.values()]
     selected = {name for report in complete for name in report['plan']['selection']}
-    required = {name for name, layer in first['plan']['layers'].items() if layer != 'soak'}
+    profile = first['plan']['profile']
+    # The soak gate requires every soak module's run; the ci gate every non-soak module's (decision 420).
+    required = {name for name, layer in first['plan']['layers'].items() if (layer == 'soak') == (profile == 'soak')}
     if not required.issubset(selected):
         raise ValueError('missing/incomplete stage evidence: ' + repr(sorted(required - selected)))
     outcomes = {}
@@ -243,12 +277,17 @@ def combine_run_records(reports):
                 if name in outcomes:
                     raise ValueError('duplicate stage check: ' + name)
                 outcomes[name] = status
-    result = coverage(first['plan']['catalogue'], outcomes)
+    result = profile_coverage(first['plan']['catalogue'], outcomes, first['plan']['layers'], profile)
     # Same rule as a local run (decision 126.2): skipped-only requirements are reported, not failures.
-    failures = {name: status for name, status in result.items() if status not in ('passed', 'unchecked', 'skipped')}
+    failures = {name: status for name, status in result.items()
+                if status not in ('passed', 'unchecked', 'skipped', 'awaiting_soak', 'planned')}
+    if release:  # A planned requirement never ships: the release gate fails on it (decision 420).
+        failures.update({name: status for name, status in result.items() if status == 'planned'})
     if failures:
         raise ValueError('requirements failed/not_run: ' + repr(failures))
-    return {'invocation_id': first['invocation_id'], 'requirements': result,
+    return {'invocation_id': first['invocation_id'], 'requirements': result, 'profile': profile,
+            'awaiting_soak': sorted(k for k, v in result.items() if v == 'awaiting_soak'),
+            'planned': sorted(k for k, v in result.items() if v == 'planned'),
             'unchecked_requirement_ids': sorted(k for k, v in result.items() if v == 'unchecked'),
             'unchecked_requirement_count': sum(v == 'unchecked' for v in result.values()),
             'job_seconds': sum(r['job_seconds'] for r in reports)}

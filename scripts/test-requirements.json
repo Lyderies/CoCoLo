@@ -5306,9 +5306,7 @@
    "codex:tests.test_merge_library_table.TableOutcomes.test_G6_accepts_permitted_and_rejects_corrupt_outcomes",
    "codex:tests.test_merge_library_table.TableOutcomes.test_H1_accepts_permitted_and_rejects_corrupt_outcomes",
    "codex:tests.test_merge_library_table.TableOutcomes.test_H2_accepts_permitted_and_rejects_corrupt_outcomes",
-   "codex:tests.test_merge_library_table.TableOutcomes.test_I1_accepts_permitted_and_rejects_corrupt_outcomes",
-   "planned:TF-19",
-   "review:TF-19"
+   "codex:tests.test_merge_library_table.TableOutcomes.test_I1_accepts_permitted_and_rejects_corrupt_outcomes"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-19",
   "statement": "**TF-19 \u2014 Preserve the single merge oracle and its review gate.** Step 3's `check_end_state` is derived from\nsections 1, 2, 3 and 5 of `ANALYSIS-0.4.0-merge-library-states.md`, with one POLICY dictionary at Q1\u2013Q6 recommended\ndefaults. Read durable history independently; never infer direction from a report or all-new tree. The state\nmachine selects land/retry/cancel/undo/crash/recover and fault points, not a second handwritten outcome oracle.\nTrace every replaced assertion to a table cell and replacement file:line; primary checks the table line by line.\nWitness: every permitted outcome in all 41 cells is ACCEPTED and deliberately wrong outcomes for each cell are rejected; the four required mutations (private-location\ncheck, flush before A, third history commit, injected EIO falsely landed) each have a named catching test.\nIf a current test contradicts its requirement, stop on it and record test name, exact requirement and conflict;\nthe already-identified oracle corrections are requirement-driven work, not permission to fit expectations to code."
@@ -5322,25 +5320,25 @@
   "statement": "**TF-2 \u2014 Every module declares one valid layer.** Before running bodies, reject missing, duplicate, unknown,\nor stale module declarations and incompatible stage/layer pairs. Stale means no longer discovered. Check all discovered suites, including\nmodules selected out of the current run, and import failures; never silently default an undeclared module to\nintegration. Witness: remove one module's layer, add a bogus layer, add a stale entry, duplicate a JSON key,\nor declare layer component with stage unit; each is rejected with the full module ID. Valid mappings above pass."
  },
  "TF-20": {
-  "checks": [
-   "planned:TF-20"
-  ],
+  "checks": [],
+  "planned_reason": "Step 4 scenario coverage of all 80 lifecycle requirements through six parts and a fault matrix is not built; only the shared lifecycle runner exists.",
   "source": "REQUIREMENTS-test-framework.md#TF-20",
-  "statement": "**TF-20 \u2014 Scenario coverage uses the shared fixture and exact statements.** Step 4 extends the existing\n`scripts/e2e_lifecycle.py` with a shared temporary project, prepared git repo, scripted stand-in Claude/Codex\nbinaries and service on a Unix socket. Build the shared project/providers first, then implement the\nchecks in six parts covering all 80 requirements. Cover all 80 requirements, not necessarily exactly 80 checks, in six\nparts: API (27), G1\u2013G9 (9), L12 (7), TERM (5), and two parts containing the other L requirements (32 total).\nParts do not multiply a module's budget; fragments aggregate under TF-8. Each part obeys the scenario budget, preserves all-flow checks and AND aggregation, and emits per-requirement\npass/fail with content-free reports. Every assertion matches its statement's exact reason codes/states. One\ndeliberate fault per group must make that group's checks red; shared G checks may also detect it and must\nnever be suppressed to obtain an 'exactly one group' presentation. `test_e2e_requirements` must pass unchanged\nin meaning. Witness: all-80 execution, isolated and combined part execution, fault matrix, private-value checks."
+  "statement": "**TF-20 \u2014 Scenario coverage uses the shared fixture and exact statements.** Step 4 extends the existing\n`scripts/e2e_lifecycle.py` with a shared temporary project, prepared git repo, scripted stand-in Claude/Codex\nbinaries and service on a Unix socket. Build the shared project/providers first, then implement the\nchecks in six parts covering all 80 requirements. Cover all 80 requirements, not necessarily exactly 80 checks, in six\nparts: API (27), G1\u2013G9 (9), L12 (7), TERM (5), and two parts containing the other L requirements (32 total).\nParts do not multiply a module's budget; fragments aggregate under TF-8. Each part obeys the scenario budget, preserves all-flow checks and AND aggregation, and emits per-requirement\npass/fail with content-free reports. Every assertion matches its statement's exact reason codes/states. One\ndeliberate fault per group must make that group's checks red; shared G checks may also detect it and must\nnever be suppressed to obtain an 'exactly one group' presentation. `test_e2e_requirements` must pass unchanged\nin meaning. Witness: all-80 execution, isolated and combined part execution, fault matrix, private-value checks.",
+  "status": "planned"
  },
  "TF-21": {
-  "checks": [
-   "review:TF-21"
-  ],
+  "checks": [],
+  "planned_reason": "Step 5 pruning with replacement ledger and remeasurement has not been done, and it must follow the matching TF-20 scenario proof.",
   "source": "REQUIREMENTS-test-framework.md#TF-21",
-  "statement": "**TF-21 \u2014 Prune only with equivalent named proof.** After step 4, address the ten heaviest modules by\nbaseline job-seconds (`MEASURE-test-framework.md` top-ten rows, originally lines 92\u2013101) before wider\npruning. Before each step-5 module change, record its requirement\nIDs and keep/move/remove disposition. A removed test requires a named start-to-finish check proving the same\nstatement and relevant edge cases; a moved function test keeps identical assertions/expected values and cites\nthe requirement. Every removed/changed assertion is listed with old and replacement file:line; no weakening.\nKeep real boundary checks per TF-13 and remeasure the affected module after each change, quoting the timing\nfile's job-seconds. Witness: report links to executed replacement and retained assertions, with before/after\nmeasurements; metadata-only replacement is insufficient. No pruning precedes the matching scenario proof."
+  "statement": "**TF-21 \u2014 Prune only with equivalent named proof.** After step 4, address the ten heaviest modules by\nbaseline job-seconds (`MEASURE-test-framework.md` top-ten rows, originally lines 92\u2013101) before wider\npruning. Before each step-5 module change, record its requirement\nIDs and keep/move/remove disposition. A removed test requires a named start-to-finish check proving the same\nstatement and relevant edge cases; a moved function test keeps identical assertions/expected values and cites\nthe requirement. Every removed/changed assertion is listed with old and replacement file:line; no weakening.\nKeep real boundary checks per TF-13 and remeasure the affected module after each change, quoting the timing\nfile's job-seconds. Witness: report links to executed replacement and retained assertions, with before/after\nmeasurements; metadata-only replacement is insufficient. No pruning precedes the matching scenario proof.",
+  "status": "planned"
  },
  "TF-22": {
-  "checks": [
-   "review:TF-22"
-  ],
+  "checks": [],
+  "planned_reason": "Review-checkpoint evidence (step reports, assertion replacement ledger, outstanding Linux/macOS gate) is a human process with no automated check since review outcomes were retired.",
   "source": "REQUIREMENTS-test-framework.md#TF-22",
-  "statement": "**TF-22 \u2014 Review checkpoints and evidence.** Step reports are under 15 lines each and name commits,\nrequirements -> red/green or measurement evidence, every assertion replacement, and open issues. Owner subsequently set the next review stop after step 3 (step-1 review r1). Apply that stop before proceeding to steps 4\u20135. Use only own worktrees/branches; never push, install outside the authorized temporary test environment, or modify the\ncontrol project or 0.3.3. Step 2 is authorized; step 3 rebases the existing merge\nbranch only after step 2 is committed. Acceptance includes macOS and Linux / Python 3.11 evidence or an\nexplicit outstanding platform gate; this Mac run alone cannot prove portability."
+  "statement": "**TF-22 \u2014 Review checkpoints and evidence.** Step reports are under 15 lines each and name commits,\nrequirements -> red/green or measurement evidence, every assertion replacement, and open issues. Owner subsequently set the next review stop after step 3 (step-1 review r1). Apply that stop before proceeding to steps 4\u20135. Use only own worktrees/branches; never push, install outside the authorized temporary test environment, or modify the\ncontrol project or 0.3.3. Step 2 is authorized; step 3 rebases the existing merge\nbranch only after step 2 is committed. Acceptance includes macOS and Linux / Python 3.11 evidence or an\nexplicit outstanding platform gate; this Mac run alone cannot prove portability.",
+  "status": "planned"
  },
  "TF-23": {
   "checks": [],
@@ -5405,7 +5403,6 @@
  },
  "TF-5": {
   "checks": [
-   "review:TF-5",
    "root:test_test_framework.MetadataTests.test_a_requirement_passes_only_when_all_checks_passed_and_actually_ran",
    "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
@@ -5428,6 +5425,11 @@
    "root:test_test_framework_guards.RunnerIntegrationTests.test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_skipped_only_requirement_is_not_a_passing_run",
    "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
+   "root:test_test_framework_r2.RequirementGateProfiles.test_ci_gate_passes_when_only_soak_checks_are_unrun_and_reports_them",
+   "root:test_test_framework_r2.RequirementGateProfiles.test_ci_gate_still_fails_on_any_unrun_or_failed_ci_check",
+   "root:test_test_framework_r2.RequirementGateProfiles.test_gate_cli_reports_planned_and_release_mode_fails_on_them",
+   "root:test_test_framework_r2.RequirementGateProfiles.test_planned_status_is_validated_and_cannot_hide_checks",
+   "root:test_test_framework_r2.RequirementGateProfiles.test_soak_gate_fails_if_a_soak_check_is_not_run_and_ignores_ci_only_requirements",
    "root:test_test_framework_r2.RoundTwo.test_M4_caller_cannot_accept_failure_bearing_combiner_result",
    "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence",
    "root:test_test_framework_r3.RoundThree.test_p05_CI_selects_trusted_bases_for_supported_events"
@@ -5437,7 +5439,6 @@
  },
  "TF-6": {
   "checks": [
-   "review:TF-6",
    "root:test_test_framework.MetadataTests.test_unknown_and_empty_tags_and_missing_tagged_rationale_are_rejected"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-6",

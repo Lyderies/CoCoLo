@@ -622,6 +622,7 @@ def main(argv: list[str] | None = None) -> int:
     dependency_mode.add_argument('--record-coverage', action='store_true', help='record executed-file dependencies in a full run')
     dependency_mode.add_argument('--affected', metavar='BASE', help='run tests affected by changes since BASE, or all when uncertain')
     parser.add_argument('--requirement-gate', nargs='+', type=Path, help='combine all stages and enforce every requirement')
+    parser.add_argument('--release', action='store_true', help='with --requirement-gate: fail on any planned requirement (release/tag gate)')
     parser.add_argument('--budgets-only', action='store_true', help='only check complete shard budgets; final requirement gate remains mandatory')
     parser.add_argument('--combine-timings', nargs='+', type=Path, help='combine complete disjoint shard .run.json files')
     parser.add_argument("--shard", type=parse_shard, default=(1, 1), metavar="K/N",
@@ -641,12 +642,19 @@ def main(argv: list[str] | None = None) -> int:
             parser.error('--record-coverage/--affected require an unfiltered, unsharded ci-profile run')
     if args.requirement_gate:
         try:
-            report = framework.combine_run_records([framework.decode_json(path.read_text()) for path in args.requirement_gate])
+            report = framework.combine_run_records([framework.decode_json(path.read_text()) for path in args.requirement_gate], release=args.release)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             return 1
         print(json.dumps(report, indent=1))
-        return int(not report.get('requirements') or any(value not in ('passed', 'unchecked') for value in report['requirements'].values()))
+        # Awaiting-soak and planned requirements are listed, never counted as passes; --release already failed on planned.
+        skipped = sorted(key for key, value in report.get('requirements', {}).items() if value == 'skipped')
+        if skipped:  # Decision 126.2: a skip is environmental, reported and never a failure (same rule as the combiner).
+            print(f'Requirements proved only by skipped checks ({len(skipped)}): ' + ', '.join(skipped), flush=True)
+        for key in ('awaiting_soak', 'planned'):
+            if report.get(key):
+                print(f'Requirements {key.replace("_", " ")} ({len(report[key])}): ' + ', '.join(report[key]), flush=True)
+        return int(not report.get('requirements') or any(value not in ('passed', 'unchecked', 'skipped', 'awaiting_soak', 'planned') for value in report['requirements'].values()))
     if args.combine_timings:
         report = framework.combine_measurements([framework.decode_json(path.read_text()) for path in args.combine_timings])
         print(json.dumps(report, indent=1))
