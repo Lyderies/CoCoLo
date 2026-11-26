@@ -1,13 +1,8 @@
 """RSF-S3 (split of test_rsf_s3_resumable): part account."""
-import json  # noqa: F401
-import shutil  # noqa: F401
-import unittest  # noqa: F401
-from unittest import mock  # noqa: F401
-
 import tests.support  # noqa: F401
 from test_framework import requirements
-from tests.rsf_s3_support import *  # noqa: F401,F403
-from tests.rsf_s3_support import ResumableSupport
+import os
+from tests.rsf_s3_support import ACCOUNT_CLASSES, COUNT, PROJECT_CLASSES, ResumableSupport
 
 
 class ResumableAccountTests(ResumableSupport):
