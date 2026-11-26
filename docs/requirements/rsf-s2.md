@@ -122,3 +122,13 @@ RSF-S2-3: an epoch read interrupted by the SQLite read budget must re-raise
 the original `sqlite3.OperationalError('interrupted')` so the read scope can
 report its budget error. Every other SQLite epoch-read error continues to
 fail closed with the existing ownership refusal.
+
+**TORN-1 — No torn reads on a shared connection** (fix/0874-torn-read; finding
+`reviews/040-lockloss/FINDING.md`). Every read or write on a connection that is
+shared between threads happens under that connection's lock. A fence check never
+judges a live owner from a read taken outside it: the epoch read in
+`StoreFence.check` takes the connection's owner lock (the ledger RLock set by
+`share_with_lock`; re-entrant for a holder) so a racing locked writer cannot
+make it see no row and refuse a live owner. Tests:
+`tests.test_torn_read.TornReadTests` (the epoch read runs under the lock, and
+a caller waits for a held lock rather than reading past it).

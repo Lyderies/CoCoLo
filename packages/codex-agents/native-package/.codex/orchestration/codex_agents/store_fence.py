@@ -6,6 +6,7 @@ exclusion additionally requires the lifetime flock and a newer store version.
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import functools
 import os
@@ -112,8 +113,10 @@ class StoreFence:
             self.lock()
         if self.epoch is not None:
             try:
-                row = sqlite3.Connection.execute(connection,
-                    'SELECT epoch,new_digest FROM runtime_takeover WHERE singleton=1').fetchone()
+                # TORN-1: the connection is shared between threads; read under its lock (RLock, re-entrant).
+                with getattr(connection, '_sql_owner_lock', None) or contextlib.nullcontext():
+                    row = sqlite3.Connection.execute(connection,
+                        'SELECT epoch,new_digest FROM runtime_takeover WHERE singleton=1').fetchone()
                 valid = row is not None and tuple(row) == (self.epoch, self.digest)
             except sqlite3.Error as error:
                 if isinstance(error, sqlite3.OperationalError) and str(error) == 'interrupted':
