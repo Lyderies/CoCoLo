@@ -114,6 +114,17 @@ else:
     runpy.run_path(args[0], run_name="__main__")
 '''
 
+_BYTECODE_CACHE: list[str] = []
+
+
+def shared_bytecode_cache() -> str:
+    """One bytecode cache for every interpreter this process's Worlds start (removed at exit)."""
+    if not _BYTECODE_CACHE:
+        _BYTECODE_CACHE.append(tempfile.mkdtemp(prefix="e2e-pyc"))
+        atexit.register(shutil.rmtree, _BYTECODE_CACHE[0], True)
+    return _BYTECODE_CACHE[0]
+
+
 SHIM = '''\
 #!/bin/sh
 while [ $# -gt 0 ]; do
@@ -123,6 +134,8 @@ while [ $# -gt 0 ]; do
     *) break;;
   esac
 done
+# TESTSPEED-2: a World started by a test process shares that process's bytecode cache (E2E_PYCACHE); else none.
+if [ -n "$E2E_PYCACHE" ]; then exec "%PYTHON%" -I -S -X pycache_prefix="$E2E_PYCACHE" "%BOOT%" "$@"; fi
 exec "%PYTHON%" -I -B -S -X pycache_prefix=/dev/null "%BOOT%" "$@"
 '''
 
@@ -446,6 +459,7 @@ class World:
             GIT_AUTHOR_NAME="e2e", GIT_AUTHOR_EMAIL="e2e@example.invalid",
             GIT_COMMITTER_NAME="e2e", GIT_COMMITTER_EMAIL="e2e@example.invalid")
         env.pop("XDG_RUNTIME_DIR", None)
+        env["E2E_PYCACHE"] = shared_bytecode_cache()
         runtime = self._private_runtime_folder()
         if runtime is not None:
             env["XDG_RUNTIME_DIR"] = str(runtime)
