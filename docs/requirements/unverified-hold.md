@@ -28,6 +28,9 @@ from the k4 live-obligation chain walk). Nothing is inferred from a missing obli
   `MAX_UNVERIFIED_KNOWN` (64, oldest out) and not attempted again; after a restart or an eviction one more refused,
   local attempt (no account request, no change) learns it again from the record. No release and no account change is
   made for it. A conflict for any run not recorded unverified is still retried.
+  Correction (decision 370): with more than 64 recurring unverified run ids, the oldest are forgotten from
+  that memory, so each forgotten run is retried locally on every sweep (one refused local attempt, no account
+  calls, no change). That is accepted; the memory is a cap on work, not on correctness.
 - **UH-4:** `docs/troubleshooting.md` "Update hand-over" explains this case in plain words.
 - **UH-5:** verified takeover rows, a run still `held` at adoption that later goes `releasing` (through the
   successor's own arbitration and outbox), and genuinely overdue holds of any other kind, behave as before.
