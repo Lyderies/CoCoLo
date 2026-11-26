@@ -2401,6 +2401,9 @@ class LearningLedger:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS records_type_project ON records(record_type, project_id)"
             )
+            # S14b: derived retention state; persistent indexes only via create_retention_indexes (upgrade flow).
+            from .run_retention import initialize
+            initialize(self)
             # AP5-2: evidence names content identities, so seek just those within the project.
             # Additive and non-unique: existing ledgers and older same-schema readers stay valid.
             # Both pinned candidate queries rely on every normal open completing this DDL;
@@ -2659,6 +2662,19 @@ class LearningLedger:
         ).fetchall():
             due.append((str(row["project_id"]), str(row["relative_path"])))
         return due
+
+    def create_retention_indexes(self) -> None:
+        """S14b: the consented upgrade flow's step; refused unless this is the drained offline owner."""
+        if self._collector_active is not False or self._sole_owner:
+            raise LedgerError("retention indexes are created only by the offline upgrade owner")
+        from .run_retention import ensure_indexes
+        with self._held():
+            ensure_indexes(self)
+
+    def sweep_run_retention(self, *, now_ms: int | None = None, batch: int = 32) -> int:
+        """S14b: one bounded page, off the run path, on the ledger owner."""
+        from .run_retention import sweep
+        return sweep(self, self._clock_ms() if now_ms is None else now_ms, batch)
 
     def sweep_account_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
         """Remove finished account rows past their retention, a small batch of each kind at a time (0.3.4 R6:
@@ -11195,6 +11211,8 @@ class LearningLedger:
     ) -> dict[str, Any]:
         if checked["record_type"] != "event_summary" and str(checked["record_id"]).startswith("evsum-"):
             raise LedgerError("the evsum- identifier prefix is kept for event summaries")
+        if checked['record_type'] != 'retention_summary' and str(checked['record_id']).startswith('retsum-'):
+            raise LedgerError('the retsum- identifier prefix is kept for retention summaries')
         if checked["record_type"] in LEARNING_MOVED_TYPES and self._learning_moved_locked(
             project_id
         ):
@@ -11214,6 +11232,7 @@ class LearningLedger:
                 "grader_calibration", "owner_grant", "promotion", "learning_export",
                 "billing_attestation", "run_slot_confirmation",
                 "claim_denial_settlement",
+                "retention_summary",
             }
             # A raw hook or app-server event is kept as long as its code's weight says;
             # a host lifecycle event as long as its run's outcome (the default).
@@ -11263,6 +11282,14 @@ class LearningLedger:
             ),
         )
         self._auto_link_locked(project_id, checked)
+        if checked['record_type'] == 'retention_summary':
+            from .run_retention import index_summary
+            index_summary(self, project_id, checked)
+        if checked['record_type'] != 'retention_summary':
+            from .run_retention import note_append
+            note_append(self, checked['record_type'], expires)
+            if expires is not None and (expires, project_id, sequence) <= getattr(self, '_run_retention_after', (-1, '', 0)):
+                self._run_retention_after = (-1, '', 0)
         return {
             "stored": True,
             "duplicate": False,
@@ -12045,6 +12072,40 @@ class LearningLedger:
             raise LedgerError("canary case does not resolve to exactly one candidate")
         return case, active[0]
 
+    def _retention_detail(self, project_id, identifier, *, by_digest=False, record_type=None):
+        """An indexed membership proof; budget refusal never invents history."""
+        from .run_retention import RUN_RETENTION_READ_LIMITS, HISTORY_TYPES, digest_prefix, summary_matches, rebuilding_answer
+        target = identifier if by_digest else content_digest(identifier)
+        if record_type is not None and record_type not in HISTORY_TYPES:
+            return None
+        kind = HISTORY_TYPES.index(record_type) if record_type is not None else None
+        try:
+            target_bytes = bytes.fromhex(target)
+        except (ValueError, TypeError):
+            return None
+        if len(target_bytes) != 32:
+            return None
+        target = target_bytes.hex()
+        def read():
+            return self._connection.execute(
+                "SELECT r.content FROM retention_members m JOIN records r "
+                "ON r.project_id=? AND r.source_sequence=m.summary_sequence "
+                "WHERE m.project_ref=(SELECT rowid FROM projects WHERE project_id=?) AND m.digest=? AND m.lookup_kind=? "
+                "AND (? IS NULL OR m.record_type=?) LIMIT 1",
+                (project_id, project_id, digest_prefix(target), int(by_digest), kind, kind)).fetchone()
+        with self._held():
+            try:
+                row = self._connection.read_in_current_mode(RUN_RETENTION_READ_LIMITS, read)
+            except SQLReadError:
+                if self._history_index_rebuilding:
+                    return rebuilding_answer()
+                raise
+            if row:
+                summary = json.loads(bytes(row[0]))
+                if summary_matches(summary, target, by_digest=by_digest, record_type=record_type):
+                    return summary
+            return rebuilding_answer() if self._history_index_rebuilding else None
+
     def record_by_digest(
         self, project_id: str, digest: str, record_type: str
     ) -> dict[str, Any]:
@@ -12062,6 +12123,10 @@ class LearningLedger:
                 (project_id, record_type, digest),
             ).fetchall()
         if len(rows) != 1:
+            if record_type == 'outcome':
+                summary = self._retention_detail(project_id, digest, by_digest=True, record_type=record_type)
+                if summary is not None:
+                    return summary
             raise LedgerError("controller evidence record was not found")
         return json.loads(bytes(rows[0]["content"]))
 
@@ -13462,6 +13527,10 @@ class LearningLedger:
     def _finish_exclusive_maintenance(self) -> None:
         try:
             self._connection.execute("VACUUM")
+            # Rowids used by the derived history walk/project references may
+            # change. Schedule a fresh bounded rebuild before any later lookup.
+            from .run_retention import rebuild_history_index
+            rebuild_history_index(self)
             mode_cursor = self._connection.execute("PRAGMA journal_mode = WAL")
             mode_row = mode_cursor.fetchone()
             mode_cursor.close()
@@ -13551,7 +13620,21 @@ class ProjectRepository:
 
     def record(self, record_id: str, record_type: str | None = None) -> dict[str, Any]:
         """Return one immutable record from this project partition."""
-
+        from .learning_contracts import STORED_RETENTION_DETAIL_TYPES
+        lookup_types = STORED_RETENTION_DETAIL_TYPES | {'retention_summary'}
+        if record_type is None or record_type in lookup_types:
+            with self.__ledger._held():
+                row = self.__ledger._connection.execute(
+                    'SELECT record_type,content FROM records WHERE project_id=? AND record_id=? '
+                    'AND (? IS NULL OR record_type=?)',
+                    (self.project_id, record_id, record_type, record_type)).fetchone()
+            if row is not None and row[0] in lookup_types:
+                return validate_learning_record(json.loads(bytes(row[1])), stored=True)
+            if row is None:
+                summary = self.__ledger._retention_detail(self.project_id, record_id, record_type=record_type)
+                if summary is not None:
+                    return summary
+                raise LedgerError('project record was not found')
         records = self.records(record_type)
         matches = [record for record in records if record["record_id"] == record_id]
         if len(matches) != 1:
@@ -14039,16 +14122,19 @@ class CollectorServer:
                       (self.ledger.sweep_learning_retention, loose),  # O0c P8: cases and candidates past the window
                       (self.ledger.sweep_superseded_attestations, loose),  # O0c P9: only the latest attestation stays
                       (self.ledger.sweep_account_retention, loose),
-                      (release_holds, loose)]
+                      (release_holds, loose),
+                      (self.ledger.sweep_run_retention, loose)]
             pending_events = getattr(self, "_event_retention_more", False)
-            selected = ([sweeps[1], sweeps[5]] if pending_events else sweeps[5:]) if holds_only else sweeps
+            selected = (([sweeps[1]] if pending_events else []) + [sweeps[5]] +
+                        ([sweeps[6]] if getattr(self.ledger, '_run_retention_more', False) else [])) if holds_only else sweeps
             for sweep, errors in selected:
                 if self._sweeps_stop.is_set():
                     return None
                 with contextlib.suppress(*errors):
                     sweep()
             return "more" if (released == [ACCOUNT_HOLD_RELEASE_BATCH]
-                              or getattr(self, "_event_retention_more", False)) else None
+                              or getattr(self, "_event_retention_more", False)
+                              or getattr(self.ledger, '_run_retention_more', False)) else None
         finally:
             lock.release()
 

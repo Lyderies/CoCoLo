@@ -1014,6 +1014,8 @@ def _register_project(args, moved_aside, upgrade_required, progress):
         ledger = LearningLedger(state, allow_schema_upgrade=behind is not None,
                                 backup_before_upgrade=behind is not None)
         try:
+            if args.upgrade_ledger:
+                ledger.create_retention_indexes()  # S14b: additive indexes, only on the consented upgrade
             project_id = ledger.register_project(args.project_root)
         finally:
             _close_ledger(ledger)

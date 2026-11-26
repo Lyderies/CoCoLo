@@ -3174,5 +3174,8 @@
  "codex:tests.test_s12_account_lanes": 15.0,
  "codex:tests.test_health_ledger": 2.5,
  "codex:tests.test_health_ledger_fix": 30,
- "codex:tests.test_s44a_usage_install": 17.0
+ "codex:tests.test_s44a_usage_install": 17.0,
+ "codex:tests.test_run_retention": 3.0,
+ "codex:tests.test_run_retention_integration": 15.0,
+ "codex:tests.test_run_retention_scale": 30.0
 }

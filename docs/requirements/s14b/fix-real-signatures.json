@@ -1,0 +1,13 @@
+{
+ "passed": false,
+ "signature_execution": "real",
+ "before_column_bytes": 0,
+ "after_column_bytes": 0,
+ "retained_columns": {},
+ "runs_per_day": 774,
+ "horizon_years": 5,
+ "projected_gib": null,
+ "overhead_source": "accepted S14: 1.745 database/column, 0.972 planned-backup/database",
+ "includes": "all backed-up tables, released hold receipts, actual partial summaries, 92 days recent detail, weighted events",
+ "failure": "Real signature worker timed out before open completion; no footprint measurement was collected."
+}

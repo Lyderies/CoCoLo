@@ -32,7 +32,7 @@ MAX_CHUNK_BYTES = 262_144
 MAX_SIGNATURE_BYTES = 16_384
 EMPTY_CHAIN_DIGEST = "0" * 64
 _RECORD_TYPES = frozenset({
-    "event", "event_summary", "outcome", "feedback", "evaluation_case", "evaluation_assignment",
+    "event", "event_summary", "retention_summary", "outcome", "feedback", "evaluation_case", "evaluation_assignment",
     "qa_evidence", "evidence_review", "evaluation_trial", "candidate", "comparison",
     "canary_report", "grader_calibration", "owner_grant", "promotion", "learning_export",
     "verification_binding", "host_run_profile", "dispatch_intent", "dispatch_result",
@@ -328,6 +328,10 @@ def stage_chunk(history, import_id, index, records, attestations, *, now_ms, bef
         from .project_learning_chunks import record_chunk_membership
         record_chunk_membership(history, import_id, index, records, attestations, digest)
         _authorization(before_commit)
+        if any(record['record_type'] == 'retention_summary' for _, record in records):
+            # Scheduling only: a rolled-back chunk may cause an empty rewalk,
+            # never a false not-found. Imported bytes remain the sole authority.
+            history._learning_history_cursors[import_id] = 0
         return receipt
 
 

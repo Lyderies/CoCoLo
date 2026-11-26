@@ -1,0 +1,103 @@
+{
+ "recorded_peak_runs_per_day": 387,
+ "measured": {
+  "runs": 500,
+  "tool_calls_per_run": 25,
+  "events_per_run": 106,
+  "events": 53000,
+  "events_swept": 53000,
+  "database_bytes_per_event": 1406.4,
+  "planned_backup_bytes_per_event": 1367.0,
+  "written_backup_bytes_per_event": 958.0,
+  "column_bytes_per_event": 805.8,
+  "database_to_column_ratio": 1.745,
+  "planned_backup_to_database_ratio": 0.972,
+  "summary_database_bytes_per_run": 1785.9,
+  "summary_planned_backup_bytes_per_run": 1536.0,
+  "other_families_per_run": {
+   "rows": 21,
+   "column_bytes": 15760,
+   "backup_column_bytes": 15068,
+   "database_bytes": 27508,
+   "backup_database_bytes": 26300,
+   "by_table": {
+    "sessions": {
+     "rows": 1,
+     "column_bytes": 117,
+     "in_backup": true
+    },
+    "run_provenance": {
+     "rows": 1,
+     "column_bytes": 194,
+     "in_backup": true
+    },
+    "records": {
+     "rows": 5,
+     "column_bytes": 4025,
+     "in_backup": true
+    },
+    "host_run_bindings": {
+     "rows": 1,
+     "column_bytes": 677,
+     "in_backup": true
+    },
+    "launch_claims": {
+     "rows": 1,
+     "column_bytes": 224,
+     "in_backup": true
+    },
+    "launch_inputs": {
+     "rows": 1,
+     "column_bytes": 255,
+     "in_backup": true
+    },
+    "launch_observations": {
+     "rows": 1,
+     "column_bytes": 177,
+     "in_backup": true
+    },
+    "launch_receipts": {
+     "rows": 1,
+     "column_bytes": 493,
+     "in_backup": true
+    },
+    "active_run_capacity": {
+     "rows": 1,
+     "column_bytes": 528,
+     "in_backup": true
+    },
+    "account_open_receipts": {
+     "rows": 1,
+     "column_bytes": 4861,
+     "in_backup": true
+    },
+    "account_open_requests": {
+     "rows": 1,
+     "column_bytes": 523,
+     "in_backup": true
+    },
+    "admission_evidence": {
+     "rows": 3,
+     "column_bytes": 692,
+     "in_backup": false
+    },
+    "run_holds": {
+     "rows": 2,
+     "column_bytes": 253,
+     "in_backup": true
+    },
+    "records (outcome)": {
+     "rows": 1,
+     "column_bytes": 2741,
+     "in_backup": true
+    }
+   }
+  },
+  "installed_keep_days": {
+   "low": 7,
+   "medium": 30
+  },
+  "installed_summary_keep_days": 90
+ },
+ "other_families_planned_backup_bytes_per_run": 25563
+}

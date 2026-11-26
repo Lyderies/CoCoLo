@@ -2,16 +2,16 @@
  "note": "Every count-based limit in the runtime: file::function -> checks, how what it counts ends, and its past-the-limit test. Maintained by hand; see test_lifetime_cap_guard.py.",
  "schema": 1,
  "sites": {
- "admission_capture_content.py::pack_content": {
-  "checks": 1,
-  "ends": "S14a: per-record 64-KiB input/reconstruction ceilings; one bounded temporary record is released after capture or decode. No cumulative history or admission counter.",
-  "test": "test_packed_content_is_lossless_bounded_and_rejects_corruption"
- },
- "admission_capture_content.py::unpack_content": {
-  "checks": 4,
-  "ends": "S14a fix round: per-record 64-KiB ceiling and remaining 3x caller byte budget; stop streaming at the first excess byte before parsing that row. Temporary content ends with this snapshot decode; no cumulative admission counter.",
-  "test": "test_decoded_content_exact_limit_and_one_byte_over_streaming"
- },
+  "admission_capture_content.py::pack_content": {
+   "checks": 1,
+   "ends": "S14a: per-record 64-KiB input/reconstruction ceilings; one bounded temporary record is released after capture or decode. No cumulative history or admission counter.",
+   "test": "test_packed_content_is_lossless_bounded_and_rejects_corruption"
+  },
+  "admission_capture_content.py::unpack_content": {
+   "checks": 4,
+   "ends": "S14a fix round: per-record 64-KiB ceiling and remaining 3x caller byte budget; stop streaming at the first excess byte before parsing that row. Temporary content ends with this snapshot decode; no cumulative admission counter.",
+   "test": "test_decoded_content_exact_limit_and_one_byte_over_streaming"
+  },
   "recovery_report.py::recovery_pending": {
    "checks": 1,
    "ends": "B7b snapshot aggregation only, no admission/refusal cap: COUNT of open orchestrations blocked by execution holds; releasing the last execution hold clears the count, closing removes the orchestration. Pending identities are projected from live holds, sweep observations are replaced after each completed pass, and own-run observations are removed when recovery finishes.",
@@ -1409,7 +1409,7 @@
   },
   "project_history.py::replay_candidates": {
    "checks": 1,
-   "ends": "D4 (RS-D draft 3 §6): one bounded page per replay pass (at most REPLAY_PASS_LIMIT = 4 publications tried, each one body of at most 1 MiB) over `project_result_publications`, which holds only unfinished publications: a row ends with its commit or with the transaction that records `retiring`, so nothing accumulates and tombstones cost nothing; a refused row stays for retirement and the cursor moves on, so it never holds later ones back",
+   "ends": "D4 (RS-D draft 3 \u00a76): one bounded page per replay pass (at most REPLAY_PASS_LIMIT = 4 publications tried, each one body of at most 1 MiB) over `project_result_publications`, which holds only unfinished publications: a row ends with its commit or with the transaction that records `retiring`, so nothing accumulates and tombstones cost nothing; a refused row stays for retirement and the cursor moves on, so it never holds later ones back",
    "test": "test_the_replay_pass_completes_at_most_four_publications_and_the_next_pass_the_rest"
   },
   "project_history.py::settle_earlier_registrations": {
@@ -1613,7 +1613,7 @@
   },
   "project_result_contexts.py::_sweep_candidates": {
    "checks": 1,
-   "ends": "D3 (RS-D draft 4 §1): a per-pass batch bound over the live partial index (rows not `ended` or `expired`); a selected context ends `ended` when its files are gone, so only unfinished custody is ever scanned and tombstones cost nothing",
+   "ends": "D3 (RS-D draft 4 \u00a71): a per-pass batch bound over the live partial index (rows not `ended` or `expired`); a selected context ends `ended` when its files are gone, so only unfinished custody is ever scanned and tombstones cost nothing",
    "test": "test_U8_the_context_sweep_is_bounded_and_fair_across_passes"
   },
   "project_result_contexts.py::context_rows": {
@@ -1628,7 +1628,7 @@
   },
   "project_result_contexts.py::repairs": {
    "checks": 3,
-   "ends": "D3 (RS-D draft 3 §4): three report bounds per page, over contexts in `repair_required`, over reservations in `retiring` that have no context row, and over contexts in `retiring`, in that order with a cursor for the next page; each ends `ended` or `expired` once the retry succeeds or an operator removes the directory under its fixed name",
+   "ends": "D3 (RS-D draft 3 \u00a74): three report bounds per page, over contexts in `repair_required`, over reservations in `retiring` that have no context row, and over contexts in `retiring`, in that order with a cursor for the next page; each ends `ended` or `expired` once the retry succeeds or an operator removes the directory under its fixed name",
    "test": "test_M1_a_directory_under_a_reservation_only_body_name_is_shown_charged_retried_and_finished_when_removed"
   },
   "project_result_contexts.py::reservation_rows": {
@@ -2015,7 +2015,7 @@
   },
   "learning_store.py::__init__": {
    "checks": 1,
-   "ends": "Schema-version comparison, not a lifetime count: the legacy flag lasts one owner connection. Step 16→17 replaces the singleton machine-local epoch, preserves project records, and creates no accumulating quota.",
+   "ends": "Schema-version comparison, not a lifetime count: the legacy flag lasts one owner connection. Step 16\u219217 replaces the singleton machine-local epoch, preserves project records, and creates no accumulating quota.",
    "test": "test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
   },
   "hold_migration.py::__init__": {
@@ -2212,6 +2212,41 @@
    "checks": 1,
    "ends": "Read at most 4096 bytes plus one probe. Validate typed bounds with whole-file default fallback and plain warnings; no persisted records or users are capped. S9/S10/S35 share this loader.",
    "test": "test_shared_settings_typed_bounds_and_no_import_io"
+  },
+  "run_retention.py::page": {
+   "checks": 1,
+   "ends": "An indexed maintenance page of at most 32 records. The cursor advances even over protected rows; records end in immutable summaries. No admission cap.",
+   "test": "test_past_batch_limit_and_protected_prefix_drain_without_starvation"
+  },
+  "run_retention.py::sweep": {
+   "checks": 5,
+   "ends": "One page at most 32 records; only maintenance, resumes after the page and skips readers/transactions. Not a run admission cap. SQL selection is limited to 2048 callbacks and 25 ms.",
+   "test": "test_past_batch_limit_and_protected_prefix_drain_without_starvation"
+  },
+  "learning_contracts.py::validate_retention_summary": {
+   "checks": 1,
+   "ends": "Stored summaries have at most 32 represented records, the maintenance page bound. This is a record shape bound, never admission or accumulated history. Keep the stored-reader bound even if the live page shrinks.",
+   "test": "test_summary_contract_is_closed_and_old_vocabulary_remains_readable"
+  },
+  "learning_store.py::_retention_detail": {
+   "checks": 1,
+   "ends": "Historical lookup seeks one proven, typed summary member under the existing 2048-callback/25-ms read budget. Missing IDs stay not found; a budget refusal propagates without inventing membership. The connection-local index rebuilds from permanent summaries.",
+   "test": "test_typed_history_and_years_of_summaries_use_indexed_membership"
+  },
+  "run_retention.py::advance_import_history": {
+   "checks": 2,
+   "ends": "Imported summaries are rebuilt into the connection-local lookup in pages of at most 32 on project-owner maintenance; the page cursor advances and then drops, so it is neither an admission cap nor accumulated history. Summaries stay permanent history.",
+   "test": "test_import_rebuild_pages_resume_and_preserve_digest_answers"
+  },
+  "run_retention.py::rows": {
+   "checks": 1,
+   "ends": "The ledger's lookup rebuild reads at most 32 permanent summaries per owner turn and resumes from its committed cursor; the cursor ends at the last summary. A page bound, never an admission cap.",
+   "test": "test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe"
+  },
+  "run_retention.py::_component": {
+   "checks": 1,
+   "ends": "The bounded recursive page ends at batch+1; oversized linked groups stay full and later candidates advance. No admission capacity limit.",
+   "test": "test_oversize_linked_group_stays_atomic_without_starving_later_work"
   }
  }
 }

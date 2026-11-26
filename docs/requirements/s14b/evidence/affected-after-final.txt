@@ -1,0 +1,12 @@
+FAIL: test_RS_A_G6_an_idle_ledger_with_nothing_due_is_checked_often_by_one_cheap_read (tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_G6_an_idle_ledger_with_nothing_due_is_checked_often_by_one_cheap_read) (statement='SELECT n FROM retention_revision')
+AssertionError: Lists differ: [] != ['SCAN retention_revision']
+FAIL: test_RS_A_G6_an_idle_ledger_with_nothing_due_is_checked_often_by_one_cheap_read (tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_G6_an_idle_ledger_with_nothing_due_is_checked_often_by_one_cheap_read) (statement='PRAGMA query_only')
+AssertionError: False is not true : PRAGMA query_only
+FAIL: test_RS_A_G6_an_idle_ledger_with_nothing_due_is_checked_often_by_one_cheap_read (tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_G6_an_idle_ledger_with_nothing_due_is_checked_often_by_one_cheap_read) (statement='PRAGMA busy_timeout')
+FAIL: test_default_refuses_without_writes_and_explicit_upgrade_keeps_all_original_cells (tests.test_account_observation_schema.AccountObservationSchemaTests.test_default_refuses_without_writes_and_explicit_upgrade_keeps_all_original_cells)
+AssertionError: {'index:active_capacity_account': '9fc73743[4463 chars]1ae'} != {'table:projects': 'bbdd3a73479864aefd55f15[4989 chars]e1a'}
+FAIL: test_interrupted_upgrade_rolls_back_both_tables_and_releases_original_writer (tests.test_account_observation_schema.AccountObservationSchemaTests.test_interrupted_upgrade_rolls_back_both_tables_and_releases_original_writer)
+AssertionError: {'index:active_capacity_account': '9fc73743[4463 chars]1ae'} != {'table:projects': 'bbdd3a73479864aefd55f15[4989 chars]e1a'}
+FAIL: test_or3_upgrade_backup_verify_keep_a_legacy_inconsistent_axes_outcome_byte_identical (tests.test_account_observation_schema.AccountObservationSchemaTests.test_or3_upgrade_backup_verify_keep_a_legacy_inconsistent_axes_outcome_byte_identical)
+FAIL: test_every_count_based_limit_in_the_runtime_is_listed_with_its_end (tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end)
+AssertionError: Lists differ: [] != ["run_retention.py::advance_import_history[291 chars]st)"]

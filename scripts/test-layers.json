@@ -419,5 +419,8 @@
  "codex:tests.test_idle_cpu_budget": "scenario",
  "codex:tests.test_health_ledger": "scenario",
  "codex:tests.test_health_ledger_fix": "scenario",
- "codex:tests.test_s44a_usage_install": "scenario"
+ "codex:tests.test_s44a_usage_install": "scenario",
+ "codex:tests.test_run_retention": "scenario",
+ "codex:tests.test_run_retention_integration": "scenario",
+ "codex:tests.test_run_retention_scale": "scenario"
 }

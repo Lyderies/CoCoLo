@@ -1,0 +1,12 @@
+{
+ "summary_count": 365001,
+ "detail_count": 50000,
+ "ledger_bytes": 545497088,
+ "persistent_index_build_seconds": 0.2426912090741098,
+ "membership_index_build_seconds": 7.2654947499977425,
+ "membership_index_bytes": 10203136,
+ "membership_bytes_per_entry": 27.953720674737877,
+ "membership_index_pages": 11407,
+ "three_lookup_seconds": 0.0004122919635847211,
+ "passed": true
+}

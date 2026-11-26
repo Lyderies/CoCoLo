@@ -419,5 +419,8 @@
  "codex:tests.test_idle_cpu_budget": "integration",
  "codex:tests.test_health_ledger": "integration",
  "codex:tests.test_health_ledger_fix": "integration",
- "codex:tests.test_s44a_usage_install": "integration"
+ "codex:tests.test_s44a_usage_install": "integration",
+ "codex:tests.test_run_retention": "integration",
+ "codex:tests.test_run_retention_integration": "integration",
+ "codex:tests.test_run_retention_scale": "integration"
 }
