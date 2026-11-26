@@ -5237,7 +5237,8 @@
    "root:test_run_measurement.RunnerReviewTests.test_data_written_and_gone_between_polls_is_still_a_breach",
    "root:test_run_measurement.RunnerReviewTests.test_data_written_outside_the_data_dir_is_a_volume_breach",
    "root:test_run_measurement.RunnerReviewTests.test_hard_maxima_and_odd_numbers",
-   "root:test_run_measurement.RunnerReviewTests.test_the_directory_walk_is_bounded"
+   "root:test_run_measurement.RunnerReviewTests.test_the_directory_walk_is_bounded",
+   "root:test_run_measurement.RunnerReviewTests.test_the_directory_walk_is_bounded_for_empty_directories_too"
   ],
   "source": "tests/requirements/s14d.json#S14D-1",
   "statement": "scripts/run_measurement.py runs one measurement script as a child with enforced caps (wall clock default 300 s, declared override, hard maximum 900 s without --approve-decision N; generated data under its own output dir, default 1 GiB; peak RSS default 3 GiB); on a breach it kills only the process group it started, deletes the data, prints one plain line and exits non-zero."
@@ -5249,6 +5250,7 @@
    "root:test_run_measurement.RunnerCleanupTests.test_keep_leaves_the_data_and_names_it",
    "root:test_run_measurement.RunnerCleanupTests.test_success_reports_bytes_and_deletes_the_data",
    "root:test_run_measurement.RunnerCleanupTests.test_the_child_writes_its_temporary_files_into_the_output_dir",
+   "root:test_run_measurement.RunnerReviewTests.test_a_breach_that_cannot_delete_its_data_says_so_and_exits_with_an_error",
    "root:test_run_measurement.RunnerReviewTests.test_an_unreadable_subdirectory_is_still_deleted",
    "root:test_run_measurement.RunnerReviewTests.test_launch_failure_and_deletion_failure_are_reported_and_clean_up"
   ],

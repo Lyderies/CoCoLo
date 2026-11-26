@@ -87,6 +87,8 @@ def tree_bytes(path, max_seconds=None):
     deadline = None if max_seconds is None else time.monotonic() + max_seconds
     total = 0
     for base, dirs, files in os.walk(path):
+        if deadline is not None and time.monotonic() >= deadline:
+            return total, False
         for name in files:
             if deadline is not None and time.monotonic() > deadline:
                 return total, False
@@ -338,6 +340,9 @@ def main(argv=None):
                 problem = (problem + '; ' if problem else '') + f'could not delete the generated data in {out_dir}: remove it by hand'
     seconds = time.monotonic() - started
     if breach:
+        if problem:
+            print(f'measurement stopped: {breach[0]}; {problem}; {breach[1]}.')
+            return ERROR
         print(f'measurement stopped: {breach[0]}; its generated data was deleted; {breach[1]}.')
         return BREACH
     if problem:

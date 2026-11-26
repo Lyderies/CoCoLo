@@ -1,5 +1,7 @@
 """S14d (decision 371): the measurement runner enforces its caps. Tiny fake scripts, low caps, seconds each."""
 import ast
+import contextlib
+import io
 import os
 from pathlib import Path
 import re
@@ -38,6 +40,7 @@ SCAN_SUFFIXES = {'.md', '.py', '.sh', '.txt', '.yml', '.yaml'}
 
 def invokes_directly(text):
     """True when text runs a measure script other than as the argument of scripts/run_measurement.py."""
+    text = re.split(r'(?:^|\s)#', text)[0]   # a comment is not a command
     for part in re.split(r'&&|\|\||;|\|', text):
         if any(form.search(part) for form in DIRECT_FORMS) and not any(form.search(part) for form in RUNNER_AS_PROGRAM):
             return True
@@ -291,6 +294,31 @@ class RunnerReviewTests(RunnerCase):
         self.assertFalse(complete)
         self.assertTrue(run_measurement.tree_bytes(self.dir, 30)[1])
 
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_the_directory_walk_is_bounded_for_empty_directories_too(self):
+        import run_measurement
+        for number in range(300):
+            (self.dir / f'd{number}' / 'e').mkdir(parents=True)
+        self.assertFalse(run_measurement.tree_bytes(self.dir, 0)[1])
+        self.assertTrue(run_measurement.tree_bytes(self.dir, 30)[1])
+
+    @requirements('S14D-2', why_not_scenario=WHY)
+    def test_a_breach_that_cannot_delete_its_data_says_so_and_exits_with_an_error(self):
+        import run_measurement
+        script = self.fake('time.sleep(30)\n')
+        out = io.StringIO()
+        with mock.patch.object(tempfile, 'tempdir', str(self.dir)), \
+                mock.patch.object(run_measurement, 'delete_tree', return_value=False), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = run_measurement.main(['--wall', '1', str(script)])
+        self.assertEqual(4, code)
+        text = out.getvalue()
+        self.assertIn('wall clock', text)
+        self.assertIn('could not delete', text)
+        self.assertNotIn('was deleted', text)
+        for name in self.leftovers():
+            __import__('shutil').rmtree(self.dir / name)
+
 
 class RunnerCleanupTests(RunnerCase):
     @requirements('S14D-2', why_not_scenario=WHY)
@@ -396,7 +424,9 @@ class DirectInvocationTests(unittest.TestCase):
                      'python -B scripts/run_measurement.py --wall 60 packages/x/scripts/measure_x.py --',
                      'subprocess.run([sys.executable, "-B", "scripts/run_measurement.py", "scripts/measure_x.py"])'):
             self.assertFalse(invokes_directly(line), line)
-        self.assertTrue(invokes_directly('# see run_measurement.py. $PY -B scripts/measure_x.py'))
+        self.assertTrue(invokes_directly('see run_measurement.py. $PY -B scripts/measure_x.py'))
+        self.assertTrue(invokes_directly('$PY scripts/measure_x.py # python scripts/run_measurement.py'))
+        self.assertTrue(invokes_directly('$PY -B scripts/measure_x.py scripts/run_measurement.py'))
 
     @requirements('S14D-4', why_not_scenario=WHY)
     def test_prose_only_counts_inside_code(self):
