@@ -59,9 +59,12 @@ def compare_json(*, path, actual, requirement, declared, known, environ, keys=No
 
 def legacy_route_availability(route, task, policy):
     """124b: remove only additive availability and newly introduced false markers."""
-    from copy import deepcopy
-    result = deepcopy(route)
+    # Only top-level keys and the verifier dict are changed, so copy just those (the route is not mutated);
+    # a deep copy of the whole route, availability audit included, dominated the routing golden modules.
+    result = dict(route)
     result.pop("availability", None)
+    if isinstance(result.get("verifier"), dict):
+        result["verifier"] = dict(result["verifier"])
     old_scope = (policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
                  and task["risk"] in {"low", "medium"})
     if not (old_scope and task.get("verification_for_family") in {"coding", "research", "planning"}):

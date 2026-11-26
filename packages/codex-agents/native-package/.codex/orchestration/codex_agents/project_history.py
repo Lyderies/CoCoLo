@@ -1561,6 +1561,22 @@ class ProjectHistory:
         }))
 
     def _lease(self, row):
+        # A row verifies as a pure function of its own columns, this project and the result key, so a row already
+        # verified with the same content is not verified again; any changed column misses and is verified in full.
+        # Bound rows also read their reservation parent and are never cached.
+        cache = self.__dict__.setdefault("_verified_leases", {})
+        fingerprint = tuple(row)
+        identity = (row["run_handle"], row["attempt"])
+        known = cache.get(identity)
+        if known is not None and known[0] == fingerprint:
+            check_cleanup_reservation(self, known[1])
+            return known[1]
+        value = self._verify_lease(row)
+        if value.state != "bound":
+            cache[identity] = (fingerprint, value)
+        return value
+
+    def _verify_lease(self, row):
         invalid = False
         try:
             encoded = self._stored_blob(row["binding"], maximum=MAX_BINDING_BYTES)
@@ -1692,13 +1708,21 @@ class ProjectHistory:
             if row is None:
                 raise HistoryError("history_incompatible")  # SH-7: a held lease register row has its lease
             rows[row["position"]] = row
+        counted = set()
         for position, row in rows.items():
             if row is None:
                 row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position,)).fetchone()
             value = self._lease(row)
+            counted.add((value.binding.run_handle, value.binding.attempt))
             if value.state not in {"bound", "expired"}:
                 entries += 1
                 charged += 1
+        # The verified-row caches follow the live leases: whatever finished or was purged is dropped here.
+        for name in ("_verified_leases", "_verified_cleanups"):
+            cache = self.__dict__.get(name)
+            if cache:
+                for stale in [key for key in cache if key[-2:] not in counted]:
+                    del cache[stale]
         return entries, charged, written
 
     def _insert_result_reservation(self, value):

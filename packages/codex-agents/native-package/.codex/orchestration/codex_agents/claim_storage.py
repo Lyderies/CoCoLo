@@ -5,7 +5,6 @@ bytes through separately authenticated server-side enrollment, never a caller
 role flag or an arbitrary endpoint selected in JSON. Verification narrows normal
 admission; it cannot create a claim, release capacity or authenticate a primary.
 """
-from dataclasses import asdict
 import secrets
 
 from .account_claim_contracts import ClaimError
@@ -18,7 +17,8 @@ MAX_STORAGE_EVIDENCE_BYTES = 16_384
 
 def lease_data(value):
     """Keep genuine legacy wire bytes and seals unchanged after migration."""
-    fields = asdict(value)
+    fields = dict(vars(value))  # asdict without its recursive copy: the binding is the only nested value
+    fields['binding'] = dict(vars(value.binding))
     if value.cleanup_reservation_digest is None:
         fields.pop('cleanup_reservation_digest')
     return fields
