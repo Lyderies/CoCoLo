@@ -70,3 +70,29 @@
 - Its `ends` text "S15-P3 exposes ... admits MAX_LEASE_ROWS + 1, then refuses live-capacity reads" -> the fixed
   behaviour (only live leases verified). `test` binding unchanged. No test assertion changed or removed; the S15
   churn witness is unchanged and now green.
+
+
+## Finish pass at 28d24d58
+
+- **No existing test assertion was changed or removed.** No guard code or
+  assertion was changed; the strict registry assertion remains red with 311
+  unbound entries. The original B0-2 service assertion/skip is untouched.
+- lifetime_caps.json: 50 absent `test` fields -> 44 existing past-limit test
+  names and 6 new real past-limit test names; their vague `ends` descriptions
+  -> concrete population/scope and stimulus descriptions. No exemption,
+  deletion, fabricated test name or product change. Source evidence and the
+  253 listed exceptions / 58 pending count entries are in cap-binding-audit.json.
+- New session/fair-queue/native-SQL-tracker tests add assertions only. The SQL
+  tracker test deliberately exercises `_track` with actual SQLite native cursors
+  because the ordinary execute path has an earlier capacity check; it does not
+  claim the existing execute-cap test reaches that independent defence.
+- New release-path positives use real acquisition/release writers and assert
+  exact released kind, companion retention where applicable and stable replay.
+  Their 18 independent disabled-release controls require exactly one hit and
+  failure of the unchanged positive oracle. They cover only their listed cells.
+- Draft fixture-layer correction: component guard refused git during the real
+  account-denial fixture setup -> scenario metadata plus a socket-denying audit
+  hook before setup. No expected product state or release assertion changed.
+- The audit lists non-count/configuration/read-only/consistency/stale sites for
+  primary review; it does not weaken the registry guard or claim those rows
+  have past-limit tests. This pass is explicitly incomplete.

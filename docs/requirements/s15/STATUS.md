@@ -1,3 +1,106 @@
+# S15 finish pass — INCOMPLETE (2026-11-26, base 28d24d58)
+
+The strict guard is unchanged and remains **RED**. Do not merge this pass as
+finished S15. No product file was changed and no commit was made.
+Decisions 132/377 remain in force; the original B0-2 service assertion stays skipped.
+
+## Guard binding audit and primary adjudication
+
+- Of the 361 initially missing bindings, **50 are now bound: 44 existing tests
+  and 6 new tests**. Each replacement `ends` describes the actual counted
+  population/temporary scope and the test stimulus. A binding establishes the
+  specific cap exercised, not every branch in a multi-check function.
+- **311 entries remain unbound**: **253 listed for primary adjudication** and
+  **58 real count-cap entries still needing verified test evidence**. This is
+  unfinished work, not a green guard or a blanket exception.
+- `cap-binding-audit.json` records every original missing site, exact matching
+  source lines, disposition, and bound test/module where available. Listed
+  categories: 218 non-count checks, 13 configuration validations, 14 read-only
+  counts, 2 consistency preconditions, 6 stale registry sites. No registry entry
+  was deleted, marked exempt, or bound to a guessed/static name-existence test.
+- Representative primary exceptions: `account_api.py::__init__` line 483 is a
+  timeout; `account_api.py::integer` line 108 validates a scalar integer;
+  `account_api.py::decode_account_request` line 237 caps frame bytes;
+  `project_history.py::runtime_close_status` line 3614 is a read-only status
+  count; `_reply`/`admit` in account_billing_admission have no current count-site
+  match after refactoring. See the audit for the complete list and evidence.
+- The current guard requires `test` even for all those listed sites. Making it
+  green requires the primary to reconcile their registry treatment with the
+  requested real count-cap evidence. This pass preserves the strict guard.
+- New real past-limit tests: four session scans use three real directory/day/
+  binding/rollout entries at a reduced limit of two; fair queue fills both
+  project and item quotas, refuses both extra populations, drains, and admits
+  fresh work; the SQL tracker receives MAX_SQL_READ_CURSORS + 1 actual native
+  SQLite cursors in a read scope, closes them all, and a later read succeeds.
+- Existing source bindings include socket/child integration tests. Their names
+  are evidence bindings, **not claims that they were all executed here**.
+
+## Additional real release paths and controls
+
+`tests.test_s15_release_paths` adds **18 release cells**, each run normally and
+with exactly its own reached release suppressed once. The same ordinary row
+oracle must raise AssertionError under the mutation; all other release calls
+run normally. Each normal row replays and preserves its first full hold snapshot.
+
+| Acquisition / release driver | Cells / individually suppressed release |
+| --- | --- |
+| Real context lease reserve; unsent withdrawal, armed-unsent withdrawal, unarmed expiry, successor `release_earlier_unarmed_leases` | 8: lease `withdrawn_unsent` and companion custody `lost_with_reservation` separately for each exit |
+| Real memory registration/preparation; `memory.release` | 4: driver entry `retired`; preparation `retired`, `submit_refused`, `never_launch_local` |
+| Real orchestration open; explicit primary close or due unattended close | 2: orchestration `closed`, `interrupted_unattended` |
+| Real account denial/closure call; `settle_denied_result_lease` | 1: lease `denied` |
+| Real reserve/arm/bind | 1: lease `bound`, reservation remains held, charge stays one |
+| Real bind/publish and retention expiry | 1: custody `retention`, body/context files removed, live counts baseline |
+| Real memory registration, sealed lease reserve/arm, recorded open binding and `memory.hand_over` | 1: driver entry `handed_over`; lease/open-binding obligations stay held and transfer to sweep |
+
+Together with the unchanged settlement and recovery modules this is **34 green
+store-level matrix cells and 24 independently disabled release controls**
+(8 settlement cells + 8 memory-recovery cells + 18 new cells; previous 6 controls
++ 18 new). The separate B4s reservation recovery and lease churn witnesses are
+also green. These counts do **not** represent the complete failure-exit matrix.
+No new product defect was found by the completed rows.
+
+Still open: full account run-slot/binding/probe exits and mutations; lease fenced
+and full driver refusal/dispatch/restart exits; normal reservation account ACK;
+open-binding withdrawn/account-final paths; custody orchestration-close; host
+worker/result/monitor/execution/probe-worker cleanup; all required boot, clock,
+collector and service boundary combinations. Container-only rows remain assigned
+to **S27a/S27b/S27c/S27d** in the retained table below. Do not convert them into
+passing evidence or executable skips.
+
+## Verification / registration
+
+New modules and IDs are registered in test-layers, test-stages, test-timings,
+tests/requirements/s15.json and test-requirements. The final nine named-module
+runner report (2.958 s elapsed, 5.841 worker-s) is recorded
+in `finish-module-results.json`; metadata_errors and
+budget_failures are empty. Its only failure is the unchanged strict guard.
+No full/affected suite was run. Every new module is well below 60 seconds.
+
+Additional socket-blocked direct named batch: project_monitor,
+signature_input_wire, sql_read_budget, project_cleanup, project_orchestration,
+cli_reports, execution_activity, rate_limit_contracts: **153 tests, 1.318 s, OK**.
+The SQL module subsequently gained one new test and was rerun in the final runner.
+New release paths direct final precursor: 2 tests / 1.173 s, OK (18 subtest rows
+per test). Session cap and queue direct modules also passed before registration.
+
+One initial mixed runner mistakenly selected test_open_request_lifetime, whose
+module includes DriverHarness service/socket tests. It was interrupted and is
+**not completion evidence**; its record reports runner interrupted. Later direct
+batches install a socket-denying audit hook, and the scenario release-path module
+installs the same denial before fixture setup. The release fixture uses git and
+signature subprocesses, hence its honest scenario layer. A first component-layer
+attempt refused git during denial-fixture setup; that was a fixture-layer error,
+not a product failure. No original assertion was changed to address it.
+No run is left in flight at handoff.
+
+Primary socket modules (not proved by this finish pass): test_hold_lifecycle,
+test_host_slots, test_open_request_lifetime, test_cleanup_receipt_lifetime,
+test_project_driver, test_project_request_queue, test_project_ingress,
+test_control_loop. Also execute the remaining bound source modules from the audit
+where this pass records only source review. The B0-2 skip must remain intact.
+
+---
+
 # S15 status — P3 fixed (2026-11-26); matrix and strict guard still open
 
 ## P3 fix (lease x failed_before_launch past the verification limit)

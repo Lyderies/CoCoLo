@@ -3193,5 +3193,7 @@
  "codex:tests.test_s15_lease_churn": 1.0,
  "codex:tests.test_s15_memory_matrix": 1.0,
  "codex:tests.test_s15_reservation_recovery": 0.44,
- "codex:tests.test_s15_settlement_matrix": 1.0
+ "codex:tests.test_s15_settlement_matrix": 1.0,
+ "codex:tests.test_s15_release_paths": 2.0,
+ "codex:tests.test_s15_session_caps": 1.0
 }

@@ -1,0 +1,4748 @@
+{
+ "schema": 1,
+ "base": "28d24d58",
+ "note": "Evidence review of all 361 initially unbound entries at 28d24d58. Listed rows remain in lifetime_caps.json unbound, with no guard exemption or fake test. Source paths are relative to packages/codex-agents/native-package/.codex/orchestration/codex_agents. Listed classifications require primary adjudication; pending-count-cap rows still require real tests. Binding a function to one past-limit test does not certify that every check in a multi-check function was crossed.",
+ "summary": {
+  "listed-non-count": 218,
+  "listed-stale-site": 6,
+  "pending-count-cap": 58,
+  "bound-existing": 44,
+  "listed-configuration-validation": 13,
+  "listed-read-only-count": 14,
+  "listed-consistency-precondition": 2,
+  "bound-new": 6
+ },
+ "entries": [
+  {
+   "site": "account_api.py::__init__",
+   "matches": [
+    {
+     "line": 483,
+     "source": "or type(timeout) not in {int, float} or not 0 < timeout <= MAX_TIMEOUT_SECONDS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_api.py::decode_account_request",
+   "matches": [
+    {
+     "line": 237,
+     "source": "if len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_api.py::decode_account_response",
+   "matches": [
+    {
+     "line": 444,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_api.py::encode_account_request",
+   "matches": [
+    {
+     "line": 229,
+     "source": "if len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_api.py::integer",
+   "matches": [
+    {
+     "line": 108,
+     "source": "return type(value) is int and minimum <= value <= MAX_ACCOUNT_INTEGER"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_billing_admission.py::_admit",
+   "matches": [
+    {
+     "line": 539,
+     "source": "if latest is not None and (not 0 <= now-latest['observed_at_ms'] < PROBE_REUSE_MS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_billing_admission.py::_build_reply",
+   "matches": [
+    {
+     "line": 1085,
+     "source": "if len(canonical_json(reply)) > MAX_PROBE_REPLY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_billing_admission.py::_reply",
+   "matches": [],
+   "disposition": "listed-stale-site",
+   "reason": "The unchanged guard finds no current matching limit line in this innermost function. The registry baseline is stale; retained unbound for primary review, not exempted."
+  },
+  {
+   "site": "account_billing_admission.py::_reserve_repeat",
+   "matches": [
+    {
+     "line": 335,
+     "source": "if (len(self._pending) >= MAX_PENDING_PROBES"
+    },
+    {
+     "line": 336,
+     "source": "or sum(p == project for p, _ in self._pending) >= MAX_PENDING_PROJECT_PROBES):"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "account_billing_admission.py::admit",
+   "matches": [],
+   "disposition": "listed-stale-site",
+   "reason": "The unchanged guard finds no current matching limit line in this innermost function. The registry baseline is stale; retained unbound for primary review, not exempted."
+  },
+  {
+   "site": "account_billing_admission.py::close_expired_reserved",
+   "matches": [
+    {
+     "line": 1182,
+     "source": "\"SELECT * FROM account_billing_probe_requests WHERE state='reserved' AND deadline_at_ms<? LIMIT ?\","
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_a_running_model_stays_charged_while_reservations_expire",
+   "test_modules": [
+    "tests.test_u4_probe_live_capacity"
+   ]
+  },
+  {
+   "site": "account_billing_admission.py::reserve",
+   "matches": [
+    {
+     "line": 254,
+     "source": "count = self._one(\"SELECT COUNT(*) FROM (SELECT 1 FROM account_billing_probe_requests \""
+    },
+    {
+     "line": 255,
+     "source": "\"WHERE project_id=? AND state<>'committed' LIMIT ?)\", (project, MAX_PROBE_REQUESTS+1))[0]"
+    },
+    {
+     "line": 256,
+     "source": "if count >= MAX_PROBE_REQUESTS:"
+    },
+    {
+     "line": 259,
+     "source": "if (len(self._pending) >= MAX_PENDING_PROBES"
+    },
+    {
+     "line": 260,
+     "source": "or sum(p == project for p, _ in self._pending) >= MAX_PENDING_PROJECT_PROBES):"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_a_running_model_stays_charged_while_reservations_expire",
+   "test_modules": [
+    "tests.test_u4_probe_live_capacity"
+   ]
+  },
+  {
+   "site": "account_claim_contracts.py::checked_claim_receipt",
+   "matches": [
+    {
+     "line": 82,
+     "source": "or type(value[\"recorded_at_ms\"]) is not int or not 0 <= value[\"recorded_at_ms\"] <= MAX_CLAIM_INTEGER"
+    },
+    {
+     "line": 88,
+     "source": "or not value[\"recorded_at_ms\"] < value[\"deadline_at_ms\"] <= MAX_CLAIM_INTEGER"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_claim_jobs.py::_drive_steps",
+   "matches": [
+    {
+     "line": 354,
+     "source": "and job.provider is not None and job.stale_preparations < MAX_STALE_PREPARATIONS)"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry",
+   "test_modules": [
+    "tests.test_account_claim_jobs"
+   ]
+  },
+  {
+   "site": "account_claim_jobs.py::submit",
+   "matches": [
+    {
+     "line": 187,
+     "source": "if (count >= limits.max_jobs_per_project"
+    },
+    {
+     "line": 188,
+     "source": "or (not count and len(self._counts) >= limits.max_projects)"
+    },
+    {
+     "line": 189,
+     "source": "or len(self._jobs) >= limits.max_projects * limits.max_jobs_per_project):"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_ready_replies_keep_project_quota_until_consumed",
+   "test_modules": [
+    "tests.test_account_claim_jobs"
+   ]
+  },
+  {
+   "site": "account_claim_jobs.py::submit_open",
+   "matches": [
+    {
+     "line": 267,
+     "source": "if (count >= limits.max_jobs_per_project"
+    },
+    {
+     "line": 268,
+     "source": "or (not count and len(self._counts) >= limits.max_projects)"
+    },
+    {
+     "line": 269,
+     "source": "or len(self._jobs) >= limits.max_projects*limits.max_jobs_per_project):"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "account_cleanup.py::reserve_cleanup",
+   "matches": [
+    {
+     "line": 61,
+     "source": "if live_cleanup_receipts(ledger, binding.project_id) >= MAX_RELEASE_RESERVATIONS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_P1_5_more_lost_and_crashed_runs_than_the_limit_never_stop_a_normal_run",
+   "test_modules": [
+    "tests.test_cleanup_receipt_lifetime"
+   ]
+  },
+  {
+   "site": "account_ingress.py::_wire",
+   "matches": [
+    {
+     "line": 169,
+     "source": "if type(raw) is not bytes or not raw or b\"\\n\" in raw or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_ingress.py::pump_owner",
+   "matches": [
+    {
+     "line": 396,
+     "source": "if len(self._groups) >= maximum:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "account_observation.py::_retained_records",
+   "matches": [
+    {
+     "line": 219,
+     "source": "if type(record['content']) is not bytes or len(record['content']) > MAX_OBSERVATION_REPLY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_observation.py::purge_old_observations",
+   "matches": [
+    {
+     "line": 385,
+     "source": "'WHERE deadline_at_ms<? LIMIT ?', (cutoff, limit)).fetchall()"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "account_observation.py::reserve",
+   "matches": [
+    {
+     "line": 278,
+     "source": "count = self._one('SELECT COUNT(*) FROM (SELECT 1 FROM account_observation_origins '"
+    },
+    {
+     "line": 279,
+     "source": "'WHERE project_id=? LIMIT ?)', (project, MAX_OBSERVATION_REQUESTS + 1))[0]"
+    },
+    {
+     "line": 280,
+     "source": "if count >= MAX_OBSERVATION_REQUESTS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_shared_origin_quota_does_not_block_original_known_reply",
+   "test_modules": [
+    "tests.test_account_observation_failure"
+   ]
+  },
+  {
+   "site": "account_observation.py::run_observation_probe",
+   "matches": [
+    {
+     "line": 94,
+     "source": "if len(raw) > MAX_OBSERVATION_REPLY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_observation_failure.py::record_observation_failure",
+   "matches": [
+    {
+     "line": 60,
+     "source": "count = owner._one('SELECT COUNT(*) FROM (SELECT 1 FROM account_observation_origins '"
+    },
+    {
+     "line": 61,
+     "source": "'WHERE project_id=? LIMIT ?)', (project, account_observation.MAX_OBSERVATION_REQUESTS + 1))[0]"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_shared_origin_quota_does_not_block_original_known_reply",
+   "test_modules": [
+    "tests.test_account_observation_failure"
+   ]
+  },
+  {
+   "site": "account_observation_jobs.py::__post_init__",
+   "matches": [
+    {
+     "line": 36,
+     "source": "or self.workers > self.max_projects or self.owner_steps_per_cycle > self.workers):"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "account_observation_jobs.py::submit",
+   "matches": [
+    {
+     "line": 291,
+     "source": "if (self._counts.get(project, 0) >= self._limits.max_jobs_per_project"
+    },
+    {
+     "line": 292,
+     "source": "or (project not in self._counts and len(self._counts) >= self._limits.max_projects)):"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_active_cancel_keeps_quota_until_actual_return_and_reply_retirement",
+   "test_modules": [
+    "tests.test_account_observation_jobs"
+   ]
+  },
+  {
+   "site": "account_open_contracts.py::checked_account_open_reply",
+   "matches": [
+    {
+     "line": 142,
+     "source": "if len(raw) > MAX_ACCOUNT_OPEN_RECEIPT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_open_contracts.py::snapshot",
+   "matches": [
+    {
+     "line": 104,
+     "source": "if not 0 < len(raw) <= MAX_ACCOUNT_OPEN_CONTEXT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_original_open.py::_capture",
+   "matches": [
+    {
+     "line": 150,
+     "source": "if len(raw) > limits.max_context_bytes:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Per-open serialized context byte ceiling (limits.max_context_bytes); not an acquired-entry population."
+  },
+  {
+   "site": "account_original_open.py::finish_open_from_signature_job",
+   "matches": [
+    {
+     "line": 640,
+     "source": "\"SELECT h.handle_digest \" + LIVE_BINDINGS + \" LIMIT ?\","
+    },
+    {
+     "line": 642,
+     "source": "if len(pending) >= MAX_PENDING_HOST_RUNS:"
+    },
+    {
+     "line": 681,
+     "source": "if not 0 < len(raw) <= MAX_ACCOUNT_OPEN_RECEIPT_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "account_original_open.py::preflight_open",
+   "matches": [
+    {
+     "line": 503,
+     "source": "if in_flight >= limits.max_pending:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_OP_1_more_finished_opens_than_every_open_limit_never_refuse",
+   "test_modules": [
+    "tests.test_open_request_lifetime"
+   ]
+  },
+  {
+   "site": "account_restart.py::_stuck",
+   "matches": [
+    {
+     "line": 42,
+     "source": "if type(held) is int and now_ms - held > PROBE_HELD_MS:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_restart.py::decide",
+   "matches": [
+    {
+     "line": 69,
+     "source": "wall_recent = type(previous.get('at_ms')) is int and now_ms - previous['at_ms'] < RESTART_EVERY_MS"
+    },
+    {
+     "line": 72,
+     "source": "and mono_ns - recorded < RESTART_EVERY_MS * 1_000_000)"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_run_provenance.py::_record",
+   "matches": [
+    {
+     "line": 78,
+     "source": "if type(raw) is not bytes or len(raw) > MAX_RECORD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_service.py::__post_init__",
+   "matches": [
+    {
+     "line": 197,
+     "source": "or not self.allowed_operations <= ACCOUNT_OPERATIONS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_service.py::_capture_signature_inputs_locked",
+   "matches": [
+    {
+     "line": 731,
+     "source": "or type(line_bytes) is not int or not 0 < line_bytes <= OWNER_SIGNERS_MAX_BYTES"
+    },
+    {
+     "line": 737,
+     "source": "if minimum > limits.max_bytes:"
+    },
+    {
+     "line": 749,
+     "source": "if size > limits.max_bytes:"
+    },
+    {
+     "line": 764,
+     "source": "\"AND r.rowid=c.record_rowid ORDER BY c.source_sequence LIMIT ?\","
+    },
+    {
+     "line": 767,
+     "source": "if len(headers) > limits.max_rows:"
+    },
+    {
+     "line": 776,
+     "source": "or not 0 < content_bytes <= MAX_RECORD_BYTES or digest_bytes != 64"
+    },
+    {
+     "line": 785,
+     "source": "if size > limits.max_bytes:"
+    },
+    {
+     "line": 796,
+     "source": "if len(rows) > limits.max_rows or retained > size or retained > limits.max_bytes:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_exact_field_and_row_quotas_refuse_before_raw_fetch",
+   "test_modules": [
+    "tests.test_admission_inputs"
+   ]
+  },
+  {
+   "site": "account_service.py::_handle_request",
+   "matches": [
+    {
+     "line": 1504,
+     "source": "if len(reply) + 1 > MAX_ACCOUNT_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "account_service.py::_owner_key_view",
+   "matches": [
+    {
+     "line": 816,
+     "source": "\"SELECT COUNT(*),MAX(recorded_at_ms) FROM owner_key_history WHERE reason='replaced'\""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "account_service.py::runtime_upgrade_reply",
+   "matches": [
+    {
+     "line": 1138,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "admission_input_decode.py::_signer",
+   "matches": [
+    {
+     "line": 75,
+     "source": "if value is not None and (type(value) is not bytes or not 0 < len(value) <= OWNER_SIGNERS_MAX_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "admission_inputs.py::__post_init__",
+   "matches": [
+    {
+     "line": 59,
+     "source": "if (type(self.max_rows) is not int or not 1 <= self.max_rows <= MAX_ADMISSION_CAPTURE_ROWS"
+    },
+    {
+     "line": 60,
+     "source": "or type(self.max_bytes) is not int or not 1 <= self.max_bytes <= MAX_ADMISSION_CAPTURE_BYTES):"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "admission_metadata.py::_headroom_state",
+   "matches": [
+    {
+     "line": 96,
+     "source": "and now_ms - record[\"observed_at_ms\"] <= FIVE_HOURS_MS):"
+    },
+    {
+     "line": 106,
+     "source": "if any(value >= CODEX_EXHAUSTED_PERCENT for value in used):"
+    },
+    {
+     "line": 108,
+     "source": "if any(value >= CODEX_CONSTRAINED_PERCENT for value in used):"
+    },
+    {
+     "line": 114,
+     "source": "value >= CODEX_EXHAUSTED_PERCENT for value in used"
+    },
+    {
+     "line": 118,
+     "source": "value >= CODEX_CONSTRAINED_PERCENT for value in used"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "admission_metadata.py::_window_live",
+   "matches": [
+    {
+     "line": 75,
+     "source": "return now_ms - observed_at_ms <= FIVE_HOURS_MS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "admission_metadata.py::evaluate_admission",
+   "matches": [
+    {
+     "line": 277,
+     "source": "and now_ms - latest_billing[0][\"observed_at_ms\"] <= BILLING_MAX_AGE_MS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "admission_metadata.py::evaluate_launch",
+   "matches": [
+    {
+     "line": 618,
+     "source": "elif now_ms - latest[0][\"observed_at_ms\"] > BILLING_MAX_AGE_MS:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "admission_metadata.py::paid_usage_digest",
+   "matches": [
+    {
+     "line": 386,
+     "source": "and now_ms - record[\"observed_at_ms\"] <= EVIDENCE_HORIZON_MS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "admission_metadata.py::select_provider_identity",
+   "matches": [
+    {
+     "line": 66,
+     "source": "and 0 <= now_ms - item[0][\"observed_at_ms\"] <= IDENTITY_MAX_AGE_MS])"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "admission_metadata.py::spend_control_digest",
+   "matches": [
+    {
+     "line": 362,
+     "source": "and now_ms - record[\"observed_at_ms\"] <= EVIDENCE_HORIZON_MS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "billing_probe_contracts.py::checked_billing_probe_reply",
+   "matches": [
+    {
+     "line": 116,
+     "source": "if len(canonical_json(value)) > MAX_BILLING_REPLY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "billing_probe_worker.py::_normalized",
+   "matches": [
+    {
+     "line": 259,
+     "source": "if len(body) > MAX_PROBE_PACKET_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "billing_probe_worker.py::probe_payload",
+   "matches": [
+    {
+     "line": 131,
+     "source": "if not 0 < len(raw) <= MAX_PROBE_INPUT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::_check_claude_init",
+   "matches": [
+    {
+     "line": 1399,
+     "source": "if schema_held and _client_version(frame.get(\"claude_code_version\")) < CLAUDE_SCHEMA_MIN_VERSION:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::_client_diagnostics",
+   "matches": [
+    {
+     "line": 1411,
+     "source": "\"exit_code\": code if type(code) is int and CLIENT_EXIT_CODE_MIN <= code <= CLIENT_EXIT_CODE_MAX else None,"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::_result_object",
+   "matches": [
+    {
+     "line": 967,
+     "source": "if encoded_size > MAX_RESULT_BYTES:"
+    },
+    {
+     "line": 972,
+     "source": "if stripped.startswith(\"```\") and stripped.endswith(\"```\") and len(stripped) >= 6:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::_token_count",
+   "matches": [
+    {
+     "line": 1315,
+     "source": "if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TOKEN_COUNT:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::_unrecordable",
+   "matches": [
+    {
+     "line": 2437,
+     "source": "if len(result[\"evidence\"]) + 2 > MAX_OUTCOME_EVIDENCE_DIGESTS:"
+    },
+    {
+     "line": 2439,
+     "source": "if len(canonical_json(result)) > MAX_RESULT_BODY_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "bridge.py::committed_export_manifest",
+   "matches": [
+    {
+     "line": 401,
+     "source": "type(max_bytes) is not int or not 0 <= max_bytes <= MAX_EXPORT_BYTES"
+    },
+    {
+     "line": 402,
+     "source": "or type(max_files) is not int or not 0 <= max_files <= MAX_EXPORT_FILES"
+    },
+    {
+     "line": 467,
+     "source": "if len(entries) > max_files:"
+    },
+    {
+     "line": 469,
+     "source": "if total > max_bytes:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "bridge.py::dispatch",
+   "matches": [
+    {
+     "line": 2258,
+     "source": "if provider == \"claude\" and _client_version(identity[\"client_version\"]) < CLAUDE_SCHEMA_MIN_VERSION:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::on_frame",
+   "matches": [
+    {
+     "line": 2049,
+     "source": "if len(state[\"infos\"]) >= MAX_PROBE_EVENTS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "bridge.py::place_worker_result",
+   "matches": [
+    {
+     "line": 1085,
+     "source": "if len(encoded) > MAX_RESULT_BODY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::run_child",
+   "matches": [
+    {
+     "line": 860,
+     "source": "if received > MAX_STREAM_BYTES:"
+    },
+    {
+     "line": 866,
+     "source": "if len(line) > MAX_LINE_BYTES:"
+    },
+    {
+     "line": 871,
+     "source": "if len(buffer) > MAX_LINE_BYTES:"
+    },
+    {
+     "line": 873,
+     "source": "if len(buffer) > MAX_LINE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::run_codex",
+   "matches": [
+    {
+     "line": 1891,
+     "source": "if len(raw) > MAX_RESULT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge.py::scrub_child_answer",
+   "matches": [
+    {
+     "line": 1200,
+     "source": "if isinstance(value, str) and len(value) >= 8 and _SECRET_NAME.search(str(name)):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "bridge_liveness.py::bind",
+   "matches": [
+    {
+     "line": 77,
+     "source": "if len(self._attempts) >= self._monitor._maximum:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "capacity_status_contracts.py::checked_capacity_status",
+   "matches": [
+    {
+     "line": 36,
+     "source": "or not 0 <= value[\"released_at_ms\"] <= MAX_CLAIM_INTEGER):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "catalog.py::_claude_agent_candidate",
+   "matches": [
+    {
+     "line": 407,
+     "source": "sandbox_mode=\"read-only\" if set(tools) <= CLAUDE_READ_ONLY_TOOLS else None,"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "claim_denial.py::verify_denial_closure",
+   "matches": [
+    {
+     "line": 176,
+     "source": "if type(raw) is not bytes or not 0 < len(raw) <= MAX_DENIAL_RECEIPT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "claim_storage.py::_verify_historical_storage_evidence",
+   "matches": [
+    {
+     "line": 83,
+     "source": "if type(expected) is not ResultLeaseBinding or type(raw) is not bytes or not 0 < len(raw) <= MAX_STORAGE_EVIDENCE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "claim_storage.py::capture_storage_evidence",
+   "matches": [
+    {
+     "line": 47,
+     "source": "if raw is not None and (type(raw) is not bytes or not 0 < len(raw) <= MAX_STORAGE_EVIDENCE_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "claim_storage.py::encode_storage_evidence",
+   "matches": [
+    {
+     "line": 63,
+     "source": "if len(raw) > MAX_STORAGE_EVIDENCE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "claim_storage.py::verify_storage_evidence",
+   "matches": [
+    {
+     "line": 119,
+     "source": "if (type(expected) is not ResultLeaseBinding or type(raw) is not bytes or not 0 < len(raw) <= MAX_STORAGE_EVIDENCE_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "claude_activity.py::_count",
+   "matches": [
+    {
+     "line": 98,
+     "source": "if len(self._pending) >= MAX_ACTIVITY_ITEMS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_tools_in_progress_beyond_the_cap_are_a_monitoring_failure",
+   "test_modules": [
+    "tests.test_claude_activity"
+   ]
+  },
+  {
+   "site": "claude_activity.py::_partial",
+   "matches": [
+    {
+     "line": 190,
+     "source": "if type(index) is not int or not 0 <= index < MAX_STREAM_BLOCKS:"
+    },
+    {
+     "line": 220,
+     "source": "if self._last_partial is not None and now - self._last_partial < PARTIAL_ACTIVITY_SECONDS:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Validates a supplied stream block index and throttles elapsed partial-publication time; no count of retained entries is compared on these lines."
+  },
+  {
+   "site": "claude_host.py::_settings",
+   "matches": [
+    {
+     "line": 94,
+     "source": "value = json.loads(raw) if len(raw) <= MAX_SETTINGS_BYTES else None"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "cleanup_contracts.py::encode_cleanup_evidence",
+   "matches": [
+    {
+     "line": 136,
+     "source": "if not 0 < len(raw) <= MAX_CLEANUP_EVIDENCE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "cleanup_contracts.py::verify_cleanup_evidence",
+   "matches": [
+    {
+     "line": 148,
+     "source": "or not 0 < len(raw) <= MAX_CLEANUP_EVIDENCE_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "cli_reports.py::_analysis_summary",
+   "matches": [
+    {
+     "line": 38,
+     "source": "if type(slices) is not dict or len(slices) > MAX_ANALYSIS_GROUPS:"
+    },
+    {
+     "line": 47,
+     "source": "if configurations > MAX_ANALYSIS_GROUPS:"
+    },
+    {
+     "line": 53,
+     "source": "if len(diagnoses) > MAX_DIAGNOSES_PER_GROUP:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_limits_refuse_summary_without_touching_authoritative_payload",
+   "test_modules": [
+    "tests.test_cli_reports"
+   ]
+  },
+  {
+   "site": "cli_reports.py::learning_cycle_summary",
+   "matches": [
+    {
+     "line": 83,
+     "source": "if type(cycle[key]) is not list or len(cycle[key]) > MAX_CYCLE_RECORDS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_limits_refuse_summary_without_touching_authoritative_payload",
+   "test_modules": [
+    "tests.test_cli_reports"
+   ]
+  },
+  {
+   "site": "client_runtime.py::record_codex_result_client",
+   "matches": [
+    {
+     "line": 1326,
+     "source": "if not 0 < len(submitted) <= MAX_RESULT_BODY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "codex_preparation.py::_build",
+   "matches": [
+    {
+     "line": 310,
+     "source": "if len(body) > MAX_INPUT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "codex_preparation.py::preparation_payload",
+   "matches": [
+    {
+     "line": 124,
+     "source": "if not 0 < len(raw) <= MAX_INPUT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "codex_preparation.py::submit",
+   "matches": [
+    {
+     "line": 389,
+     "source": "or not 0 < len(context.payload) <= MAX_INPUT_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "codex_worker.py::_decode_input",
+   "matches": [
+    {
+     "line": 142,
+     "source": "if ((type(data[\"schema\"]) is not str or len(data[\"schema\"].encode(\"utf-8\")) > MAX_RESULT_BODY_BYTES)  # O10 VF-1"
+    },
+    {
+     "line": 143,
+     "source": "or type(data[\"role_prompt\"]) is not str or len(data[\"role_prompt\"].encode(\"utf-8\")) > MAX_INPUT_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "codex_worker.py::_execute",
+   "matches": [
+    {
+     "line": 257,
+     "source": "if len(body) > MAX_RESULT_BODY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "codex_worker.py::_safe_report",
+   "matches": [
+    {
+     "line": 198,
+     "source": "if len(body) > MAX_REPORT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "codex_worker.py::prepare",
+   "matches": [
+    {
+     "line": 326,
+     "source": "if (self._closed or type(payload) is not bytes or not 0 < len(payload) <= MAX_INPUT_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "collector_client.py::health",
+   "matches": [
+    {
+     "line": 251,
+     "source": "and server_schema > LEDGER_SCHEMA_VERSION"
+    },
+    {
+     "line": 260,
+     "source": "or server_schema < LEDGER_SCHEMA_VERSION"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "collector_exit.py::checked",
+   "matches": [
+    {
+     "line": 152,
+     "source": "or type(record['where']) is not list or len(record['where']) > MAX_LOCATIONS"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "collector_exit.py::read_exit",
+   "matches": [
+    {
+     "line": 182,
+     "source": "or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > MAX_RECORD_BYTES):"
+    },
+    {
+     "line": 187,
+     "source": "if len(raw) > MAX_RECORD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "container_runtime.py::_spec_problems",
+   "matches": [
+    {
+     "line": 751,
+     "source": "if timeout is not None and (type(timeout) is not int or not 0 < timeout <= MAX_TIMEOUT_SECONDS):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "control_api.py::__init__",
+   "matches": [
+    {
+     "line": 280,
+     "source": "or type(timeout) not in (int, float) or not 0 < timeout <= MAX_TIMEOUT_SECONDS or not callable(clock_ns)):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "control_api.py::decode_control_request",
+   "matches": [
+    {
+     "line": 133,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_CONTROL_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "control_api.py::decode_control_response",
+   "matches": [
+    {
+     "line": 238,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_CONTROL_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "control_api.py::encode_control_request",
+   "matches": [
+    {
+     "line": 117,
+     "source": "if len(encoded) + 1 > MAX_CONTROL_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "control_loop.py::__post_init__",
+   "matches": [
+    {
+     "line": 31,
+     "source": "if (type(self.max_connections) is not int or not 1 <= self.max_connections <= 256"
+    },
+    {
+     "line": 32,
+     "source": "or type(self.steps_per_cycle) is not int or not 1 <= self.steps_per_cycle <= self.max_connections"
+    },
+    {
+     "line": 34,
+     "source": "or type(self.max_wait_ns) is not int or not 1 <= self.max_wait_ns <= 1_000_000_000):"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "control_loop.py::_attach",
+   "matches": [
+    {
+     "line": 121,
+     "source": "if len(self._peers) >= self._limits.max_connections:"
+    },
+    {
+     "line": 124,
+     "source": "if now > MAX_CLOCK_NS - self._limits.connection_timeout_ns:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_full_capacity_refusal_leaves_socket_with_caller",
+   "test_modules": [
+    "tests.test_control_loop"
+   ]
+  },
+  {
+   "site": "control_loop.py::_step",
+   "matches": [
+    {
+     "line": 194,
+     "source": "if type(reply) is not bytes or len(reply) + 1 > MAX_CONTROL_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "control_service.py::__post_init__",
+   "matches": [
+    {
+     "line": 48,
+     "source": "or not self.allowed_operations <= OPERATIONS"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "control_service.py::handle",
+   "matches": [
+    {
+     "line": 159,
+     "source": "if type(raw) is bytes and len(raw)+1 <= MAX_DISPATCH_FRAME_BYTES:"
+    },
+    {
+     "line": 186,
+     "source": "if len(reply) + 1 > MAX_CONTROL_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "core_api.py::_clean",
+   "matches": [
+    {
+     "line": 245,
+     "source": "if depth > CLEAN_DEPTH:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "core_api.py::_need_str",
+   "matches": [
+    {
+     "line": 1622,
+     "source": "if len(value) > STRING_MAX_CHARS or any(ord(c) < 32 for c in value):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "core_api.py::_tokens_used",
+   "matches": [
+    {
+     "line": 2649,
+     "source": "if not isinstance(cost, int) or isinstance(cost, bool) or not 0 <= cost <= MAX_TOKENS_USED:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "dispatch_api.py::__init__",
+   "matches": [
+    {
+     "line": 205,
+     "source": "if type(scope) is not ControlScope or type(timeout) not in {int, float} or not 0 < timeout <= MAX_TIMEOUT_SECONDS:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "dispatch_api.py::decode_dispatch_request",
+   "matches": [
+    {
+     "line": 102,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_DISPATCH_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "dispatch_api.py::decode_dispatch_response",
+   "matches": [
+    {
+     "line": 127,
+     "source": "if type(raw) is not bytes or len(raw)+1 > MAX_DISPATCH_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "dispatch_api.py::encode_dispatch_request",
+   "matches": [
+    {
+     "line": 93,
+     "source": "if len(raw) + 1 > MAX_DISPATCH_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "egress_proxy.py::_read_head",
+   "matches": [
+    {
+     "line": 303,
+     "source": "if len(data) > MAX_HEAD_BYTES:"
+    },
+    {
+     "line": 313,
+     "source": "if len(head) > MAX_HEAD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "egress_proxy.py::write",
+   "matches": [
+    {
+     "line": 256,
+     "source": "if self.size and self.size + len(line) > self.max_bytes:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Log byte-size rotation threshold; counts bytes of the current log, not live/retained entries."
+  },
+  {
+   "site": "evaluation.py::evaluate",
+   "matches": [
+    {
+     "line": 106,
+     "source": "and len(candidate_records) >= thresholds[\"minimum_trials_per_family\"]"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Minimum trials required for an affirmative evaluation, not a maximum population/admission cap."
+  },
+  {
+   "site": "event_shapes.py::frame",
+   "matches": [
+    {
+     "line": 234,
+     "source": "if len(self._lines) > MAX_LINES or self._bytes >= MAX_RUN_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "execution_activity.py::_sample",
+   "matches": [
+    {
+     "line": 61,
+     "source": "if (self.failed or type(value) is not int or not 0 <= value <= MAX_CLOCK_NS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "execution_activity.py::publish",
+   "matches": [
+    {
+     "line": 78,
+     "source": "if len(self.events) >= MAX_RECEIVED_EVENTS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_overflow_and_clock_failure_never_drop_old_events_to_claim_health",
+   "test_modules": [
+    "tests.test_execution_activity"
+   ]
+  },
+  {
+   "site": "execution_grant.py::encode",
+   "matches": [
+    {
+     "line": 87,
+     "source": "if len(raw) > MAX_EXECUTION_GRANT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "execution_grant.py::verify_execution_grant",
+   "matches": [
+    {
+     "line": 119,
+     "source": "if type(raw) is not bytes or not 0 < len(raw) <= MAX_EXECUTION_GRANT_BYTES or type(binding) is not AttemptBinding:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "gate_policy.py::_patch_ops",
+   "matches": [
+    {
+     "line": 597,
+     "source": "if len(text.encode(\"utf-8\", \"surrogatepass\")) > MAX_PATCH_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "gate_policy.py::argv",
+   "matches": [
+    {
+     "line": 1359,
+     "source": "if sum(len(w.encode(\"utf-8\", \"surrogatepass\")) for w in argv) > MAX_COMMAND_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "gate_policy.py::nested",
+   "matches": [
+    {
+     "line": 1364,
+     "source": "if depth + 1 > MAX_NESTING:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "gate_policy.py::record_row",
+   "matches": [
+    {
+     "line": 2266,
+     "source": "\"subject_truncated\": len(subject) > RECORD_SUBJECT_LIMIT,"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Diagnostic subject string truncation marker, not a population limit or admission refusal."
+  },
+  {
+   "site": "gate_policy.py::runner",
+   "matches": [
+    {
+     "line": 1489,
+     "source": "if depth + 1 > MAX_NESTING:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "gate_policy.py::sequence",
+   "matches": [
+    {
+     "line": 2099,
+     "source": "if len(outs) > MAX_PATTERN_ALTERNATIVES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "MAX_PATTERN_ALTERNATIVES is a real count cap; requires actual over-limit expansion evidence, not a scalar/byte exemption."
+  },
+  {
+   "site": "gate_policy.py::shell",
+   "matches": [
+    {
+     "line": 1342,
+     "source": "if len(text.encode(\"utf-8\", \"surrogatepass\")) > MAX_COMMAND_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "hardened_git.py::_call_problem",
+   "matches": [
+    {
+     "line": 199,
+     "source": "if \"--cached\" not in options or not set(options) <= APPLY_OPTIONS:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "hardened_git.py::build_candidate_tree",
+   "matches": [
+    {
+     "line": 487,
+     "source": "if len(patch) > MAX_PATCH_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "hardened_git.py::git_version_problem",
+   "matches": [
+    {
+     "line": 281,
+     "source": "if version < GIT_VERSION_FLOOR:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "history_api.py::__init__",
+   "matches": [
+    {
+     "line": 613,
+     "source": "or type(timeout) not in (int, float) or not 0 < timeout <= MAX_TIMEOUT_SECONDS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "history_api.py::decode_history_request",
+   "matches": [
+    {
+     "line": 267,
+     "source": "if len(payload) + 1 > MAX_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "history_api.py::encode_history_request",
+   "matches": [
+    {
+     "line": 259,
+     "source": "if len(encoded) + 1 > MAX_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "history_service.py::_wire_operation",
+   "matches": [
+    {
+     "line": 174,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "history_service.py::handle",
+   "matches": [
+    {
+     "line": 528,
+     "source": "while len(reply) + 1 > MAX_HISTORY_REPLY_BYTES and result[\"deliveries\"]:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "hook_config.py::parse_local_manifest",
+   "matches": [
+    {
+     "line": 168,
+     "source": "if len(raw) > MAX_LOCAL_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "host_commands.py::_manifest_files",
+   "matches": [
+    {
+     "line": 382,
+     "source": "or len(manifest[\"files\"]) > MAX_MANIFEST_FILES"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "host_commands.py::unexpected_entries",
+   "matches": [
+    {
+     "line": 464,
+     "source": "if len(found) >= limit:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "host_open_contracts.py::checked_open_provenance",
+   "matches": [
+    {
+     "line": 109,
+     "source": "or len(canonical_json(value)) > MAX_OPEN_PROVENANCE_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "host_open_contracts.py::snapshot",
+   "matches": [
+    {
+     "line": 63,
+     "source": "if not 0 < len(raw) <= MAX_HOST_OPEN_CONTEXT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "host_open_contracts.py::verify_open_provenance",
+   "matches": [
+    {
+     "line": 177,
+     "source": "or not 0 < len(raw_assignment) <= MAX_ASSIGNMENT_CANONICAL_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "host_result_contracts.py::snapshot",
+   "matches": [
+    {
+     "line": 33,
+     "source": "if not 0 < len(raw) <= MAX_HOST_RESULT_CONTEXT_BYTES:"
+    },
+    {
+     "line": 65,
+     "source": "if not 0 < len(raw) <= MAX_HOST_RESULT_CONTEXT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "launch_journal.py::_checked_container_entry",
+   "matches": [
+    {
+     "line": 206,
+     "source": "or len(value['stop_detail']) > MAX_STOP_DETAIL):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "launch_journal.py::_confirmed",
+   "matches": [
+    {
+     "line": 1146,
+     "source": "or info.st_nlink != 1 or info.st_size > MAX_MARKER_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "launch_journal.py::_read_entry",
+   "matches": [
+    {
+     "line": 976,
+     "source": "or info.st_nlink != 1 or info.st_size > MAX_ENTRY_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "launch_journal.py::_window",
+   "matches": [
+    {
+     "line": 644,
+     "source": "if len(names) > MAX_ENTRIES:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_D6a_successive_listings_reach_every_entry_past_the_cap",
+   "test_modules": [
+    "tests.test_launch_journal"
+   ]
+  },
+  {
+   "site": "launch_journal.py::_write",
+   "matches": [
+    {
+     "line": 356,
+     "source": "if len(body) > MAX_ENTRY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "launch_journal.py::prune",
+   "matches": [
+    {
+     "line": 720,
+     "source": "if (entry['state'] == 'settled' and now_ms - entry['settled_at_ms'] > TOMBSTONE_MS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_analysis.py::analyze_outcomes",
+   "matches": [
+    {
+     "line": 69,
+     "source": "stale = any(as_of_ms - record[\"observed_at_ms\"] > max_age_ms for record in records)"
+    },
+    {
+     "line": 71,
+     "source": "insufficient = len(records) < COMPARISON_MIN_CASES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Evidence age and minimum comparison-case sufficiency, not a maximum count cap."
+  },
+  {
+   "site": "learning_contracts.py::parse_bounded_json_value",
+   "matches": [
+    {
+     "line": 326,
+     "source": "or len(encoded) > max_bytes"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_contracts.py::validate_client_diagnostics",
+   "matches": [
+    {
+     "line": 2073,
+     "source": "if code is not None and (type(code) is not int or not CLIENT_EXIT_CODE_MIN <= code <= CLIENT_EXIT_CODE_MAX):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_contracts.py::validate_learning_record",
+   "matches": [
+    {
+     "line": 2545,
+     "source": "if len(canonical_json(checked)) > MAX_RECORD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_contracts.py::validate_provider_usage",
+   "matches": [
+    {
+     "line": 2340,
+     "source": "if not isinstance(models, list) or len(models) > MAX_USAGE_MODELS:"
+    },
+    {
+     "line": 2354,
+     "source": "or len(helpers) > MAX_USAGE_MODELS"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_cycle_core.py::plan_learning_cycle",
+   "matches": [
+    {
+     "line": 361,
+     "source": "if len(canonical_json(result)) > MAX_PLAN_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_eligibility.py::check_candidate_eligibility",
+   "matches": [
+    {
+     "line": 103,
+     "source": "or len(matched) < MIN_MATCHED_FIXTURES"
+    },
+    {
+     "line": 154,
+     "source": "if len(roots) != len(evidence) or len(roots) < MIN_INDEPENDENT_ROOTS:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_engine.py::_bounded_tree_size",
+   "matches": [
+    {
+     "line": 1792,
+     "source": "if entry_count > MAX_QA_TEMP_ENTRIES:"
+    },
+    {
+     "line": 1815,
+     "source": "if byte_count > MAX_QA_TEMP_BYTES:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_byte_and_entry_caps_still_fail_closed",
+   "test_modules": [
+    "tests.test_qa_tree_scan"
+   ]
+  },
+  {
+   "site": "learning_engine.py::_claude_agent_definition",
+   "matches": [
+    {
+     "line": 273,
+     "source": "if not set(metadata[\"tools\"]) <= CLAUDE_READ_ONLY_TOOLS:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_engine.py::_committed_and_clean",
+   "matches": [
+    {
+     "line": 2103,
+     "source": "if size.returncode != 0 or int(size.stdout.strip()) > MAX_COMMITTED_EXECUTABLE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_engine.py::_copy_and_digest_runtime_tree",
+   "matches": [
+    {
+     "line": 949,
+     "source": "if len(relative_directory.parts) > MAX_RUNTIME_TREE_DEPTH:"
+    },
+    {
+     "line": 962,
+     "source": "if entry_count > MAX_RUNTIME_TREE_ENTRIES:"
+    },
+    {
+     "line": 989,
+     "source": "file_count > MAX_RUNTIME_TREE_FILES"
+    },
+    {
+     "line": 990,
+     "source": "or entry_count > MAX_RUNTIME_TREE_ENTRIES"
+    },
+    {
+     "line": 991,
+     "source": "or byte_count > MAX_RUNTIME_TREE_BYTES"
+    },
+    {
+     "line": 1008,
+     "source": "if byte_count > MAX_RUNTIME_TREE_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_engine.py::_homebrew_runtime_paths",
+   "matches": [
+    {
+     "line": 1515,
+     "source": "if len(relative.parts) >= 2:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_engine.py::_is_review_slice",
+   "matches": [
+    {
+     "line": 2790,
+     "source": "return len(parts) >= 4 and parts[3] == \"review\""
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_engine.py::_read_managed_bytes",
+   "matches": [
+    {
+     "line": 92,
+     "source": "if max_bytes is not None and (type(max_bytes) is not int or not 1 <= max_bytes <= 32*1_048_576):"
+    },
+    {
+     "line": 119,
+     "source": "if max_bytes is not None and file_stat.st_size > max_bytes:"
+    },
+    {
+     "line": 124,
+     "source": "if max_bytes is not None and len(data) > max_bytes:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Caller byte allowance and maximum file size/read length; no population is accumulated."
+  },
+  {
+   "site": "learning_engine.py::_runtime_library_identities",
+   "matches": [
+    {
+     "line": 1098,
+     "source": "or len(configured) > MAX_RUNTIME_LIBRARIES"
+    },
+    {
+     "line": 1149,
+     "source": "if total_bytes > MAX_RUNTIME_LIBRARY_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_engine.py::_snapshot_runtime_libraries",
+   "matches": [
+    {
+     "line": 1313,
+     "source": "if sum(path.stat().st_size for path in destination.iterdir()) > MAX_RUNTIME_LIBRARY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_engine.py::_wait_for_qa_process",
+   "matches": [
+    {
+     "line": 1841,
+     "source": "if transient_scans > MAX_QA_TRANSIENT_TREE_SCANS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_unstable_postexit_scans_fail_after_bound",
+   "test_modules": [
+    "tests.test_qa_tree_scan"
+   ]
+  },
+  {
+   "site": "learning_engine.py::calibrate_grader",
+   "matches": [
+    {
+     "line": 3462,
+     "source": "\"ready\": len(records) >= GRADER_MIN_LABELS"
+    },
+    {
+     "line": 3463,
+     "source": "and agreement >= GRADER_MIN_AGREEMENT"
+    },
+    {
+     "line": 3464,
+     "source": "and stability >= GRADER_MIN_SWAP_STABILITY,"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_engine.py::compare_candidate",
+   "matches": [
+    {
+     "line": 3570,
+     "source": "if len(expected) < COMPARISON_MIN_CASES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_source_image.py::_digest",
+   "matches": [
+    {
+     "line": 361,
+     "source": "if not 0 < info.st_size <= MAX_BACKUP_BYTES:"
+    },
+    {
+     "line": 370,
+     "source": "if size > MAX_BACKUP_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_source_image.py::_page",
+   "matches": [
+    {
+     "line": 280,
+     "source": "if size > PAGE_BYTES:"
+    },
+    {
+     "line": 282,
+     "source": "if used + size > PAGE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_accept_project_terminal",
+   "matches": [
+    {
+     "line": 8349,
+     "source": "or type(now) is not int or not grant.claimed_at_ms <= observed <= now <= MAX_CLAIM_INTEGER):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_attestation_rows_locked",
+   "matches": [
+    {
+     "line": 7293,
+     "source": "or type(row[2]) is not bytes or not 0 < len(row[2]) <= MAX_RECORD_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_check_active_capacity_locked",
+   "matches": [
+    {
+     "line": 7859,
+     "source": "f\"WHERE released_at_ms IS NULL AND NOT {crashed} LIMIT ?\","
+    },
+    {
+     "line": 7864,
+     "source": "\"WHERE state='admitted' LIMIT ?\", (policy.machine,),"
+    },
+    {
+     "line": 7866,
+     "source": "if len(active)+len(probe_active) >= policy.machine:"
+    },
+    {
+     "line": 7876,
+     "source": "\"AND (? IS NULL OR account_fingerprint IS NULL OR account_fingerprint=?))) LIMIT ?\","
+    },
+    {
+     "line": 7881,
+     "source": "\"WHERE state='admitted' AND (? IS NULL OR account_fingerprint=?) LIMIT ?\","
+    },
+    {
+     "line": 7884,
+     "source": "if len(account_active)+len(account_probes) >= policy.account:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_store.py::_claim_commit",
+   "matches": [
+    {
+     "line": 8890,
+     "source": "if not timestamp < deadline <= MAX_CLAIM_INTEGER:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_claim_commit_header",
+   "matches": [
+    {
+     "line": 8682,
+     "source": "if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_claim_context_locked",
+   "matches": [
+    {
+     "line": 7727,
+     "source": "or timestamp - observed[\"observed_at_ms\"] > BILLING_MAX_AGE_MS):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_claim_observation_window",
+   "matches": [
+    {
+     "line": 8734,
+     "source": "or not 0 <= binding['created_at_ms'] <= started < until <= MAX_CLAIM_INTEGER):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_claim_preflight",
+   "matches": [
+    {
+     "line": 7802,
+     "source": "(type(storage_evidence) is not bytes or not 0 < len(storage_evidence) <= MAX_STORAGE_EVIDENCE_BYTES))):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_claim_scalar_context_locked",
+   "matches": [
+    {
+     "line": 8726,
+     "source": "or timestamp - observed[\"observed_at_ms\"] > BILLING_MAX_AGE_MS):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_connect",
+   "matches": [
+    {
+     "line": 2530,
+     "source": "if version > LEDGER_SCHEMA_VERSION:"
+    },
+    {
+     "line": 2535,
+     "source": "if (5 <= version < LEDGER_SCHEMA_VERSION and version != 16"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_dispatch",
+   "matches": [
+    {
+     "line": 14359,
+     "source": "if len(self._bindings) >= 4096:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_store.py::_expired_event_window",
+   "matches": [
+    {
+     "line": 2798,
+     "source": "\"ORDER BY r.project_id,r.source_sequence LIMIT ?\" if project_id is None else"
+    },
+    {
+     "line": 2800,
+     "source": "\"AND r.project_id=? AND r.source_sequence>? ORDER BY r.source_sequence LIMIT ?\"),"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_one_expire_call_summarises_a_bounded_batch_and_reports_more",
+   "test_modules": [
+    "tests.test_event_retention"
+   ]
+  },
+  {
+   "site": "learning_store.py::_fence_claim_request_locked",
+   "matches": [
+    {
+     "line": 8113,
+     "source": "if type(now) is not int or not 0 <= now <= MAX_CLAIM_INTEGER:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_handle",
+   "matches": [
+    {
+     "line": 14311,
+     "source": "if len(raw) > MAX_REQUEST_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_holds_account_restrictions_locked",
+   "matches": [
+    {
+     "line": 13542,
+     "source": "if age <= EVIDENCE_HORIZON_MS and ("
+    },
+    {
+     "line": 13547,
+     "source": "age <= EVIDENCE_HORIZON_MS"
+    },
+    {
+     "line": 13552,
+     "source": "if age <= BILLING_MAX_AGE_MS and record[\"ordinary_usage_allowed\"] is False:"
+    },
+    {
+     "line": 13558,
+     "source": "if record[\"decision\"] == \"pass\" and age < PROBE_COOLDOWN_SECONDS * 1000:"
+    },
+    {
+     "line": 13564,
+     "source": "and age < FIVE_HOURS_MS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_migrate",
+   "matches": [
+    {
+     "line": 3528,
+     "source": "if current > LEDGER_SCHEMA_VERSION:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_migrate_layout_locked",
+   "matches": [],
+   "disposition": "listed-stale-site",
+   "reason": "The unchanged guard finds no current matching limit line in this innermost function. The registry baseline is stale; retained unbound for primary review, not exempted."
+  },
+  {
+   "site": "learning_store.py::_owner_generation_locked",
+   "matches": [
+    {
+     "line": 7271,
+     "source": "or not 0 < len(row[1]) <= OWNER_SIGNERS_MAX_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_owner_signer_bytes",
+   "matches": [
+    {
+     "line": 2036,
+     "source": "if len(content) > OWNER_SIGNERS_MAX_BYTES or OWNER_SIGNER_LINE.fullmatch(content) is None:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_plan_project_backups",
+   "matches": [
+    {
+     "line": 3088,
+     "source": "if size > MAX_PROJECT_BACKUP_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_read_worker_result_locked",
+   "matches": [
+    {
+     "line": 9706,
+     "source": "len(payload) > MAX_WORKER_RESULT_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_release_active_capacity",
+   "matches": [
+    {
+     "line": 8493,
+     "source": "if type(timestamp) is not int or not row[\"claimed_at_ms\"] <= timestamp <= MAX_CLAIM_INTEGER:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_release_due_locked",
+   "matches": [
+    {
+     "line": 13188,
+     "source": "f\"FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND {crashed} LIMIT ?\","
+    },
+    {
+     "line": 13239,
+     "source": "\"WHERE a.project_id=h.project_id AND a.handle_digest=h.handle_digest) LIMIT ?)\","
+    },
+    {
+     "line": 13249,
+     "source": "\"WHERE r.state<>'released' AND r.kind='binding' AND r.state='held' AND h.binding_state='pending' AND h.expires_at_ms<=? LIMIT ?)\","
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_store.py::_schema_behind",
+   "matches": [
+    {
+     "line": 1608,
+     "source": "return version if 5 <= version < LEDGER_SCHEMA_VERSION and version not in (16, 17) else None"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_settle_unlaunched",
+   "matches": [
+    {
+     "line": 8092,
+     "source": "or type(now) is not int or not known['recorded_at_ms'] <= now <= MAX_CLAIM_INTEGER):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_write_streamed_backup",
+   "matches": [
+    {
+     "line": 3154,
+     "source": "if size > MAX_PROJECT_BACKUP_BYTES:  # The plan is an estimate; the file is the fact."
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::_write_worker_result",
+   "matches": [
+    {
+     "line": 9638,
+     "source": "if len(payload) > MAX_WORKER_RESULT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::account_capacity",
+   "matches": [
+    {
+     "line": 12842,
+     "source": "\"SELECT COUNT(*) FROM account_observation_origins WHERE project_id=?\", (project_id,)).fetchone()[0]"
+    },
+    {
+     "line": 12849,
+     "source": "\"SELECT COUNT(*) \" + LIVE_BINDINGS, (project_id, self._clock_ms())).fetchone()[0]"
+    },
+    {
+     "line": 12851,
+     "source": "\"SELECT COUNT(*) FROM account_billing_probe_requests WHERE project_id=? AND state<>'committed'\","
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::account_holds_status",
+   "matches": [
+    {
+     "line": 12917,
+     "source": "\"SELECT COUNT(*),COALESCE(SUM(CASE WHEN h.expires_at_ms<=? THEN 1 ELSE 0 END),0),\""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::account_slot_health",
+   "matches": [
+    {
+     "line": 12818,
+     "source": "\"SELECT COUNT(*),COALESCE(SUM(deadline_at_ms<?),0) FROM account_billing_probe_requests \""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::acquire",
+   "matches": [
+    {
+     "line": 14859,
+     "source": "if reported >= FIRST_RUN_DRIVING_VERSION:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::budget",
+   "matches": [
+    {
+     "line": 12799,
+     "source": "return 1 if steps[0] >= SLOT_HEALTH_STEPS else 0"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_store.py::close_orchestration",
+   "matches": [
+    {
+     "line": 5345,
+     "source": "\"SELECT COUNT(*) FROM host_run_bindings WHERE project_id=? \""
+    }
+   ],
+   "disposition": "listed-consistency-precondition",
+   "reason": "COUNT of pending bindings must be zero before explicit close (lines 5345-5351). This is an unfinished-work safety precondition, not a configured count cap."
+  },
+  {
+   "site": "learning_store.py::commit_host_result",
+   "matches": [
+    {
+     "line": 9261,
+     "source": "and len(canonical_json(checked_result)) > MAX_WORKER_RESULT_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::commit_upgrade_reconciliation",
+   "matches": [
+    {
+     "line": 5700,
+     "source": "<= UPGRADE_RECONCILIATION_TTL_MS"
+    },
+    {
+     "line": 5727,
+     "source": "\"SELECT COUNT(*),SUM(binding_state='pending') FROM host_run_bindings \""
+    }
+   ],
+   "disposition": "listed-consistency-precondition",
+   "reason": "Counts compare the persisted reconciliation boundary with the current row set; paired TTL age check. No maximum population admission cap in these matched lines."
+  },
+  {
+   "site": "learning_store.py::earlier_version_runs",
+   "matches": [],
+   "disposition": "listed-stale-site",
+   "reason": "The unchanged guard finds no current matching limit line in this innermost function. The registry baseline is stale; retained unbound for primary review, not exempted."
+  },
+  {
+   "site": "learning_store.py::ingestion_snapshot",
+   "matches": [
+    {
+     "line": 13287,
+     "source": "\"SELECT COUNT(*) AS opened,\""
+    },
+    {
+     "line": 13306,
+     "source": "\"SELECT status,COUNT(*) AS count FROM orchestrations \""
+    },
+    {
+     "line": 13311,
+     "source": "\"SELECT accepted,COUNT(*) AS count FROM operational_qa \""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::issue_operational_check_receipt",
+   "matches": [
+    {
+     "line": 10083,
+     "source": "\"SELECT COUNT(*) FROM operational_check_receipts \""
+    },
+    {
+     "line": 10088,
+     "source": "if pending >= MAX_PENDING_OPERATIONAL_CHECKS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_store.py::issue_result_repair_receipt",
+   "matches": [
+    {
+     "line": 4946,
+     "source": "\"SELECT COUNT(*) FROM repair_receipts WHERE project_id=? \""
+    },
+    {
+     "line": 4951,
+     "source": "if pending >= MAX_PENDING_REPAIR_RECEIPTS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_store.py::legacy_signers_digest",
+   "matches": [
+    {
+     "line": 1396,
+     "source": "if len(content) > LEGACY_SIGNERS_READ_LIMIT:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Legacy signer-file byte ceiling; string/file bytes, not acquired entries."
+  },
+  {
+   "site": "learning_store.py::migrate_legacy_state",
+   "matches": [
+    {
+     "line": 1447,
+     "source": "if len(os.fsencode(str(target / \"collector.sock\"))) > UNIX_SOCKET_PATH_MAX:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Encoded Unix socket pathname length validation; this function is not being invoked here."
+  },
+  {
+   "site": "learning_store.py::open_host_run",
+   "matches": [
+    {
+     "line": 6397,
+     "source": "\"SELECT COUNT(*) \" + LIVE_BINDINGS, (project_id, timestamp),"
+    },
+    {
+     "line": 6400,
+     "source": "if pending >= MAX_PENDING_HOST_RUNS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_store.py::prepare_upgrade_reconciliation",
+   "matches": [
+    {
+     "line": 5597,
+     "source": "\"SELECT COUNT(*),SUM(binding_state='pending') FROM host_run_bindings \""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "learning_store.py::record_claude_rate_limit_event",
+   "matches": [
+    {
+     "line": 7174,
+     "source": "if len(prior) >= MAX_RUN_RATE_LIMIT_RECORDS:"
+    },
+    {
+     "line": 7195,
+     "source": "overflow = bool(kept) and len(prior) + len(kept) >= MAX_RUN_RATE_LIMIT_RECORDS"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "learning_store.py::recorded_owner_key",
+   "matches": [
+    {
+     "line": 2081,
+     "source": "\"SELECT COUNT(*),MAX(recorded_at_ms) FROM owner_key_history \""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "legacy_slots.py::deadline_sql",
+   "matches": [
+    {
+     "line": 54,
+     "source": "return (\"(SELECT CASE WHEN COUNT(*)=1 THEN MAX(legacy_dispatch_deadline(d.content,d.content_digest,\""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "liveness_clock.py::_integer",
+   "matches": [
+    {
+     "line": 42,
+     "source": "return type(value) is int and minimum <= value <= MAX_CLOCK_NS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "liveness_clock.py::received",
+   "matches": [
+    {
+     "line": 195,
+     "source": "valid = type(events) is tuple and len(events) <= MAX_RECEIVED_EVENTS + 2"
+    },
+    {
+     "line": 216,
+     "source": "if stopped or activity_count > MAX_RECEIVED_EVENTS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_receipts_older_than_a_previous_watermark_and_oversized_batches_fail_closed",
+   "test_modules": [
+    "tests.test_execution_activity"
+   ]
+  },
+  {
+   "site": "merge_library.py::_validate",
+   "matches": [
+    {
+     "line": 639,
+     "source": "if len(b.events) > MAX_PATHS:"
+    },
+    {
+     "line": 661,
+     "source": "if len(c.data) > MAX_FILE_BYTES:"
+    },
+    {
+     "line": 693,
+     "source": "if max(totals, default=0) > MAX_LANDING_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "merge_library.py::read",
+   "matches": [
+    {
+     "line": 367,
+     "source": "if info.st_size > MAX_FILE_BYTES:"
+    },
+    {
+     "line": 375,
+     "source": "if len(data) > MAX_FILE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "open_scope_contracts.py::checked_open_scope",
+   "matches": [
+    {
+     "line": 135,
+     "source": "if len(raw) > MAX_OPEN_SCOPE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "open_scope_contracts.py::snapshot",
+   "matches": [
+    {
+     "line": 57,
+     "source": "if not 0 < len(raw) <= MAX_OPEN_SCOPE_CONTEXT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "operational_qa_contracts.py::checked_operational_qa",
+   "matches": [
+    {
+     "line": 33,
+     "source": "or len(canonical_json(value)) > MAX_RECORD_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "orchestration_api.py::__init__",
+   "matches": [
+    {
+     "line": 335,
+     "source": "or type(timeout) not in {int, float} or not 0 < timeout <= MAX_TIMEOUT_SECONDS):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "orchestration_api.py::decode_orchestration_request",
+   "matches": [
+    {
+     "line": 155,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_ORCHESTRATION_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "orchestration_api.py::decode_orchestration_response",
+   "matches": [
+    {
+     "line": 243,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_ORCHESTRATION_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "orchestration_api.py::encode_orchestration_request",
+   "matches": [
+    {
+     "line": 147,
+     "source": "if len(raw) + 1 > MAX_ORCHESTRATION_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "orchestration_service.py::__post_init__",
+   "matches": [
+    {
+     "line": 36,
+     "source": "or not self.allowed_operations <= ORCHESTRATION_OPERATIONS):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "orchestration_service.py::handle",
+   "matches": [
+    {
+     "line": 138,
+     "source": "if len(reply) + 1 > MAX_ORCHESTRATION_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "orchestration_store.py::_positions",
+   "matches": [
+    {
+     "line": 353,
+     "source": "positions = self._db.execute(_TARGET_ROWS[table] + ' LIMIT ?',"
+    },
+    {
+     "line": 355,
+     "source": "if len(positions) > MAX_LEASE_ROWS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "orchestration_store.py::apply",
+   "matches": [
+    {
+     "line": 578,
+     "source": "if self._open_count() >= limits.max_orchestrations:"
+    },
+    {
+     "line": 634,
+     "source": "if len(raw) > MAX_ORCHESTRATION_CHECKPOINT_BYTES:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_034_R6_the_orchestration_limit_counts_only_open_ones",
+   "test_modules": [
+    "tests.test_project_orchestration"
+   ]
+  },
+  {
+   "site": "orchestration_store.py::end_earlier",
+   "matches": [],
+   "disposition": "listed-stale-site",
+   "reason": "The unchanged guard finds no current matching limit line in this innermost function. The registry baseline is stale; retained unbound for primary review, not exempted."
+  },
+  {
+   "site": "orchestration_store.py::purge_closed",
+   "matches": [
+    {
+     "line": 289,
+     "source": "rows = self._db.execute(statement + ('' if after is None else ' AND rowid>?') + ' ORDER BY rowid LIMIT ?',"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "owned_execution.py::issue",
+   "matches": [
+    {
+     "line": 273,
+     "source": "if len(self._pending) >= MAX_OWNED_EXECUTIONS or key in self._keys:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "owned_execution.py::retain_cleanup",
+   "matches": [
+    {
+     "line": 910,
+     "source": "if len(self._cleanups) >= MAX_OWNED_EXECUTIONS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_reference_count_is_bounded_and_native_retirement_invalidates_it",
+   "test_modules": [
+    "tests.test_cleanup_custody"
+   ]
+  },
+  {
+   "site": "owner_key_contracts.py::checked_public_key",
+   "matches": [
+    {
+     "line": 97,
+     "source": "if type(value) is not str or len(value) > OWNER_SIGNERS_MAX_BYTES:"
+    },
+    {
+     "line": 101,
+     "source": "if len(line) > OWNER_SIGNERS_MAX_BYTES or OWNER_SIGNER_LINE.fullmatch(line) is None:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "owner_key_contracts.py::owner_public_key_from_line",
+   "matches": [
+    {
+     "line": 115,
+     "source": "if (type(signer_line) is not bytes or not 0 < len(signer_line) <= OWNER_SIGNERS_MAX_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "prepared_dispatch.py::handle",
+   "matches": [
+    {
+     "line": 149,
+     "source": "if len(self._jobs) >= self._maximum:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "process_tree.py::_linux_environment",
+   "matches": [
+    {
+     "line": 463,
+     "source": "return None if len(raw) > MAX_ENVIRONMENT_BYTES else parse_environ(raw)"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "process_tree.py::_remember_cleanup",
+   "matches": [
+    {
+     "line": 765,
+     "source": "if unproven >= MAX_CLEANUP_IDENTITIES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_backup.py::estimate_bytes",
+   "matches": [
+    {
+     "line": 123,
+     "source": "f\"SELECT COUNT(*),IFNULL(SUM({lengths}),0) FROM {table} WHERE project_id=?\", (project_id,)"
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "project_backup.py::verify",
+   "matches": [
+    {
+     "line": 328,
+     "source": "f\"SELECT COUNT(*),SUM(project_id=?) FROM {table}\", (project_id,)).fetchone()"
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "project_capacity_report.py::capacity_report",
+   "matches": [
+    {
+     "line": 18,
+     "source": "results = db.execute(\"SELECT COUNT(*) FROM result_reservations WHERE project_id=? AND state!='expired'\","
+    },
+    {
+     "line": 34,
+     "source": "'cleanup_reservations': (db.execute('SELECT COUNT(*) FROM project_cleanup_reservations WHERE project_id=? '"
+    },
+    {
+     "line": 37,
+     "source": "'operational_qa': (db.execute('SELECT COUNT(*) FROM project_operational_qa WHERE project_id=?',"
+    },
+    {
+     "line": 39,
+     "source": "'qa_check_receipts': (db.execute('SELECT COUNT(*) FROM project_qa_check_receipts WHERE project_id=?',"
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "project_cleanup.py::reserve_cleanup",
+   "matches": [
+    {
+     "line": 67,
+     "source": "count = store._connection.execute('SELECT COUNT(*) FROM project_cleanup_reservations').fetchone()[0]"
+    },
+    {
+     "line": 68,
+     "source": "if count >= MAX_CLEANUP_RESERVATIONS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_O10_D3_a_never_admitted_leases_cleanup_slot_is_purged_once_the_lease_is_released",
+   "test_modules": [
+    "tests.test_project_cleanup"
+   ]
+  },
+  {
+   "site": "project_driver.py::_authorize_dispatch",
+   "matches": [
+    {
+     "line": 1187,
+     "source": "if len(run.dispatch_tokens) >= 256:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_driver.py::_fence_earlier",
+   "matches": [
+    {
+     "line": 1939,
+     "source": "if entry['refusals'] >= MAX_FENCE_ATTEMPTS:"
+    },
+    {
+     "line": 1946,
+     "source": "if entry['refusals'] >= MAX_FENCE_ATTEMPTS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_driver.py::_fence_later",
+   "matches": [
+    {
+     "line": 950,
+     "source": "if run.fence_attempts >= MAX_FENCE_ATTEMPTS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_a_fence_never_answered_stops_holding_a_preparation_slot_but_keeps_its_lease",
+   "test_modules": [
+    "tests.test_run_driver_retries"
+   ]
+  },
+  {
+   "site": "project_driver.py::_forget_retired",
+   "matches": [
+    {
+     "line": 1842,
+     "source": "if refusals >= MAX_FORGET_ATTEMPTS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_a_refused_forget_is_tried_again_less_often_and_then_left",
+   "test_modules": [
+    "tests.test_run_driver_retries"
+   ]
+  },
+  {
+   "site": "project_driver.py::_hold",
+   "matches": [
+    {
+     "line": 356,
+     "source": "if len(self.pending) < MAX_PENDING_RATE_LIMITS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_events_past_the_pending_limit_are_folded_and_delivered",
+   "test_modules": [
+    "tests.test_project_driver"
+   ]
+  },
+  {
+   "site": "project_driver.py::_read_intake",
+   "matches": [
+    {
+     "line": 522,
+     "source": "if not chunk or len(raw) + len(chunk) > MAX_REQUEST_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_driver.py::_recorded",
+   "matches": [],
+   "disposition": "listed-stale-site",
+   "reason": "The unchanged guard finds no current matching limit line in this innermost function. The registry baseline is stale; retained unbound for primary review, not exempted."
+  },
+  {
+   "site": "project_driver.py::handle",
+   "matches": [
+    {
+     "line": 504,
+     "source": "if len(self._intake) >= MAX_INTAKE or enrolled.role != 'host':"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_driver.py::record_claude_rate_limit_event",
+   "matches": [
+    {
+     "line": 328,
+     "source": "if self._count > MAX_RUN_RATE_LIMIT_EVENTS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_an_event_past_the_run_cap_is_held_and_delivered",
+   "test_modules": [
+    "tests.test_project_driver"
+   ]
+  },
+  {
+   "site": "project_history.py::_checked_record",
+   "matches": [
+    {
+     "line": 1173,
+     "source": "type(content) is not bytes or not 0 < len(content) <= MAX_RECORD_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_history.py::_lease_binding",
+   "matches": [
+    {
+     "line": 1547,
+     "source": "if binding.project_id != self.project_id or len(canonical_json(binding.as_data())) > MAX_BINDING_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_history.py::_read_result_file",
+   "matches": [
+    {
+     "line": 2785,
+     "source": "if (not 0 < len(body) <= MAX_RESULT_BODY_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_history.py::_result_binding",
+   "matches": [
+    {
+     "line": 1428,
+     "source": "if captured.project_id != self.project_id or len(canonical_json(captured.as_data())) > MAX_BINDING_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_history.py::runtime_close_status",
+   "matches": [
+    {
+     "line": 3614,
+     "source": "\"SELECT COUNT(*) FROM project_holds WHERE project_id=? AND kind='orchestration' \""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "project_history.py::_result_file_info",
+   "matches": [
+    {
+     "line": 2755,
+     "source": "or not 0 <= info.st_size <= MAX_RESULT_BODY_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_history.py::attest_bound_result_lease",
+   "matches": [
+    {
+     "line": 1835,
+     "source": "if len(raw) > MAX_STORAGE_EVIDENCE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_history.py::candidates",
+   "matches": [
+    {
+     "line": 2575,
+     "source": "return self._connection.execute(sql + \" ORDER BY rowid LIMIT ?\", (*args, limit)).fetchall()"
+    },
+    {
+     "line": 3661,
+     "source": "return self._connection.execute(statement + \" ORDER BY rowid LIMIT ?\", (*arguments, limit)).fetchall()"
+    },
+    {
+     "line": 3746,
+     "source": "statement + (\"\" if position is None else \" AND rowid>?\") + \" ORDER BY rowid LIMIT ?\","
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_history.py::learning_outcome_page",
+   "matches": [
+    {
+     "line": 2181,
+     "source": "\"AND source_sequence>? AND source_sequence<=? ORDER BY source_sequence LIMIT ?\","
+    },
+    {
+     "line": 2190,
+     "source": "or type(raw) is not bytes or not 0 < len(raw) <= MAX_RECORD_BYTES):"
+    },
+    {
+     "line": 2192,
+     "source": "if size + len(raw) > MAX_LEARNING_PAGE_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_history.py::pending_terminals",
+   "matches": [
+    {
+     "line": 4308,
+     "source": "\"AND delivery_sequence>? ORDER BY delivery_sequence LIMIT ?\","
+    },
+    {
+     "line": 4314,
+     "source": "if len(canonical_json([item.as_data() for item in (*page, delivery)])) + 1 > MAX_DELIVERY_PAGE_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_history.py::record_registered_run",
+   "matches": [
+    {
+     "line": 2512,
+     "source": "\"SELECT COUNT(*) FROM project_registered_runs WHERE project_id=? AND orchestration_handle=?\","
+    },
+    {
+     "line": 2514,
+     "source": "if held >= MAX_REGISTERED_RUNS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_R6_12_registrations_are_bounded_per_orchestration_and_a_replay_at_the_limit_is_kept",
+   "test_modules": [
+    "tests.test_project_orchestration"
+   ]
+  },
+  {
+   "site": "project_history.py::settle_earlier_registrations",
+   "matches": [
+    {
+     "line": 2560,
+     "source": "\"o.project_id=r.project_id AND o.run_handle=r.run_handle AND o.attempt=r.attempt) LIMIT ?)\","
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_history.py::window",
+   "matches": [
+    {
+     "line": 3786,
+     "source": "rows = self._connection.execute(statement + (\"\" if after is None else \" AND rowid>?\") + \" ORDER BY rowid LIMIT ?\","
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_ingress.py::__post_init__",
+   "matches": [
+    {
+     "line": 34,
+     "source": "if (type(self.connections) is not int or not 1 <= self.connections <= MAX_CONNECTIONS"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "project_ingress.py::_step",
+   "matches": [
+    {
+     "line": 228,
+     "source": "elif len(peer.incoming) >= MAX_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_ingress.py::attach",
+   "matches": [
+    {
+     "line": 133,
+     "source": "or len(self._peers) >= self._limits.connections):"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_connection_quota_refusal_retains_callers_descriptor_custody",
+   "test_modules": [
+    "tests.test_project_ingress"
+   ]
+  },
+  {
+   "site": "project_learning_activation.py::derived_records",
+   "matches": [
+    {
+     "line": 170,
+     "source": "f\"SELECT COUNT(*) FROM records WHERE project_id=? AND record_type IN ({placeholders})\","
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "project_learning_activation.py::staged_imports",
+   "matches": [
+    {
+     "line": 205,
+     "source": "\"FROM project_learning_imports WHERE project_id=? ORDER BY created_at_ms,import_id LIMIT ?\","
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_learning_activation.py::written_since",
+   "matches": [
+    {
+     "line": 160,
+     "source": "\"SELECT COUNT(*) FROM records WHERE project_id=? AND source_sequence>=? \""
+    }
+   ],
+   "disposition": "listed-read-only-count",
+   "reason": "These SQL counts produce snapshot/backup/status data or a consistency aggregate, not a count-based admission/refusal cap. Registry retained unbound."
+  },
+  {
+   "site": "project_learning_chunks.py::record_chunk_membership",
+   "matches": [
+    {
+     "line": 236,
+     "source": "if len(raw) > MAX_MEMBERSHIP_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_learning_corpus.py::_prepare_chunk",
+   "matches": [
+    {
+     "line": 114,
+     "source": "or not 1 <= len(records) + len(attestations) <= MAX_CHUNK_ENTRIES):"
+    },
+    {
+     "line": 122,
+     "source": "or type(entry[\"content\"]) is not bytes or not 0 < len(entry[\"content\"]) <= MAX_RECORD_BYTES"
+    },
+    {
+     "line": 130,
+     "source": "if size > MAX_CHUNK_BYTES:"
+    },
+    {
+     "line": 149,
+     "source": "or not 1 <= len(entry[\"signature\"]) <= MAX_SIGNATURE_BYTES"
+    },
+    {
+     "line": 154,
+     "source": "if size > MAX_CHUNK_BYTES:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_bounds_and_noncanonical_records_fail_without_writes",
+   "test_modules": [
+    "tests.test_project_learning_corpus"
+   ]
+  },
+  {
+   "site": "project_learning_corpus.py::begin_import",
+   "matches": [
+    {
+     "line": 247,
+     "source": "if len(history._connection.execute(\"SELECT import_id FROM project_learning_imports WHERE project_id=? LIMIT ?\","
+    },
+    {
+     "line": 248,
+     "source": "(history.project_id, MAX_IMPORTS)).fetchall()) >= MAX_IMPORTS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_empty_staging_remains_unavailable_and_scope_capacity_is_finite",
+   "test_modules": [
+    "tests.test_project_learning_corpus"
+   ]
+  },
+  {
+   "site": "project_learning_corpus.py::import_attestations",
+   "matches": [
+    {
+     "line": 391,
+     "source": "\"AND subject_record_id>? ORDER BY subject_record_id LIMIT ?\", (history.project_id, import_id, after_subject_record_id, limit))"
+    },
+    {
+     "line": 395,
+     "source": "if size + len(signature) > MAX_CHUNK_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_learning_corpus.py::import_records",
+   "matches": [
+    {
+     "line": 363,
+     "source": "\"AND source_sequence>? ORDER BY source_sequence LIMIT ?\", (history.project_id, import_id, after_source_sequence, limit))"
+    },
+    {
+     "line": 367,
+     "source": "if size + len(content) > MAX_CHUNK_BYTES:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_reads_are_bounded_and_resume_by_original_source_sequence",
+   "test_modules": [
+    "tests.test_project_learning_corpus"
+   ]
+  },
+  {
+   "site": "project_learning_identity.py::_outcomes",
+   "matches": [
+    {
+     "line": 111,
+     "source": "if size > MAX_PREPARATION_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_learning_identity.py::_references",
+   "matches": [
+    {
+     "line": 68,
+     "source": "if type(references) not in (list, tuple) or not 1 <= len(references) <= MAX_CASE_PREPARATION:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_batch_or_aggregate_byte_exhaustion_refuses_without_partial_results",
+   "test_modules": [
+    "tests.test_project_learning_identity"
+   ]
+  },
+  {
+   "site": "project_learning_identity.py::prepare_candidate",
+   "matches": [
+    {
+     "line": 141,
+     "source": "if type(spec) is not bytes or not 0 < len(spec) <= MAX_RECORD_BYTES:"
+    },
+    {
+     "line": 159,
+     "source": "if len(canonical_json(record)) > MAX_RECORD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_learning_live.py::append_learning_records",
+   "matches": [
+    {
+     "line": 218,
+     "source": "if checked[\"record_type\"] not in {\"evaluation_case\", \"candidate\"} or len(content) > MAX_RECORD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_learning_live.py::cycle",
+   "matches": [
+    {
+     "line": 416,
+     "source": "if len(self._jobs) >= MAX_JOBS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_too_many_unfinished_cycles_are_refused_and_close_stops_everything",
+   "test_modules": [
+    "tests.test_project_learning_live"
+   ]
+  },
+  {
+   "site": "project_learning_owner.py::record_feedback",
+   "matches": [
+    {
+     "line": 202,
+     "source": "if (type(signature) is not bytes or not 0 < len(signature) <= MAX_SIGNATURE_BYTES"
+    },
+    {
+     "line": 210,
+     "source": "if checked[\"record_type\"] != \"feedback\" or len(content) > MAX_RECORD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_learning_qa.py::_entry",
+   "matches": [
+    {
+     "line": 132,
+     "source": "or not 1 <= len(value[\"content\"]) <= MAX_RECORD_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_learning_qa.py::_page",
+   "matches": [
+    {
+     "line": 302,
+     "source": "\" ORDER BY qa_id LIMIT ?\","
+    },
+    {
+     "line": 314,
+     "source": "if size + len(entry[\"content\"]) > MAX_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_learning_qa.py::_prepare",
+   "matches": [
+    {
+     "line": 148,
+     "source": "if type(rows) not in (list, tuple) or not 1 <= len(rows) <= MAX_ROWS:"
+    },
+    {
+     "line": 157,
+     "source": "if size > MAX_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_learning_qa.py::stage_qa_chunk",
+   "matches": [
+    {
+     "line": 345,
+     "source": "or not 1 <= following[\"qa_count\"] - receipt[\"qa_count\"] <= MAX_ROWS"
+    },
+    {
+     "line": 346,
+     "source": "or not 1 <= following[\"total_bytes\"] - receipt[\"total_bytes\"] <= MAX_BYTES):"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_learning_source.py::stage_image_chunk",
+   "matches": [
+    {
+     "line": 114,
+     "source": "or not 0 < len(raw) <= CHUNK_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_monitor.py::__init__",
+   "matches": [
+    {
+     "line": 144,
+     "source": "or not 1 <= max_tracked_attempts <= MAX_TRACKED_ATTEMPTS or not callable(clock_ns)):"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "project_monitor.py::_sample_clock",
+   "matches": [
+    {
+     "line": 231,
+     "source": "self._clock_failed or type(value) is not int or not 0 <= value <= MAX_CLOCK_NS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_monitor.py::register",
+   "matches": [
+    {
+     "line": 355,
+     "source": "if type(hard_deadline_ns) is not int or not 0 <= hard_deadline_ns <= MAX_CLOCK_NS:"
+    },
+    {
+     "line": 379,
+     "source": "if len(self._attempts) >= self._maximum:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_only_a_finished_and_cleaned_attempt_is_forgotten_and_frees_its_slot",
+   "test_modules": [
+    "tests.test_project_monitor"
+   ]
+  },
+  {
+   "site": "project_orchestration_report.py::orchestration_report",
+   "matches": [
+    {
+     "line": 90,
+     "source": "\"AND json_extract(CAST(o.binding AS TEXT),'$.orchestration_handle')=? ORDER BY o.source_sequence LIMIT ?\","
+    },
+    {
+     "line": 92,
+     "source": "if len(opens) > MAX_RUNS:"
+    },
+    {
+     "line": 103,
+     "source": "\"project_registered_runs_orchestration WHERE project_id=? AND orchestration_handle=? LIMIT ?\","
+    },
+    {
+     "line": 105,
+     "source": "if len(registered) > MAX_RUNS:"
+    },
+    {
+     "line": 115,
+     "source": "if len(runs) + len(before_open) > MAX_RUNS:  # R6-12: opens and registrations together"
+    },
+    {
+     "line": 129,
+     "source": "\"ORDER BY source_sequence LIMIT ?\","
+    },
+    {
+     "line": 141,
+     "source": "\"LIMIT ?\", (history.project_id, *runs, MAX_RUNS + 1)):"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_qa_checks.py::_report",
+   "matches": [
+    {
+     "line": 68,
+     "source": "if not 0 < len(raw) <= MAX_CHECK_REPORT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_qa_checks.py::issue_check_receipt",
+   "matches": [
+    {
+     "line": 250,
+     "source": "total, pending = history._connection.execute('SELECT COUNT(*),COALESCE(SUM('"
+    },
+    {
+     "line": 253,
+     "source": "requests = history._connection.execute('SELECT COUNT(*) FROM project_qa_check_requests '"
+    },
+    {
+     "line": 261,
+     "source": "if total >= MAX_CHECK_RECEIPTS or pending >= MAX_PENDING_CHECK_RECEIPTS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_qa_checks.py::purge_old_qa",
+   "matches": [
+    {
+     "line": 296,
+     "source": "'WHERE project_id=? AND ingested_at_ms<? LIMIT ?', (project, cutoff, limit)).fetchall():"
+    },
+    {
+     "line": 306,
+     "source": "'AND created_at_ms<? LIMIT ?', (project, cutoff, limit)).fetchall():"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_qa_commit.py::commit_operational_qa",
+   "matches": [
+    {
+     "line": 214,
+     "source": "if history._connection.execute('SELECT COUNT(*) FROM project_operational_qa '"
+    },
+    {
+     "line": 215,
+     "source": "'WHERE project_id=?', (history.project_id,)).fetchone()[0] >= MAX_CHECK_RECEIPTS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "project_release_ack.py::record_account_release",
+   "matches": [
+    {
+     "line": 93,
+     "source": "if type(raw) is not bytes or not 0 < len(raw) <= MAX_ACCOUNT_RELEASE_ACK_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_request_queue.py::__post_init__",
+   "matches": [
+    {
+     "line": 34,
+     "source": "if (type(self.requests) is not int or not 1 <= self.requests <= MAX_REQUEST_SLOTS"
+    },
+    {
+     "line": 35,
+     "source": "or type(self.max_wait_ns) is not int or not 1 <= self.max_wait_ns <= MAX_REQUEST_WAIT_NS):"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "project_request_queue.py::execute",
+   "matches": [
+    {
+     "line": 137,
+     "source": "if type(response) is not bytes or not response or len(response) + 1 > MAX_FRAME_BYTES or b\"\\n\" in response:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "project_request_queue.py::prepare",
+   "matches": [
+    {
+     "line": 83,
+     "source": "if (type(raw) is not bytes or not raw or len(raw) + 1 > MAX_FRAME_BYTES or b\"\\n\" in raw"
+    },
+    {
+     "line": 88,
+     "source": "if self._closed or len(self._jobs) >= self._limits.requests:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_input_and_retention_bounds_and_plain_opaque_context",
+   "test_modules": [
+    "tests.test_project_request_queue"
+   ]
+  },
+  {
+   "site": "project_runtime.py::__post_init__",
+   "matches": [
+    {
+     "line": 53,
+     "source": "if self.persistence_bytes < self.max_persistence_entries*MAX_PERSISTENCE_ENTRY_BYTES + self.requests.retained_bytes:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "provider_observation_contracts.py::checked_observation_reply",
+   "matches": [
+    {
+     "line": 56,
+     "source": "or type(value['records']) is not list or not 1 <= len(value['records']) <= MAX_OBSERVATION_RECORDS):"
+    },
+    {
+     "line": 75,
+     "source": "if identities != 1 or len(canonical_json(value)) > MAX_OBSERVATION_REPLY_BYTES:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "providers.py::_response",
+   "matches": [
+    {
+     "line": 547,
+     "source": "if self._received > MAX_OBSERVATION_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "providers.py::parse_client_version",
+   "matches": [
+    {
+     "line": 195,
+     "source": "if len(raw) > MAX_VERSION_BYTES:"
+    },
+    {
+     "line": 201,
+     "source": "if not isinstance(raw, str) or len(raw) > MAX_VERSION_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "rate_limit_contracts.py::__post_init__",
+   "matches": [
+    {
+     "line": 123,
+     "source": "if size > MAX_RATE_LIMIT_INFO_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "rate_limit_contracts.py::_scalar",
+   "matches": [
+    {
+     "line": 41,
+     "source": "return value if type(value) is str and len(value) <= MAX_TEXT and _TEXT.fullmatch(value) else None"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "rate_limit_contracts.py::bounded_rate_limit_info",
+   "matches": [
+    {
+     "line": 61,
+     "source": "if (len(kept) < MAX_WINDOWS and type(scope) is str and len(scope) <= MAX_TEXT // 2"
+    },
+    {
+     "line": 68,
+     "source": "if len(canonical_json(facts)) > MAX_RATE_LIMIT_INFO_BYTES:  # Defence in depth; the bounds above prevent it."
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_dropped_windows_never_make_the_event_less_restrictive",
+   "test_modules": [
+    "tests.test_rate_limit_contracts"
+   ]
+  },
+  {
+   "site": "release_contracts.py::capture_cleanup_evidence",
+   "matches": [
+    {
+     "line": 12,
+     "source": "if raw is not None and (type(raw) is not bytes or not 0 < len(raw) <= MAX_CLEANUP_EVIDENCE_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_contracts.py::__post_init__",
+   "matches": [
+    {
+     "line": 119,
+     "source": "or self.reserved_until_ms - self.created_at_ms > MAX_RESULT_RETENTION_MS"
+    },
+    {
+     "line": 236,
+     "source": "or self.reserved_until_ms - self.created_at_ms > MAX_RESULT_RETENTION_MS"
+    },
+    {
+     "line": 247,
+     "source": "and self.retained_until_ms - self.prepared_at_ms <= MAX_RESULT_RETENTION_MS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_contracts.py::as_data",
+   "matches": [
+    {
+     "line": 179,
+     "source": "invalid = len(encoded) > MAX_RECORD_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_contracts.py::assignment_bytes",
+   "matches": [
+    {
+     "line": 278,
+     "source": "len(encoded) > MAX_ASSIGNMENT_CANONICAL_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_contracts.py::checked_result_body",
+   "matches": [
+    {
+     "line": 297,
+     "source": "if type(body) is not bytes or not 0 < len(body) <= MAX_RESULT_BODY_BYTES:"
+    },
+    {
+     "line": 305,
+     "source": "or len(result[\"evidence\"]) + 2 > MAX_OUTCOME_EVIDENCE_DIGESTS"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "result_persistence.py::__init__",
+   "matches": [
+    {
+     "line": 138,
+     "source": "or not callable(open_history) or type(max_entries) is not int or not 1 <= max_entries <= 64"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "result_persistence.py::_prepare_entry",
+   "matches": [
+    {
+     "line": 297,
+     "source": "if len(self._jobs) >= self._maximum:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_explicit_budget_exhaustion_refuses_before_ticket_or_provider_launch",
+   "test_modules": [
+    "tests.test_result_persistence"
+   ]
+  },
+  {
+   "site": "result_persistence.py::acknowledge_release",
+   "matches": [
+    {
+     "line": 800,
+     "source": "if type(raw) is not bytes or not 0 < len(raw) <= MAX_CLEANUP_EVIDENCE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_persistence.py::acknowledge_terminal",
+   "matches": [
+    {
+     "line": 686,
+     "source": "if type(raw) is not bytes or not 0 < len(raw) <= MAX_TERMINAL_EVIDENCE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_persistence.py::consume_execution",
+   "matches": [
+    {
+     "line": 568,
+     "source": "if type(raw) is not bytes or not 0 < len(raw) <= MAX_EXECUTION_GRANT_BYTES:"
+    },
+    {
+     "line": 570,
+     "source": "if provenance is not None and (type(provenance) is not bytes or not 0 < len(provenance) <= MAX_RUN_PROVENANCE_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_persistence.py::record_host_open",
+   "matches": [
+    {
+     "line": 368,
+     "source": "if type(raw) is not bytes or not 0 < len(raw) <= MAX_OPEN_PROVENANCE_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_persistence.py::settle_denial",
+   "matches": [
+    {
+     "line": 430,
+     "source": "if type(raw) is not bytes or not 0 < len(raw) <= MAX_DENIAL_RECEIPT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_persistence.py::settle_earlier_lease",
+   "matches": [
+    {
+     "line": 1108,
+     "source": "if type(binding) is not ResultLeaseBinding or type(raw) is not bytes or not 0 < len(raw) <= MAX_DENIAL_RECEIPT_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_read_api.py::__init__",
+   "matches": [
+    {
+     "line": 187,
+     "source": "or type(timeout) not in (int, float) or not 0 < timeout <= MAX_TIMEOUT_SECONDS"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_read_api.py::decode_result_read_request",
+   "matches": [
+    {
+     "line": 91,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_RESULT_READ_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_read_api.py::decode_result_read_response",
+   "matches": [
+    {
+     "line": 128,
+     "source": "if type(raw) is not bytes or len(raw) + 1 > MAX_RESULT_READ_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_read_api.py::encode_result_read_request",
+   "matches": [
+    {
+     "line": 80,
+     "source": "invalid = len(encoded) + 1 > MAX_RESULT_READ_FRAME_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "result_read_service.py::handle",
+   "matches": [
+    {
+     "line": 132,
+     "source": "if len(reply) + 1 > MAX_RESULT_READ_FRAME_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "routing.py::_read_project_regular",
+   "matches": [
+    {
+     "line": 107,
+     "source": "if byte_count > max_bytes:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Per-file byte_count compared to max_bytes; temporary file input ends with the read."
+  },
+  {
+   "site": "routing.py::_validate_admission_settings",
+   "matches": [
+    {
+     "line": 815,
+     "source": "or not 1 <= cap <= MAX_ADMISSIONS_PER_WINDOW"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Validates the configured numeric admissions-per-window value; actual admission population checks are elsewhere."
+  },
+  {
+   "site": "routing.py::_validate_escalation",
+   "matches": [
+    {
+     "line": 1046,
+     "source": "if not isinstance(ladder, list) or not 1 <= len(ladder) <= MAX_LADDER_RUNGS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "run_provenance.py::checked_run_provenance",
+   "matches": [
+    {
+     "line": 88,
+     "source": "or len(canonical_json(value)) > MAX_RUN_PROVENANCE_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_enrollment.py::__init__",
+   "matches": [
+    {
+     "line": 443,
+     "source": "or not roles <= ROLES or not _integer(generation, minimum=1)"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_enrollment.py::_consume_proof",
+   "matches": [
+    {
+     "line": 367,
+     "source": "if (len(context) > MAX_CONTEXT_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_enrollment.py::_subject",
+   "matches": [
+    {
+     "line": 68,
+     "source": "return value is None or (type(value) is str and 0 < len(value.encode()) <= MAX_SUBJECT_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_enrollment.py::enrollment_preamble",
+   "matches": [
+    {
+     "line": 400,
+     "source": "if context is not None and (type(context) is not bytes or not 0 < len(context) <= MAX_CONTEXT_BYTES):"
+    },
+    {
+     "line": 412,
+     "source": "if len(line) + 1 > MAX_PREAMBLE_BYTES or b'\\n' in line or not isinstance(proofs, Path):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_enrollment.py::prune_proofs",
+   "matches": [
+    {
+     "line": 291,
+     "source": "if count >= MAX_PROOFS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "service_enrollment.py::verify",
+   "matches": [
+    {
+     "line": 457,
+     "source": "if type(line) is not bytes or not 0 < len(line) < MAX_PREAMBLE_BYTES:"
+    },
+    {
+     "line": 504,
+     "source": "if now - self._pruned_ms >= 1_000 or len(self._seen) >= self._max_nonces:"
+    },
+    {
+     "line": 510,
+     "source": "if len(self._seen) >= self._max_nonces:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "service_host.py::__init__",
+   "matches": [
+    {
+     "line": 386,
+     "source": "if any(len(os.fsencode(path)) > MAX_SOCKET_PATH_BYTES for path in self._endpoints.values()):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_host.py::_enroll",
+   "matches": [
+    {
+     "line": 281,
+     "source": "if seen and len(seen) >= MAX_PREAMBLE_BYTES:"
+    },
+    {
+     "line": 283,
+     "source": "return not seen or len(seen) >= MAX_PREAMBLE_BYTES"
+    },
+    {
+     "line": 299,
+     "source": "if self._closed or len(self._contexts) >= self._limits.contexts:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "service_host.py::listen",
+   "matches": [
+    {
+     "line": 217,
+     "source": "if len(os.fsencode(path)) > MAX_SOCKET_PATH_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_protocol.py::canonical_request_bytes",
+   "matches": [
+    {
+     "line": 190,
+     "source": "if len(encoded) > MAX_CONTROL_REQUEST_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_protocol.py::decode_service_request",
+   "matches": [
+    {
+     "line": 157,
+     "source": "if len(payload) > MAX_CONTROL_REQUEST_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "service_queue.py::__post_init__",
+   "matches": [
+    {
+     "line": 44,
+     "source": "type(self.max_projects) is not int or not 1 <= self.max_projects <= MAX_PROJECTS"
+    },
+    {
+     "line": 45,
+     "source": "or type(self.max_per_project) is not int or not 1 <= self.max_per_project <= MAX_PENDING_ITEMS"
+    },
+    {
+     "line": 46,
+     "source": "or type(self.max_item_bytes) is not int or not 1 <= self.max_item_bytes <= MAX_ITEM_BYTES"
+    },
+    {
+     "line": 47,
+     "source": "or self.max_projects * self.max_per_project > MAX_PENDING_ITEMS"
+    },
+    {
+     "line": 48,
+     "source": "or self.max_projects * self.max_per_project * self.max_item_bytes > MAX_PAYLOAD_BYTES"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "service_queue.py::offer",
+   "matches": [
+    {
+     "line": 91,
+     "source": "if len(payload) > self._limits.max_item_bytes:"
+    },
+    {
+     "line": 96,
+     "source": "if len(self._projects) >= self._limits.max_projects:"
+    },
+    {
+     "line": 101,
+     "source": "if len(items) >= self._limits.max_per_project:"
+    }
+   ],
+   "disposition": "bound-new",
+   "test": "test_both_population_caps_refuse_excess_and_drain_restores_admission",
+   "test_modules": [
+    "tests.test_service_queue"
+   ]
+  },
+  {
+   "site": "service_transport.py::exchange_frame",
+   "matches": [
+    {
+     "line": 105,
+     "source": "type(timeout) not in (int, float) or not 0 < timeout <= MAX_TIMEOUT_SECONDS"
+    },
+    {
+     "line": 106,
+     "source": "or type(request_limit) is not int or not 1 <= request_limit <= MAX_FRAME_BYTES"
+    },
+    {
+     "line": 107,
+     "source": "or type(response_limit) is not int or not 1 <= response_limit <= MAX_FRAME_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "session_guard.py::_day_folders",
+   "matches": [
+    {
+     "line": 180,
+     "source": "if seen >= MAX_DAY_FOLDERS:"
+    }
+   ],
+   "disposition": "bound-new",
+   "test": "test_day_scan_stops_at_two_of_three_real_days_and_can_scan_again",
+   "test_modules": [
+    "tests.test_s15_session_caps"
+   ]
+  },
+  {
+   "site": "session_guard.py::_first_record",
+   "matches": [
+    {
+     "line": 205,
+     "source": "while size <= MAX_FIRST_RECORD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "session_guard.py::_last_turn_context",
+   "matches": [
+    {
+     "line": 235,
+     "source": "while position > 0 and scanned < MAX_TAIL_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "session_guard.py::_names",
+   "matches": [
+    {
+     "line": 147,
+     "source": "if index >= MAX_FOLDER_ENTRIES:"
+    }
+   ],
+   "disposition": "bound-new",
+   "test": "test_folder_entry_scan_stops_with_more_real_entries_than_the_limit",
+   "test_modules": [
+    "tests.test_s15_session_caps"
+   ]
+  },
+  {
+   "site": "session_guard.py::bound_projects",
+   "matches": [
+    {
+     "line": 611,
+     "source": "if len(projects) >= MAX_SETUP_PROJECTS:"
+    }
+   ],
+   "disposition": "bound-new",
+   "test": "test_setup_project_scan_stops_at_two_of_three_real_bindings",
+   "test_modules": [
+    "tests.test_s15_session_caps"
+   ]
+  },
+  {
+   "site": "session_guard.py::scan_recent_sessions",
+   "matches": [
+    {
+     "line": 699,
+     "source": "if read >= MAX_SCANNED_RECORDS:"
+    },
+    {
+     "line": 703,
+     "source": "if now - info.st_mtime > SCAN_DAYS * 86400:"
+    }
+   ],
+   "disposition": "bound-new",
+   "test": "test_recent_session_scan_reads_only_two_of_three_real_rollouts",
+   "test_modules": [
+    "tests.test_s15_session_caps"
+   ]
+  },
+  {
+   "site": "signature_execution.py::_exchange",
+   "matches": [
+    {
+     "line": 299,
+     "source": "if not context.guarded and len(output) >= SIGNATURE_PROCESS_READY_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "signature_input_wire.py::__post_init__",
+   "matches": [
+    {
+     "line": 90,
+     "source": "if (type(self.max_rows) is not int or not 1 <= self.max_rows <= MAX_SIGNATURE_CAPTURE_ROWS"
+    },
+    {
+     "line": 91,
+     "source": "or type(self.max_field_bytes) is not int or not 1 <= self.max_field_bytes <= MAX_SIGNATURE_CAPTURE_BYTES):"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "signature_input_wire.py::add",
+   "matches": [
+    {
+     "line": 136,
+     "source": "if len(data) > self.limits.max_wire_bytes - self.wire_bytes:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Wire byte allowance, not a row/entry count; row count checks have separate encode/decode bindings."
+  },
+  {
+   "site": "signature_input_wire.py::charge",
+   "matches": [
+    {
+     "line": 124,
+     "source": "if count > self.limits.max_field_bytes - self.used:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Raw-field byte allowance, not a row/entry count; named count argument measures bytes."
+  },
+  {
+   "site": "signature_input_wire.py::decode_signature_inputs",
+   "matches": [
+    {
+     "line": 278,
+     "source": "if len(raw) > limits.max_wire_bytes:"
+    },
+    {
+     "line": 304,
+     "source": "if count > limits.max_rows:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_field_row_and_raw_limits_apply_before_large_field_copy",
+   "test_modules": [
+    "tests.test_signature_input_wire"
+   ]
+  },
+  {
+   "site": "signature_input_wire.py::encode_signature_inputs",
+   "matches": [
+    {
+     "line": 232,
+     "source": "if len(rows) > limits.max_rows:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_field_row_and_raw_limits_apply_before_large_field_copy",
+   "test_modules": [
+    "tests.test_signature_input_wire"
+   ]
+  },
+  {
+   "site": "signature_input_wire.py::text",
+   "matches": [
+    {
+     "line": 160,
+     "source": "if len(value) > self.limits.max_field_bytes - self.used:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Raw-field character/byte precheck, not a row/entry population."
+  },
+  {
+   "site": "signature_inputs.py::__post_init__",
+   "matches": [
+    {
+     "line": 36,
+     "source": "if (type(self.max_rows) is not int or not 1 <= self.max_rows <= MAX_SIGNATURE_CAPTURE_ROWS"
+    },
+    {
+     "line": 37,
+     "source": "or type(self.max_bytes) is not int or not 1 <= self.max_bytes <= MAX_SIGNATURE_CAPTURE_BYTES):"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "signature_job_intake.py::__post_init__",
+   "matches": [
+    {
+     "line": 64,
+     "source": "if (slots > MAX_SIGNATURE_JOB_SLOTS or slots * self.rows_per_job > MAX_SIGNATURE_JOB_ROWS"
+    },
+    {
+     "line": 65,
+     "source": "or slots * self.bytes_per_job > MAX_SIGNATURE_JOB_BYTES or self.max_selected > self.max_projects):"
+    }
+   ],
+   "disposition": "listed-configuration-validation",
+   "reason": "Constructor validates configured limits/aggregate memory, rather than counting acquired entries. Runtime population checks require separate bindings. Registry retained unbound."
+  },
+  {
+   "site": "signature_job_intake.py::_reserve",
+   "matches": [
+    {
+     "line": 148,
+     "source": "if count >= self._limits.max_jobs_per_project:"
+    },
+    {
+     "line": 150,
+     "source": "if count == 0 and len(self._project_jobs) >= self._limits.max_projects:"
+    },
+    {
+     "line": 152,
+     "source": "if len(self._jobs) >= self._limits.max_projects * self._limits.max_jobs_per_project:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_metadata_slot_ceiling_and_project_churn_with_controlled_owner_capture",
+   "test_modules": [
+    "tests.test_signature_job_intake"
+   ]
+  },
+  {
+   "site": "signature_job_intake.py::_validate_inputs",
+   "matches": [
+    {
+     "line": 205,
+     "source": "or type(owner[1]) is not bytes or not 0 < len(owner[1]) <= OWNER_SIGNERS_MAX_BYTES"
+    },
+    {
+     "line": 210,
+     "source": "if signer is not None and (type(signer) is not bytes or not 0 < len(signer) <= OWNER_SIGNERS_MAX_BYTES):"
+    },
+    {
+     "line": 215,
+     "source": "or type(row[2]) is not bytes or not 0 < len(row[2]) <= MAX_RECORD_BYTES"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "signature_payloads.py::_check_payload",
+   "matches": [
+    {
+     "line": 75,
+     "source": "if len(payload) > MAX_SIGNATURE_PAYLOAD_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "signature_payloads.py::decode_signature_payloads",
+   "matches": [
+    {
+     "line": 157,
+     "source": "if count > limits.max_rows:"
+    },
+    {
+     "line": 168,
+     "source": "if length > MAX_SIGNATURE_PAYLOAD_BYTES:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_response_and_declared_counts_lengths_are_checked_before_copy",
+   "test_modules": [
+    "tests.test_signature_payloads"
+   ]
+  },
+  {
+   "site": "sql_read_budget.py::_before_statement",
+   "matches": [
+    {
+     "line": 241,
+     "source": "if scope.reason is None and len(scope.cursors) >= MAX_SQL_READ_CURSORS:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_cursor_capacity_is_bounded_and_scope_owned_cursors_close",
+   "test_modules": [
+    "tests.test_sql_read_budget"
+   ]
+  },
+  {
+   "site": "sql_read_budget.py::_track",
+   "matches": [
+    {
+     "line": 221,
+     "source": "if len(scope.cursors) >= MAX_SQL_READ_CURSORS:"
+    }
+   ],
+   "disposition": "bound-new",
+   "test": "test_native_cursor_tracker_closes_the_first_cursor_past_its_limit",
+   "test_modules": [
+    "tests.test_sql_read_budget"
+   ]
+  },
+  {
+   "site": "sql_read_budget.py::progress",
+   "matches": [
+    {
+     "line": 91,
+     "source": "if self.reason is None and self.callbacks >= self.limits.max_callbacks:"
+    }
+   ],
+   "disposition": "bound-existing",
+   "test": "test_callbacks_accumulate_across_statements_and_latch_refusal",
+   "test_modules": [
+    "tests.test_sql_read_budget"
+   ]
+  },
+  {
+   "site": "terminal_delivery.py::capture_terminal_evidence",
+   "matches": [
+    {
+     "line": 83,
+     "source": "if raw is not None and (type(raw) is not bytes or not 0 < len(raw) <= MAX_TERMINAL_EVIDENCE_BYTES):"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  },
+  {
+   "site": "write_merge.py::_merge_locked",
+   "matches": [
+    {
+     "line": 1557,
+     "source": "if len(entries) > MAX_PATHS:"
+    }
+   ],
+   "disposition": "pending-count-cap",
+   "reason": "Requires a verified past-limit test binding; no exemption or guessed test supplied."
+  },
+  {
+   "site": "write_merge.py::_merge_prepared",
+   "matches": [
+    {
+     "line": 1656,
+     "source": "if undo_bytes > MAX_UNDO_BYTES:"
+    }
+   ],
+   "disposition": "listed-non-count",
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+  }
+ ]
+}

@@ -438,5 +438,7 @@
  "codex:tests.test_s15_lease_churn": "integration",
  "codex:tests.test_s15_memory_matrix": "integration",
  "codex:tests.test_s15_reservation_recovery": "integration",
- "codex:tests.test_s15_settlement_matrix": "integration"
+ "codex:tests.test_s15_settlement_matrix": "integration",
+ "codex:tests.test_s15_release_paths": "integration",
+ "codex:tests.test_s15_session_caps": "integration"
 }

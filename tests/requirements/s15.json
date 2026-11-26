@@ -30,6 +30,16 @@
    "id": "S15-RS8-MUTATION",
    "statement": "RS-8: independently disabling each covered settlement or memory recovery release must make that same row fail its ordinary release oracle.",
    "source": "tests/requirements/s15.json#S15-RS8-MUTATION"
+  },
+  {
+   "id": "S15-RS8-RELEASE-PATHS",
+   "statement": "RS-8: actual unsent/expired/successor lease and companion custody releases, lease-to-reservation transfer, custody retention, normal memory retirement, refusal and handover paths, primary and unattended orchestration close, and authenticated denial release once and replay without changing their first register release.",
+   "source": "tests/requirements/s15.json#S15-RS8-RELEASE-PATHS"
+  },
+  {
+   "id": "S15-O0C-BINDINGS",
+   "statement": "O0c: real populations beyond reduced session directory, day, setup-project, rollout-read, fair-queue and SQLite cursor count limits demonstrate bounded work or refusal, with subsequent scanning/admission/read scopes usable.",
+   "source": "tests/requirements/s15.json#S15-O0C-BINDINGS"
   }
  ]
 }

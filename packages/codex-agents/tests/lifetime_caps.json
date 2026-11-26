@@ -59,7 +59,8 @@
   },
   "account_billing_admission.py::close_expired_reserved": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "A due sweep with limit 1 releases one expired reservation per pass. Repeated real reservations past the reduced request cap expire while an actually running probe remains charged.",
+   "test": "test_a_running_model_stays_charged_while_reservations_expire"
   },
   "account_billing_admission.py::close_orphaned_admitted": {
    "checks": 1,
@@ -68,7 +69,8 @@
   },
   "account_billing_admission.py::reserve": {
    "checks": 5,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Only unfinished probe requests count against MAX_PROBE_REQUESTS. With limit 2 one real running probe remains charged while three successive reserve/refuse-extra/expire cycles reclaim the other slot. Independent pending-memory limits still require separate evidence.",
+   "test": "test_a_running_model_stays_charged_while_reservations_expire"
   },
   "account_billing_jobs.py::_rejudge": {
    "checks": 1,
@@ -86,11 +88,13 @@
   },
   "account_claim_jobs.py::_drive_steps": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-job stale preparations end in claim_preparation_stale after MAX_STALE_PREPARATIONS + 1 real capture/finalization attempts.",
+   "test": "test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry"
   },
   "account_claim_jobs.py::submit": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Ready replies retain per-project jobs until consumption. Two real ready replies fill the configured quota, a third request refuses claim_busy, and consuming both drains the tickets.",
+   "test": "test_ready_replies_keep_project_quota_until_consumed"
   },
   "account_claim_jobs.py::submit_open": {
    "checks": 3,
@@ -103,7 +107,8 @@
   },
   "account_cleanup.py::reserve_cleanup": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Only cleanup receipts still releasable count; authenticated lost/crashed decisions end them. Reduced limit 2, four real finished runs followed by a normal fifth. Socket test: primary must execute.",
+   "test": "test_P1_5_more_lost_and_crashed_runs_than_the_limit_never_stop_a_normal_run"
   },
   "account_ingress.py::_wire": {
    "checks": 1,
@@ -123,7 +128,8 @@
   },
   "account_observation.py::reserve": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Observation origins are retained through the replay window and purged with their requests afterwards. At limit 1 the second new reservation is refused; original replay still works.",
+   "test": "test_shared_origin_quota_does_not_block_original_known_reply"
   },
   "account_observation.py::run_observation_probe": {
    "checks": 1,
@@ -131,7 +137,8 @@
   },
   "account_observation_failure.py::record_observation_failure": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Failure and successful-observation origins share the same quota. At limit 1 a second failure and a fresh probe both refuse, preserving the original known reply. Replay-window purge ends origins.",
+   "test": "test_shared_origin_quota_does_not_block_original_known_reply"
   },
   "account_observation_jobs.py::__post_init__": {
    "checks": 1,
@@ -139,7 +146,8 @@
   },
   "account_observation_jobs.py::submit": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Active cancellation retains its job slot until the fixed worker returns and its reply retires. Two real jobs fill the project quota; a third refuses; actual return and retirement drain both.",
+   "test": "test_active_cancel_keeps_quota_until_actual_return_and_reply_retirement"
   },
   "account_open_contracts.py::checked_account_open_reply": {
    "checks": 1,
@@ -164,7 +172,8 @@
   },
   "account_original_open.py::preflight_open": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Only unfinished account opens count; finished, withdrawn or expired opens leave the in-flight set. Real repeated open lifecycles exceed each reduced limit.",
+   "test": "test_OP_1_more_finished_opens_than_every_open_limit_never_refuse"
   },
   "account_restart.py::_stuck": {
    "checks": 1,
@@ -189,7 +198,8 @@
   },
   "account_service.py::_capture_signature_inputs_locked": {
    "checks": 8,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-snapshot row/field/byte ceilings refuse before raw fetch. A second actual observation exceeds a one-row capture quota; the refused capture closes its transaction and a later ordinary capture succeeds.",
+   "test": "test_exact_field_and_row_quotas_refuse_before_raw_fetch"
   },
   "account_service.py::_handle_request": {
    "checks": 1,
@@ -363,7 +373,8 @@
   },
   "claude_activity.py::_count": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Only tool calls in progress count; completion removes them. With limit 1 a second in-progress tool fails monitoring instead of silently forgetting the first.",
+   "test": "test_tools_in_progress_beyond_the_cap_are_a_monitoring_failure"
   },
   "claude_activity.py::_partial": {
    "checks": 3,
@@ -383,11 +394,13 @@
   },
   "cli_reports.py::_analysis_summary": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-summary analysis groups are bounded; a two-group payload at limit 1 produces unavailable. Temporary summaries end with this command; authoritative payload remains intact.",
+   "test": "test_limits_refuse_summary_without_touching_authoritative_payload"
   },
   "cli_reports.py::learning_cycle_summary": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-summary cycle record lists are bounded; MAX_CYCLE_RECORDS + 1 entries refuse the summary. Temporary summaries end with the command.",
+   "test": "test_limits_refuse_summary_without_touching_authoritative_payload"
   },
   "client_runtime.py::record_codex_result_client": {
    "checks": 1,
@@ -484,7 +497,8 @@
   },
   "control_loop.py::_attach": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Control connections occupy bounded peer slots until disconnect. An extra actual socket at full capacity refuses without taking caller custody. Socket module: primary must execute.",
+   "test": "test_full_capacity_refusal_leaves_socket_with_caller"
   },
   "control_loop.py::_step": {
    "checks": 1,
@@ -633,7 +647,8 @@
   },
   "execution_activity.py::publish": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "The activity buffer ends on receive; publishing one event beyond MAX_RECEIVED_EVENTS latches a failure while retaining the previous events.",
+   "test": "test_overflow_and_clock_failure_never_drop_old_events_to_claim_health"
   },
   "execution_grant.py::encode": {
    "checks": 1,
@@ -790,7 +805,8 @@
   },
   "launch_journal.py::_window": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "A rotating window reads at most MAX_ENTRIES journal files per pass; seven real claimed entries at limit 3 are all reached in successive bounded passes.",
+   "test": "test_D6a_successive_listings_reach_every_entry_past_the_cap"
   },
   "launch_journal.py::_write": {
    "checks": 1,
@@ -845,7 +861,8 @@
   },
   "learning_engine.py::_bounded_tree_size": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "The QA tree count is local to one verification walk. Two real files at entry cap 1 refuse; byte cap 1 refuses separately. Temporary QA trees end on cleanup.",
+   "test": "test_byte_and_entry_caps_still_fail_closed"
   },
   "learning_engine.py::_claude_agent_definition": {
    "checks": 1,
@@ -891,7 +908,8 @@
   },
   "learning_engine.py::_wait_for_qa_process": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Transient verification scans are bounded per QA process. MAX_QA_TRANSIENT_TREE_SCANS + 1 unstable scan attempts refuse with a fixed storage error.",
+   "test": "test_unstable_postexit_scans_fail_after_bound"
   },
   "learning_engine.py::calibrate_grader": {
    "checks": 3,
@@ -955,7 +973,8 @@
   },
   "learning_store.py::_expired_event_window": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; one-project form (learning-expire) added 2026-11-25, LIMIT = EXPIRE_SUMMARY_BATCH page"
+   "ends": "Retention expiry reads a bounded source-sequence window per call and reports remaining work. More real expired event rows than the batch require subsequent calls; rows leave through the real expiry writer.",
+   "test": "test_one_expire_call_summarises_a_bounded_batch_and_reports_more"
   },
   "learning_store.py::_fence_claim_request_locked": {
    "checks": 1,
@@ -1124,7 +1143,8 @@
   },
   "liveness_clock.py::received": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-receive activity count is bounded; a tuple with MAX_RECEIVED_EVENTS + 1 activities fails closed instead of claiming health. No cumulative history counter.",
+   "test": "test_receipts_older_than_a_previous_watermark_and_oversized_batches_fail_closed"
   },
   "lost_run_closure.py::checked_lost_run_closure": {
    "checks": 1,
@@ -1211,7 +1231,8 @@
   },
   "orchestration_store.py::apply": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; U1 automatic runner/core continuation replaces the current orchestration at independent run/report/event caps; direct guard behavior and reserved close capacity are preserved"
+   "ends": "Only open orchestrations count toward admission; completed orchestration tombstones do not consume the open quota. Repeated real open/close lifecycles cross the reduced cap.",
+   "test": "test_034_R6_the_orchestration_limit_counts_only_open_ones"
   },
   "orchestration_store.py::end_earlier": {
    "checks": 1,
@@ -1237,7 +1258,8 @@
   },
   "owned_execution.py::retain_cleanup": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Cleanup references are removed only on native release acknowledgement. A second completed execution at limit 1 refuses retention, then succeeds after acknowledging the first.",
+   "test": "test_reference_count_is_bounded_and_native_retirement_invalidates_it"
   },
   "owner_key_contracts.py::checked_public_key": {
    "checks": 2,
@@ -1273,7 +1295,8 @@
   },
   "project_cleanup.py::reserve_cleanup": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "A never-admitted released lease permits its original cleanup reservation to purge after the grace. Limit 2 is crossed with real reserve/release/purge writers.",
+   "test": "test_O10_D3_a_never_admitted_leases_cleanup_slot_is_purged_once_the_lease_is_released"
   },
   "project_driver.py::_advance": {
    "checks": 3,
@@ -1290,15 +1313,18 @@
   },
   "project_driver.py::_fence_later": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-run fence retries stop at MAX_FENCE_ATTEMPTS. Later clock advances cause no more account calls; unusable preparation is returned and uncertain lease stays held.",
+   "test": "test_a_fence_never_answered_stops_holding_a_preparation_slot_but_keeps_its_lease"
   },
   "project_driver.py::_forget_retired": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-attempt monitor-forget refusals back off; MAX_FORGET_ATTEMPTS + 5 retry opportunities produce exactly MAX_FORGET_ATTEMPTS calls, then forget retry metadata ends.",
+   "test": "test_a_refused_forget_is_tried_again_less_often_and_then_left"
   },
   "project_driver.py::_hold": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Pending rate-limit events fold at the queue limit; with limit 0 an unreachable first delivery is retained/folded and delivered before terminal. Pending state ends on delivery.",
+   "test": "test_events_past_the_pending_limit_are_folded_and_delivered"
   },
   "project_driver.py::_read_intake": {
    "checks": 1,
@@ -1339,7 +1365,8 @@
   },
   "project_driver.py::record_claude_rate_limit_event": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-run event accounting at cap 0 retains the over-cap event for delivery before terminal, rather than losing paid-usage evidence. State ends with the run.",
+   "test": "test_an_event_past_the_run_cap_is_held_and_delivered"
   },
   "project_driver.py::stuck_slots": {
    "checks": 0,
@@ -1408,7 +1435,8 @@
   },
   "project_history.py::record_registered_run": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; U1 automatic runner/core continuation replaces the current orchestration at independent run/report/event caps; direct guard behavior and reserved close capacity are preserved"
+   "ends": "Registrations are bounded per orchestration; a new registration beyond the limit is refused while exact replay survives. A successor orchestration has its own quota.",
+   "test": "test_R6_12_registrations_are_bounded_per_orchestration_and_a_replay_at_the_limit_is_kept"
   },
   "project_history.py::record_account_settlement": {
    "checks": 1,
@@ -1466,7 +1494,8 @@
   },
   "project_ingress.py::attach": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Attached peers occupy connection slots until detach. An extra real socket beyond the configured quota refuses without taking the caller descriptor; detach frees a slot. Socket module: primary must execute.",
+   "test": "test_connection_quota_refusal_retains_callers_descriptor_custody"
   },
   "project_learning_activation.py::derived_records": {
    "checks": 1,
@@ -1486,11 +1515,13 @@
   },
   "project_learning_corpus.py::_prepare_chunk": {
    "checks": 5,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-import chunk count and bytes are bounded. MAX_CHUNK_ENTRIES + 1 records and over-budget bytes refuse before writes; temporary chunk storage ends on return/refusal.",
+   "test": "test_bounds_and_noncanonical_records_fail_without_writes"
   },
   "project_learning_corpus.py::begin_import": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Retained staged imports count against MAX_IMPORTS; attempting import MAX_IMPORTS + 1 refuses explicitly. Empty finished staging remains unavailable and occupies its import scope.",
+   "test": "test_empty_staging_remains_unavailable_and_scope_capacity_is_finite"
   },
   "project_learning_corpus.py::import_attestations": {
    "checks": 2,
@@ -1498,7 +1529,8 @@
   },
   "project_learning_corpus.py::import_records": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Each read returns at most its requested page count; a real multi-row staged import at limit 1 returns the first source sequence and the next read resumes after it. No cumulative admission counter.",
+   "test": "test_reads_are_bounded_and_resume_by_original_source_sequence"
   },
   "project_learning_identity.py::_outcomes": {
    "checks": 1,
@@ -1506,7 +1538,8 @@
   },
   "project_learning_identity.py::_references": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-preparation reference count and aggregate bytes are bounded; MAX_CASE_PREPARATION + 1 references refuse without partial results. Temporary preparation ends with the call.",
+   "test": "test_batch_or_aggregate_byte_exhaustion_refuses_without_partial_results"
   },
   "project_learning_identity.py::prepare_candidate": {
    "checks": 2,
@@ -1518,7 +1551,8 @@
   },
   "project_learning_live.py::cycle": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Only unfinished learning cycles occupy MAX_JOBS slots. A new cycle past the limit refuses; elapsed cycle deadline frees slots and a later cycle succeeds.",
+   "test": "test_too_many_unfinished_cycles_are_refused_and_close_stops_everything"
   },
   "project_learning_live.py::read_cycle_rows": {
    "checks": 8,
@@ -1574,7 +1608,8 @@
   },
   "project_monitor.py::register": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Live monitor entries count until terminal and cleanup are both observed and forget succeeds. With capacity 1 a second real registration refuses, then succeeds after forgetting.",
+   "test": "test_only_a_finished_and_cleaned_attempt_is_forgotten_and_frees_its_slot"
   },
   "project_orchestration_report.py::_orchestration": {
    "checks": 3,
@@ -1615,7 +1650,8 @@
   },
   "project_request_queue.py::prepare": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Each accepted request occupies a slot until actual handling/rejection is acknowledged. At capacity 1 a second request refuses; rejecting the unqueued original frees its retained slot.",
+   "test": "test_input_and_retention_bounds_and_plain_opaque_context"
   },
   "project_result_contexts.py::_check_budget": {
    "checks": 1,
@@ -1698,7 +1734,8 @@
   },
   "rate_limit_contracts.py::bounded_rate_limit_info": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-event window ceiling folds overflow restrictions into the top-level status. MAX_WINDOWS + 2 real input windows retain exactly MAX_WINDOWS and preserve the rejected/unknown restriction; temporary facts end with the event.",
+   "test": "test_dropped_windows_never_make_the_event_less_restrictive"
   },
   "release_contracts.py::capture_cleanup_evidence": {
    "checks": 1,
@@ -1726,7 +1763,8 @@
   },
   "result_persistence.py::_prepare_entry": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Unretired persistence jobs consume slots. With max_entries=1 the second actual prepare/execution request refuses before execution ticket or provider launch. Retirement removes jobs; unknown custody remains charged.",
+   "test": "test_explicit_budget_exhaustion_refuses_before_ticket_or_provider_launch"
   },
   "result_persistence.py::acknowledge_release": {
    "checks": 1,
@@ -1838,7 +1876,8 @@
   },
   "service_queue.py::offer": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Pending items are removed by take_nowait; empty projects leave the fair queue. Two projects of two items reject an extra item and a third project, then drain and admit fresh work.",
+   "test": "test_both_population_caps_refuse_excess_and_drain_restores_admission"
   },
   "service_record.py::<module>": {
    "checks": 1,
@@ -1866,7 +1905,8 @@
   },
   "session_guard.py::_day_folders": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-call scan cap: the test supplies more real directory/session entries than a reduced limit of 2, verifies that at most 2 are examined/returned, then scans again with the normal limit. Temporary descriptors and findings end with the call.",
+   "test": "test_day_scan_stops_at_two_of_three_real_days_and_can_scan_again"
   },
   "session_guard.py::_first_record": {
    "checks": 1,
@@ -1878,15 +1918,18 @@
   },
   "session_guard.py::_names": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-call scan cap: the test supplies more real directory/session entries than a reduced limit of 2, verifies that at most 2 are examined/returned, then scans again with the normal limit. Temporary descriptors and findings end with the call.",
+   "test": "test_folder_entry_scan_stops_with_more_real_entries_than_the_limit"
   },
   "session_guard.py::bound_projects": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-call scan cap: the test supplies more real directory/session entries than a reduced limit of 2, verifies that at most 2 are examined/returned, then scans again with the normal limit. Temporary descriptors and findings end with the call.",
+   "test": "test_setup_project_scan_stops_at_two_of_three_real_bindings"
   },
   "session_guard.py::scan_recent_sessions": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-call scan cap: the test supplies more real directory/session entries than a reduced limit of 2, verifies that at most 2 are examined/returned, then scans again with the normal limit. Temporary descriptors and findings end with the call.",
+   "test": "test_recent_session_scan_reads_only_two_of_three_real_rollouts"
   },
   "signature_execution.py::_exchange": {
    "checks": 1,
@@ -1906,11 +1949,13 @@
   },
   "signature_input_wire.py::decode_signature_inputs": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-frame row and byte ceilings; frame storage ends after decode/refusal. Test encodes a row count of max_rows + 1 and over-budget wire/fields, all refused before copy.",
+   "test": "test_field_row_and_raw_limits_apply_before_large_field_copy"
   },
   "signature_input_wire.py::encode_signature_inputs": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-frame row ceiling; temporary frame ends after encode/refusal. A two-row snapshot at max_rows=1 is refused.",
+   "test": "test_field_row_and_raw_limits_apply_before_large_field_copy"
   },
   "signature_input_wire.py::text": {
    "checks": 1,
@@ -1926,7 +1971,8 @@
   },
   "signature_job_intake.py::_reserve": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Intake capacity is reserved before capture. The real intake reaches 256 projects x 16 jobs, rejects both an extra project and an extra job, then cancellation drains every slot. Controlled capture isolates metadata from backend work.",
+   "test": "test_metadata_slot_ceiling_and_project_churn_with_controlled_owner_capture"
   },
   "signature_job_intake.py::_validate_inputs": {
    "checks": 3,
@@ -1943,19 +1989,23 @@
   },
   "signature_payloads.py::decode_signature_payloads": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-response row count and payload lengths are bounded; a response declaring 9 rows beyond the configured quota refuses before copying. Temporary response ends on decode/refusal.",
+   "test": "test_response_and_declared_counts_lengths_are_checked_before_copy"
   },
   "sql_read_budget.py::_before_statement": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Per-read-scope cursor ceiling; all cursors close on scope exit. MAX_SQL_READ_CURSORS + 1 actual SELECT executions refuse at the bound and native cursors close.",
+   "test": "test_cursor_capacity_is_bounded_and_scope_owned_cursors_close"
   },
   "sql_read_budget.py::_track": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Real native SQLite cursors are tracked inside one read scope. Cursor MAX_SQL_READ_CURSORS + 1 is closed and refused by the independent tracker defence; scope cleanup closes every earlier cursor and a later ordinary read succeeds.",
+   "test": "test_native_cursor_tracker_closes_the_first_cursor_past_its_limit"
   },
   "sql_read_budget.py::progress": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Work callbacks accumulate in one read scope, latch refusal at the configured ceiling, and end when that scope closes. Real recursive SQL exceeds the remaining callback budget.",
+   "test": "test_callbacks_accumulate_across_statements_and_latch_refusal"
   },
   "terminal_delivery.py::capture_terminal_evidence": {
    "checks": 1,

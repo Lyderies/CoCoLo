@@ -366,6 +366,25 @@ class SQLReadBudgetTests(unittest.TestCase):
             with self.assertRaises(sqlite3.ProgrammingError):
                 cursor.execute("SELECT 1")
 
+    @__import__('test_framework').requirements('S15-O0C-BINDINGS', why_not_scenario='Real SQLite cursors cross the tracker limit inside an actual read scope; no process or socket.')
+    def test_native_cursor_tracker_closes_the_first_cursor_past_its_limit(self):
+        # execute() has an earlier capacity check. Exercise the independent
+        # tracker defence with the actual native cursors it is responsible for.
+        native = []
+
+        def operation():
+            for _ in range(MAX_SQL_READ_CURSORS + 1):
+                cursor = sqlite3.Connection.execute(self.connection, 'SELECT 1')
+                native.append(cursor)
+                self.connection._track(cursor)
+
+        self.assert_fixed('sql_read_work_limit', lambda: self.connection.read_call(self.limits, operation))
+        self.assertEqual(MAX_SQL_READ_CURSORS + 1, len(native))
+        for cursor in native:
+            with self.assertRaises(sqlite3.ProgrammingError):
+                cursor.fetchone()
+        self.assertEqual([(1,)], self.run_query())
+
     def test_a_failure_in_each_actual_restore_step_closes_the_connection(self):
         for kind in ("query_only", "busy_timeout", "value_limit"):
             with self.subTest(kind=kind):
