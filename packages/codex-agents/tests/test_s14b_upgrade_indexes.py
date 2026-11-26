@@ -4,7 +4,7 @@ import unittest
 from contextlib import closing
 
 from test_framework import requirements
-from tests import test_learning_cli as legacy_cli
+from tests import learning_cli_support as legacy_cli
 from tests.test_run_retention import DAY, START, identity, store_product_row
 from tests.test_account_launch_claims import downgrade_ledger_to_six
 from codex_agents import run_retention
@@ -21,7 +21,7 @@ def index_count(path):
 @requirements(why_not_scenario='Real cli subprocesses on a synthetic state; no provider is started.')
 class UpgradeCreatesRetentionIndexesTests(unittest.TestCase):
     def setUp(self):
-        self.cli = legacy_cli.LearningCliTests(methodName='runTest')
+        self.cli = legacy_cli.LearningCliBase(methodName='runTest')
         self.cli.setUp()
         self.addCleanup(self.cli.tearDown)
         self.state_root = self.cli.state_root

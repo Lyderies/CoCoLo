@@ -37,7 +37,8 @@ DRIVERS = (
         'test_project_qa_check_receipts', 'test_project_qa_commit', 'test_project_history',
         'test_result_read_api', 'test_account_terminal_delivery', 'test_account_cleanup_release',
         'test_account_observation', 'test_account_claim_operation', 'test_account_original_open',
-        'test_holds_report', 'test_e2a_wake_wire', 'test_b4t_takeover')),  # B4t's new service stop producer
+        'test_holds_report', 'test_e2a_wake_wire', 'test_b4t_takeover', 'test_b4t_takeover_store',
+        'test_b4t_takeover_owner')),  # B4t's new service stop producer
     ('outcomes/lanes', (
         'test_b2_service_outcome', 'test_lost_run_settlement', 'test_account_observation_failure',
         'test_account_billing_execution', 'test_run_holds', 'test_project_orchestration',

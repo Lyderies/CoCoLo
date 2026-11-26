@@ -1055,7 +1055,7 @@ class OwnerCapTests(unittest.TestCase):
                           lambda: owner.write(document), journal.JournalError)
 
     def test_reaudited_takeover_plan_refuses_oversize_prior_authorization_before_any_peer(self):
-        from tests import test_b4t_takeover as fixtures
+        from tests import test_b4t_takeover_owner as fixtures
         from codex_agents.update_takeover import TakeoverError
         case = self.fixture(fixtures, 'AmendmentA1Tests')
         with case.plan_case() as (preflight, state, project):
