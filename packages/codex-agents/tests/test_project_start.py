@@ -490,7 +490,7 @@ class StartTests(StarterBase):
                 time.sleep(0.05)
         self.assertIsNotNone(served, 'the due projects were not serving within one interval')
         self.assertLessEqual(served, deadline)
-        time.sleep(1.0)
+        time.sleep(0.6)
         self.assertFalse(self.serving('idle'))
         self.assertEqual([], self.events('begin', 'idle'))
         self.assertLessEqual(project_start.STARTER_CHECK_SECONDS, learning_store.WORKER_RESULT_SWEEP_SECONDS)
@@ -604,7 +604,7 @@ class StartTests(StarterBase):
                     f'cd {root} && ./setup.sh {root}\n'
                     'Then choose Configure, then "Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
-        time.sleep(1.0)  # rechecked, still not replaced
+        time.sleep(0.75)  # rechecked, still not replaced
         self.assertEqual([], self.events('spawned'))
         self.assertIsNone(self.collector.poll())
         self.assertEqual(started, CollectorClient(self.state.socket, timeout=2).health()['started_at_ms'])
@@ -645,7 +645,7 @@ class BackoffTests(StarterBase):
             staged.replace(clock)  # child threads never read a partial clock
         advance(self.now_ms())
         self.launch(constants={'START_BACKOFF_FIRST_SECONDS': 0.3, 'START_BACKOFF_MAX_SECONDS': 0.6,
-                               'START_PARK_AFTER_SECONDS': 2.0}, clock=str(clock))
+                               'START_PARK_AFTER_SECONDS': 1.5}, clock=str(clock))
         # The collector marks the stopped project due on its own real clock once it is up; the policy clock
         # starts there (no earlier frozen time can ever reach that due mark).
         due = wait_for(self, lambda: (self.wake('broken') or {}).get('due_at_ms'), 30, 'never marked due')
@@ -678,7 +678,7 @@ class BackoffTests(StarterBase):
         self.assertGreaterEqual(row['failures'], 3)
         waits = [row['next_start_at_ms'] - row['outcome_at_ms'] for row in rows[:-1]]
         self.assertGreater(waits[1], waits[0])  # the backoff grows (exact waits: LedgerStartTests)
-        self.assertEqual([300, 600, 600, 600], waits)
+        self.assertEqual([300, 600, 600], waits)
         attempts = len(self.events('begin', 'broken'))
         # The project reports again: still parked.
         accepted = self.publish('broken', {'epoch': None, 'seq': 1, 'state': 'pending', 'next_due_at_ms': None})
@@ -764,9 +764,9 @@ class StrandedTests(StarterBase):
                                    survivor.pid)
         kept = self.starts('live_child')['attempt']
         self.launch(constants={'START_TIMEOUT_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 0.2},
-                    store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})
+                    store={'WORKER_RESULT_SWEEP_SECONDS': 0.2})
         wait_for(self, lambda: self.serving('dead_child'), 30, 'the dead child\'s claim was never released')
-        time.sleep(1.5)
+        time.sleep(0.75)
         self.assertEqual(kept, self.starts('live_child')['attempt'])  # its surviving child keeps it
         self.assertEqual('recovery: starting', self.status('live_child'))
         survivor.kill()
@@ -1117,7 +1117,7 @@ class OtherVersionTests(StarterBase):
                     f'cd {root} && ./setup.sh {root}\n'
                     'Then choose Configure, then "Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
-        time.sleep(1.0)  # rechecked, still not replaced
+        time.sleep(0.75)  # rechecked, still not replaced
         self.assertIsNone(host.poll())  # the earlier runtime's host still serves
         self.assertIsNotNone(other_version_host(self.state.root, root))
         self.assertEqual([], self.events('spawned'))
@@ -1181,8 +1181,8 @@ class SlotTests(StarterBase):
                 ledger.set_start_child(self.projects[name][1], claims[self.projects[name][1]].attempt,
                                        survivors[name].pid)
         self.launch(constants={'START_TIMEOUT_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 60.0},
-                    store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})
-        time.sleep(3.0)
+                    store={'WORKER_RESULT_SWEEP_SECONDS': 0.2})
+        time.sleep(1.0)
         self.assertEqual([], self.events('begin'))  # both slots are held by the surviving children
         self.assertEqual('recovery: starting', self.status('one'))
         survivors['one'].kill()
@@ -1206,7 +1206,7 @@ class ProbationTests(StarterBase):
         # The project falls due again while its host serves (a hold of its falls due): a serving recheck.
         update_ledger(self, 'UPDATE project_wake SET due_at_ms=? WHERE project_id=?',
                       (self.now_ms() - 1_000, self.projects['alpha'][1]))
-        time.sleep(1.0)
+        time.sleep(0.75)
         self.assertEqual('started', self.starts('alpha')['outcome'])
         self.assertTrue(self.status('alpha').startswith('recovery: started '), self.status('alpha'))
         for pid in self.host_pids('alpha'):
@@ -1452,7 +1452,7 @@ class RecordRefusedTests(StarterBase):
                     fail={'set_start_child': 10 ** 6}, unserved=str(unserved))
         spawned = wait_for(self, lambda: self.events('spawned'), 20, 'alpha was never spawned')
         wait_for(self, lambda: self.events('refused'), 10, lambda: f'the pid record was not refused: {self.events()[-6:]}')
-        time.sleep(1.0)  # well past the pid record's first tries
+        time.sleep(0.5)  # well past the pid record's first tries
         row = self.starts('alpha')
         self.assertIsNotNone(row['attempt'])
         self.assertIsNone(row['child_pid'])  # refused: the ledger does not know the child

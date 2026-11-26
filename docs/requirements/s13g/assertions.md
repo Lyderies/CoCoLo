@@ -28,3 +28,14 @@ New StarterBase helpers `start_clock`, `advance`, `clock_ms`, `sync_clock_to_due
 | ProbationDeadlineTests.test_E2c_4_a_host_that_died_early_... | 3 s probation, real `sleep` until probation_until+1 s | 60 s probation, clock advanced to probation_until+1000 ms | same states (probation_attempt None, failures 1, `service_ended_early`). ~5.9 s -> ~1.7 s |
 | ProductionIntervalTests.test_E2c_3_1000_due_projects... | 4 served + 16 changed-install projects + bulk rows to 1 000 | 4 served + 6 changed + bulk rows to 1 000 | still more projects than START_SLOTS (2), so the queue is still deeper than the slots; every changed project still asserts `install_changed`; production intervals and the 60 s drain bound unchanged (the one real-time case). Each changed project costs ~0.35 s of install |
 Kept real-time (one case per behaviour): ProbationTests serving-recheck (real recheck wait), BackoffTests early-exit (real own-child probation expiry), ProductionIntervalTests (product 5 s intervals). BackoffTests crash-loop already runs on the policy clock; its time is the five real host spawns that fail, which are what it proves.
+
+## Decision 390 second round (tests/test_project_start.py)
+| Test | Old | New | Reason |
+|---|---|---|---|
+| BackoffTests crash-loop | `START_PARK_AFTER_SECONDS` 2.0; `assertEqual([300, 600, 600, 600], waits)` (5 real failing spawns) | 1.5; `[300, 600, 600]` (4 spawns) | still proves the backoff doubles (300 -> 600) and holds at its cap (600 twice) and then parks; `failures >= 3` unchanged. One failing spawn (~1 s) fewer. |
+| BackoffTests early-exit | unchanged | unchanged | it is the one real-time witness that an own child outliving its (monotonic) probation ends the streak; the own-child clock is not injectable and a shorter probation would end before the host serves under load |
+| StrandedTests claims-reconciled | sweep 1.0 s, `sleep(1.5)` (1.5 sweeps) | sweep 0.2 s, `sleep(0.75)` (3.75 sweeps) | the surviving child must keep its claim across stranded sweeps; more sweeps in half the time |
+| SlotTests | sweep 1.0 s, `sleep(3.0)` (3 sweeps) | sweep 0.2 s, `sleep(1.0)` (5 sweeps) | same |
+| RecordRefusedTests spawn_unrecorded | `sleep(1.0)` after the refusal | `sleep(0.5)` | the pid record's own tries are 3 x 0.05 s apart (SETTLE_*), so 0.5 s is over 3x past them |
+| StartTests E2c-1 idle check | `sleep(1.0)` at check 0.1 (10 passes) | `sleep(0.6)` (6 passes, was 5 at the old 0.2 interval) | an undue project is still never begun over more passes than before the first round |
+| "rechecked, still not replaced" (StartTests E2c-7, OtherVersionTests, ProbationTests serving-recheck) | `sleep(1.0)` (two rechecks of 0.5 s) | `sleep(0.75)` (1.5 rechecks, as the original 1.5 s at 1.0 s) | back to the original recheck count |

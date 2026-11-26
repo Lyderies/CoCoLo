@@ -17,3 +17,8 @@ ProbationTests restart, ProbationDeadlineTests and ProductionIntervalTests rewri
 test_project_start: 130.1 alone, 174.4 under the 8-module --jobs 16 load run (ceiling 183.4; one load run only, run-to-run noise ~+-15 s,
 so not yet shown in two runs). test_run_retention_scale 18.1 under load. failed_units [], metadata_errors [].
 Next if more is needed: BackoffTests early-exit (real 4 s own-child probation), crash-loop (5 real host spawns), negative-wait sleeps (1.0-3.0 s).
+
+## Second round (decision 390 follow-up)
+Under the 8-module --jobs 16 load run, twice: test_project_start 147.0 s and 149.6 s (ceiling 183.4); test_run_retention_scale 17.6 / 18.2 s.
+failed_units [], metadata_errors [] both runs. Changes in assertions.md ("second round"). One unexplained 28 s early-exit run was seen once in
+a serial class run (8.6-8.8 s in 5 other runs); watch for it.
