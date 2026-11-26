@@ -435,5 +435,6 @@
  "codex:tests.test_s13b_due_drain": "component",
  "codex:tests.test_health_resources": "scenario",
  "codex:tests.test_health_resources_open": "scenario",
- "root:test_run_measurement": "scenario"
+ "root:test_run_measurement": "scenario",
+ "codex:tests.test_s14e_custody": "scenario"
 }

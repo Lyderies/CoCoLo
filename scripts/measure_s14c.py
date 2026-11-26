@@ -302,6 +302,13 @@ def main():
     seconds, result, prof, finished = profiled(lambda: runtime_lineage.live_ledger_custody(db, now))
     custody['live_ledger_custody'] = {'seconds': seconds, 'finished': finished, 'digests': None if result is None else len(result),
                                       'profile_top': prof}
+    if finished:  # S14e: best of three warm runs (a small ledger's single run is noise-sized)
+        best = []
+        for _ in range(3):
+            started = time.perf_counter()
+            runtime_lineage.live_ledger_custody(db, now)
+            best.append(time.perf_counter() - started)
+        custody['live_ledger_custody']['best_of_3_seconds'] = round(min(best), 5)
     report['custody'] = custody
     # ---- per-run lookups (sampled handles), plans
     handles = [r[0] for r in db.execute('SELECT handle_digest FROM launch_inputs ORDER BY rowid LIMIT 1 OFFSET ?', (runs // 2,))]

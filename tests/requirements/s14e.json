@@ -1,0 +1,8 @@
+{
+ "authority": "docs/requirements/s14e.md",
+ "requirements": [
+  {"id": "S14E-1", "statement": "live_ledger_custody looks run holds up by the full primary key (project_id, kind, identity), with kind limited to the kinds whose identity is a launch handle digest (run_slot, binding); the same rows count as live custody.", "source": "tests/requirements/s14e.json#S14E-1"},
+  {"id": "S14E-2", "statement": "A plan test pins EXPLAIN QUERY PLAN of every query in live_ledger_custody to the full-key search of run_holds (no SCAN).", "source": "tests/requirements/s14e.json#S14E-2"},
+  {"id": "S14E-3", "statement": "On small ledgers built by the S14c script through the runner (16 and 128 MiB) the custody query time grows about linearly (a ratio bound, not absolute seconds).", "source": "tests/requirements/s14e.json#S14E-3"}
+ ]
+}

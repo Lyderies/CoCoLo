@@ -57,3 +57,13 @@ whose Q2 hit the 45 s cap at 514 MiB); at 4 GiB expect 10-85 min per open and pe
 4. S14g: Q1 `active_run_capacity` scan (linear, 6 ms at 24k): add a partial index on `released_at_ms IS NULL` or accept; revisit past 4 GiB.
 5. S14h: profile `account_holds_status` (1.4 ms to 112 ms from 1.6k to 24k runs, ~linear-plus) before 4 GiB.
 6. S14i: after fix, rerun `scripts/measure_s14c.py` at 256 and 512 MiB; the 17->18 upgrade at 512 MiB needs a 2 GiB cap approval or a streamed copy.
+
+## After S14e (decision 380; `live_ledger_custody` uses `r.kind IN ('run_slot','binding')`, the full hold key)
+Same script, same runner defaults, one size per run (raw: `after-s14e-259.json`, `after-s14e-514.json`). The "Q2" rows of the script still time the OLD
+query text verbatim (kept as the baseline probe), so they stay slow; the product function is the row `live_ledger_custody`.
+| MiB | runs | custody before (s) | custody after (s) | open before (s) | open after (s) | idle account retention before -> after (s) | 17->18 upgrade before -> after (s) | run wall |
+|---|---|---|---|---|---|---|---|---|
+| 259 | 12,356 | 2.427 | 0.024 | 2.618 | 0.236 | 2.432 -> 0.043 | 11.078 -> 1.185 | 27.9 s |
+| 514 | 24,353 | 12.747 | 0.056 | 13.777 | 0.485 | 12.84 -> 0.098 | not run | 78.1 s |
+Custody and open now grow about linearly (259 -> 514 MiB: custody x2.3, open x2.1); the remaining open cost is not the custody query. Extrapolated to 4 GiB
+(x8 from 514 MiB): custody about 0.5 s, open about 4 s (before: 867 s and 599 s). The remaining quadratic suspects (`account_holds_status`, Q1) are S14g/S14h.

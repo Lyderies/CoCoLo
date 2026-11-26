@@ -5227,6 +5227,27 @@
   "source": "tests/requirements/s10.json#S10-HM6-8",
   "statement": "Low or unreadable disks are reported to the user as plain health findings; no import-time I/O."
  },
+ "S14E-1": {
+  "checks": [
+   "codex:tests.test_s14e_custody.CustodyQueryTests.test_S14E_1_the_custody_hold_lookup_names_exactly_the_handle_kinds"
+  ],
+  "source": "tests/requirements/s14e.json#S14E-1",
+  "statement": "live_ledger_custody looks run holds up by the full primary key (project_id, kind, identity), with kind limited to the kinds whose identity is a launch handle digest (run_slot, binding); the same rows count as live custody."
+ },
+ "S14E-2": {
+  "checks": [
+   "codex:tests.test_s14e_custody.CustodyQueryTests.test_S14E_2_every_custody_query_searches_run_holds_by_the_full_key"
+  ],
+  "source": "tests/requirements/s14e.json#S14E-2",
+  "statement": "A plan test pins EXPLAIN QUERY PLAN of every query in live_ledger_custody to the full-key search of run_holds (no SCAN)."
+ },
+ "S14E-3": {
+  "checks": [
+   "codex:tests.test_s14e_custody.CustodyQueryTests.test_S14E_3_custody_time_grows_about_linearly_on_small_ledgers"
+  ],
+  "source": "tests/requirements/s14e.json#S14E-3",
+  "statement": "On small ledgers built by the S14c script through the runner (16 and 128 MiB) the custody query time grows about linearly (a ratio bound, not absolute seconds)."
+ },
  "S14D-1": {
   "checks": [
    "root:test_run_measurement.RunnerCapTests.test_a_script_declares_its_own_budget_and_the_cap_still_applies",
