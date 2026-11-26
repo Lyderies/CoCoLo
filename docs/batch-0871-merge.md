@@ -42,6 +42,6 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 Product code is unchanged since the full run; only tests and a test fixture changed.
 - `test_rsf_s7_project`: expected `record_account_settlement` binding old `test_retained_hold_closure_has_an_inclusive_byte_ceiling_and_a_bounded_window` -> new `test_reaudited_retained_settlement_evidence_crosses_the_history_writers_own_cap` (decision 384; cap-binding-audit.json `bound-audited-383`).
 - `test_holds_report` B7_3: `account_api.py::__init__` was never removed (entry present, kind validation, checks 1). Decision 382's guard now checks every registry entry against its site count, and B7_3 scanned two files into a plain dict, so the unscanned entry raised KeyError. Test now filters the registry to the two scanned files and uses a Counter (old: whole registry + dict).
-- `s15-cap-shape-updates.json`: added `project_driver.py::_release_failed` (5558cb48: time bindings). OPEN: `user_settings.py::load` (same commit, test -> `test_shared_settings_byte_cap_rejects_valid_json_one_byte_over`) is also unlisted, so `test_health_holds` still fails until it is added; not added without approval.
+- `s15-cap-shape-updates.json`: added `project_driver.py::_release_failed` (5558cb48: time bindings). Also added `user_settings.py::load` (same commit, test -> `test_shared_settings_byte_cap_rejects_valid_json_one_byte_over`) with primary approval; these two are the only entries 5558cb48 changed that were unlisted.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

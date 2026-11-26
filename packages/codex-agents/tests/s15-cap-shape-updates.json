@@ -1019,6 +1019,20 @@
     "kind": "count",
     "test": "test_B4t_3_a_straggler_that_passed_its_check_is_caught"
    }
+  },
+  "user_settings.py::load": {
+   "new": {
+    "checks": 1,
+    "ends": "Read at most 4096 bytes plus one probe. Validate typed bounds with whole-file default fallback and plain warnings; no persisted records or users are capped. S9/S10/S35 share this loader.",
+    "kind": "bytes",
+    "test": "test_shared_settings_byte_cap_rejects_valid_json_one_byte_over"
+   },
+   "old": {
+    "checks": 1,
+    "ends": "Read at most 4096 bytes plus one probe. Validate typed bounds with whole-file default fallback and plain warnings; no persisted records or users are capped. S9/S10/S35 share this loader.",
+    "kind": "bytes",
+    "test": "test_shared_settings_typed_bounds_and_no_import_io"
+   }
   }
  },
  "decision": 383
