@@ -373,7 +373,7 @@
  "root:test_e2e_run_control": "scenario",
  "root:test_e2e_strictness": "unit",
  "root:test_e2e_update_safety": "unit",
- "root:test_generate_test_metadata": "component",
+ "root:test_generate_test_metadata": "scenario",
  "root:test_entrypoint_inventory": "scenario",
  "root:test_identifiers_parity": "scenario",
  "root:test_install": "scenario",

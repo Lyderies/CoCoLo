@@ -38,3 +38,4 @@ product regression. The test does not exist at base 6edd6a79, so there is no bas
 (call the generator in-process, or register the module in a layer that may start processes) before install.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+- IP-G generator test fix: root:test_generate_test_metadata moved to the scenario layer (it starts processes for discovery); product (native-package) files unchanged since the full run.

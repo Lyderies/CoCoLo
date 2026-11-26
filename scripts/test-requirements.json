@@ -993,6 +993,7 @@
  },
  "GEN-1": {
   "checks": [
+   "root:test_generate_test_metadata.GeneratorTests.test_L8_3_hand_registered_check_is_preserved",
    "root:test_generate_test_metadata.GeneratorTests.test_regenerating_is_a_noop_and_keeps_hand_registered_checks"
   ],
   "source": "tests/requirements/gen.json#GEN-1",

@@ -39,6 +39,12 @@ class GeneratorTests(unittest.TestCase):
         for name in ('L14.1', 'L15.1'):
             self.assertTrue(any(c.startswith('codex:') and '_' + name.replace('.', '_') + '_' in c for c in catalogue[name]['checks']), name)
 
+    @requirements('GEN-1')
+    def test_L8_3_hand_registered_check_is_preserved(self):
+        catalogue = json.loads(self.first)
+        self.assertIn('codex:tests.test_refusal_steps.RefusalStepTests.test_L8_3_an_unfinished_orchestration_close_names_the_runs_status_not_a_service_restart',
+                      catalogue['L8.3']['checks'])
+
     @requirements('GEN-2')
     def test_output_is_deterministic_and_sorted(self):
         self.assertEqual(self.first, self.second)
