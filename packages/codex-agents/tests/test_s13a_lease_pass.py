@@ -32,6 +32,12 @@ class LeaseStartPassTests(unittest.TestCase):
     def store(self):
         return self.base.store
 
+    def reserve(self, number=1):
+        """Setup only, as measure_s13 does: the capacity check re-verifies every live lease on each reserve (quadratic
+        in the rows a test builds); capacity is not what these tests prove, and the 2048-entry cap is never near."""
+        with mock.patch.object(self.store, '_check_result_capacity', return_value=None):
+            return self.base.reserve(number)
+
     def row(self, number=1):
         return dict(self.store._connection.execute(
             "SELECT * FROM project_holds WHERE kind='lease' AND identity=?",
@@ -43,12 +49,12 @@ class LeaseStartPassTests(unittest.TestCase):
     @requirements('S13A-BOUND', why_not_scenario=WHY)
     def test_128_blocked_plus_arrivals_select_at_most_64_even_with_limit_100(self):
         for number in range(1, 130):
-            self.base.reserve(number)
+            self.reserve(number)
         live = set(self.live(*range(1, 129)))
         module = measurements()
         for batch in range(4):
             for number in range(130 + batch * 50, 180 + batch * 50):
-                self.base.reserve(number)
+                self.reserve(number)
                 live.update(self.live(number))
             with module.instrumented(self.store) as connection:
                 released = self.store.release_earlier_unarmed_leases(live, limit=100)
@@ -60,7 +66,7 @@ class LeaseStartPassTests(unittest.TestCase):
 
     @requirements('S13A-BACKOFF', why_not_scenario=WHY)
     def test_backoff_doubles_from_one_second_to_300_and_skips_until_due_across_reopen(self):
-        self.base.reserve()
+        self.reserve()
         for delay in (1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 300000, 300000):
             now = self.base.fixture.now
             self.assertEqual(0, self.store.release_earlier_unarmed_leases(self.live(1), limit=64))
@@ -76,7 +82,7 @@ class LeaseStartPassTests(unittest.TestCase):
     @requirements('S13A-RESET', why_not_scenario=WHY)
     def test_release_resets_backoff_for_start_pass_explicit_release_expiry_and_bind(self):
         for number, action in enumerate(('pass', 'unsent', 'expiry', 'bind'), 1):
-            self.base.reserve(number)
+            self.reserve(number)
             self.store.release_earlier_unarmed_leases(self.live(number), limit=64)
             row = self.row(number)
             self.assertGreater(row['next_check_ms'], self.base.fixture.now)
@@ -98,7 +104,7 @@ class LeaseStartPassTests(unittest.TestCase):
     @requirements('S13A-ORDER', why_not_scenario=WHY)
     def test_due_rows_are_selected_by_next_check_not_lease_insertion_order(self):
         for number, due in ((1, 3000), (2, 1000), (3, 2000)):
-            self.base.reserve(number)
+            self.reserve(number)
             self.store._connection.execute("UPDATE project_holds SET next_check_ms=? WHERE kind='lease' AND identity=?",
                                           (due, leases.lease_binding(number).run_handle + ':1'))
         self.base.fixture.now = 2500
@@ -112,7 +118,7 @@ class LeaseStartPassTests(unittest.TestCase):
 
     @requirements('S13A-FAIR', why_not_scenario=WHY)
     def test_blocked_row_is_retried_when_due_despite_a_full_batch_of_new_arrivals(self):
-        self.base.reserve()
+        self.reserve()
         self.store.release_earlier_unarmed_leases(self.live(1), limit=64)
         due = self.row()['next_check_ms']
         self.base.fixture.now = due - 1
@@ -121,7 +127,7 @@ class LeaseStartPassTests(unittest.TestCase):
             self.base.fixture.now = due + batch
             numbers = range(2 + batch * 64, 66 + batch * 64)
             for number in numbers:
-                self.base.reserve(number)
+                self.reserve(number)
             self.store.release_earlier_unarmed_leases(self.live(*range(2, 66 + batch * 64)), limit=64)
             if self.row()['state'] == 'released':
                 break
@@ -131,7 +137,7 @@ class LeaseStartPassTests(unittest.TestCase):
     def test_64_blocked_rows_ahead_of_eligible_rows_do_not_starve_them(self):
         """Decision 354: strict 64 examined per call; eligible rows are released on later passes."""
         for number in range(1, 201):
-            self.base.reserve(number)
+            self.reserve(number)
         live = self.live(*range(1, 65))
         module = measurements()
         total, passes, per_pass = 0, 0, []
@@ -153,7 +159,7 @@ class LeaseStartPassTests(unittest.TestCase):
     @requirements('S13A-BOUND', why_not_scenario=WHY)
     def test_armed_rows_do_not_consume_the_unarmed_batch(self):
         for number in range(1, 66):
-            self.base.reserve(number)
+            self.reserve(number)
             if number <= 64:
                 self.store.arm_result_lease(leases.lease_binding(number))
         self.assertEqual(1, self.store.release_earlier_unarmed_leases((), limit=64))
@@ -162,8 +168,8 @@ class LeaseStartPassTests(unittest.TestCase):
 
     @requirements('S13A-BACKOFF', why_not_scenario=WHY)
     def test_inspection_refusal_backs_off_and_does_not_stop_other_rows(self):
-        self.base.reserve(1)
-        self.base.reserve(2)
+        self.reserve(1)
+        self.reserve(2)
         original = self.store._lease
         def refuse_first(row):
             if row['run_handle'] == binding(1).run_handle:
@@ -177,7 +183,7 @@ class LeaseStartPassTests(unittest.TestCase):
 
     @requirements('S13A-BACKOFF', why_not_scenario=WHY)
     def test_host_open_blocker_backs_off_inside_the_inspection_transaction(self):
-        self.base.reserve()
+        self.reserve()
         # Fault injection: a host-open row is discovered during inspection. The source lease stays untouched.
         connection = self.store._connection
         proxy = mock.Mock(wraps=connection)
@@ -194,6 +200,6 @@ class LeaseStartPassTests(unittest.TestCase):
     @requirements('S13A-BOUND', why_not_scenario=WHY)
     def test_all_eligible_rows_still_release_at_most_64_with_limit_100(self):
         for number in range(1, 129):
-            self.base.reserve(number)
+            self.reserve(number)
         self.assertEqual(64, self.store.release_earlier_unarmed_leases((), limit=100))
         self.assertEqual(64, self.store.release_earlier_unarmed_leases((), limit=100))
