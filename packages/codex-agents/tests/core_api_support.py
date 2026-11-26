@@ -21,7 +21,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 
 import tests.support as support
@@ -36,7 +35,7 @@ def jsonl(path, rows):
 
 
 def read_jsonl(path):
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
 class Clock:

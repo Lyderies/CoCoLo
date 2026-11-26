@@ -14,7 +14,7 @@ core writes only routing.json of these):
 import json
 import os
 
-from tests.core_api_support import CoreCase, jsonl, read_jsonl
+from tests.core_api_support import CoreCase, jsonl
 
 STOP = {"type": "stop", "id": "H-2", "code": "guard_context", "reason": "The context window was nearly full.",
         "by": "cocolo", "ts": 1_000_100, "next": "Start a new session from the hand-off.", "v": 1}

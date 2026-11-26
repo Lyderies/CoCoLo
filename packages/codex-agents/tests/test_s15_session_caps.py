@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import unittest
 from unittest import mock
 
 from test_framework import requirements

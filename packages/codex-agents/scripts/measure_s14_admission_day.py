@@ -48,13 +48,13 @@ from __future__ import annotations
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}
 
-import argparse
-import hashlib
-import json
-import math
-import sys
-import time
-from pathlib import Path
+import argparse  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import math  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 HOUR, DAY, MIN = 3_600_000, 86_400_000, 60_000

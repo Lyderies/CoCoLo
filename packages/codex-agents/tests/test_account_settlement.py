@@ -9,7 +9,6 @@ Integration stage: real stores in temporary folders, the fixtures of the D2/D4 t
 product's own closure function and the fixtures' result key, as the account builds it with its digest key.
 """
 import json
-import sqlite3
 import tempfile
 import unittest
 from unittest import mock

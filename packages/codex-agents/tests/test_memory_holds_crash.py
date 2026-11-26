@@ -8,7 +8,6 @@ import subprocess
 import sys
 import unittest
 
-import tests.support
 from tests.test_b6_unattended_close import KEY
 from codex_agents.project_history import ProjectHistory
 from codex_agents.orchestration_api import OrchestrationLimits

@@ -80,7 +80,7 @@ class ProbeFailureCauseTests(unittest.TestCase):
         """GUARD (also passes on bf78c373, where this cause was already named): an admitted probe whose launch
         fails and whose settlement cannot be confirmed names probe_settle_unconfirmed, and the cause the lane
         finally reports is one of the two settlement causes (never the bare one, never another stage's)."""
-        real, calls = self.billing._executions.launch, []
+        _real, calls = self.billing._executions.launch, []
 
         def failing(*args):
             calls.append(1)
@@ -144,7 +144,7 @@ class ProbeFailureCauseTests(unittest.TestCase):
         self.assertEqual('probe_cancelled', self.cause())
 
     def test_a_close_names_itself(self):
-        ticket = self.begin()
+        _ticket = self.begin()
         self.billing.request_close()
         self.assertEqual('probe_closing', self.cause())
 
@@ -175,7 +175,7 @@ class ProbeFailureCauseTests(unittest.TestCase):
             billing.request_close()
             return real(billing, handle)
         with mock.patch.object(type(self.billing), 'finish_signature', finish):
-            ticket = self.begin()
+            _ticket = self.begin()
             self.until(lambda: seen)
         self.assertEqual(['probe_cancelled'], seen)
         self.assertEqual('probe_cancelled', self.cause())  # not probe_closing, not probe_admit_failed

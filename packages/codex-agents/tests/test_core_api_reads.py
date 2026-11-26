@@ -3,7 +3,7 @@ import json
 import os
 import shutil
 
-from tests.core_api_support import CoreCase, jsonl, UNITS, STATE
+from tests.core_api_support import CoreCase, jsonl, UNITS
 
 
 class ReadTests(CoreCase):
@@ -81,7 +81,8 @@ class CanonicalFilesTests(CoreCase):
         client = self.client("confirm")
         client.call("context.push", {"kind": "note", "text": "hello"})
         before = (self.records / "inbox.jsonl").read_bytes()
-        self.service.stop(); self.start()
+        self.service.stop()
+        self.start()
         self.assertEqual(before, (self.records / "inbox.jsonl").read_bytes())
 
     def test_term17_the_terminal_reads_only_through_the_api(self):  # TERM-17

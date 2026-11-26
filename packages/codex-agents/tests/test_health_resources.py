@@ -204,14 +204,16 @@ class ResourceTests(unittest.TestCase):
     def test_memory_pressure_is_reported_but_never_refuses(self):
         settings = user_settings.UserSettings()
         healthy = both((100 * GIB, 50 * GIB), (100 * GIB, 50 * GIB))
-        low = lambda: (16 * GIB, GIB // 2)  # 3% available, below 10%
+        def low():
+            return (16 * GIB, GIB // 2)
         check = hr.ResourceCheck(WORKSPACE, STATE, usage=healthy, memory=low, settings=lambda: settings)
         found = list(check.run(CheckContext(1e12, 1000, 60_000)))
         self.assertEqual(['memory_pressure'], [f.reason_code for f in found])
         self.assertEqual('reported', found[0].outcome)
         self.assertIn('memory', found[0].text.lower())
         self.assertIsNone(hr.refusal(WORKSPACE, STATE, settings, usage=healthy))
-        ok = lambda: (16 * GIB, 8 * GIB)
+        def ok():
+            return (16 * GIB, 8 * GIB)
         check = hr.ResourceCheck(WORKSPACE, STATE, usage=healthy, memory=ok, settings=lambda: settings)
         self.assertEqual([], list(check.run(CheckContext(1e12, 1000, 60_000))))
         unknown = hr.ResourceCheck(WORKSPACE, STATE, usage=healthy, memory=lambda: None, settings=lambda: settings)
@@ -331,8 +333,9 @@ class CollectorWiringTests(unittest.TestCase):
     def test_collector_health_pass_reports_a_low_disk(self):
         store, server = self.server()
         self.assertIn('resources', [check.name for check in server.health_monitor._checks])
-        root = Path(store.ledger.state.root)
-        low = lambda path: (100 * GIB, 99 * GIB, GIB)
+        _root = Path(store.ledger.state.root)
+        def low(path):
+            return (100 * GIB, 99 * GIB, GIB)
         with mock.patch.object(hr, 'disk_usage', low), mock.patch.object(hr, 'read_memory', lambda: None):
             server._run_health_pass()
         view = server.health_monitor.view(store.project_a_id)
@@ -344,7 +347,8 @@ class CollectorWiringTests(unittest.TestCase):
     @requirements('S10-HM6-8')
     def test_collector_health_pass_is_quiet_on_a_healthy_disk(self):
         store, server = self.server()
-        fine = lambda path: (100 * GIB, 50 * GIB, 50 * GIB)
+        def fine(path):
+            return (100 * GIB, 50 * GIB, 50 * GIB)
         with mock.patch.object(hr, 'disk_usage', fine), mock.patch.object(hr, 'read_memory', lambda: None):
             server._run_health_pass()
         view = server.health_monitor.view(store.project_a_id)

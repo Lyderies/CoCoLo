@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def choose(points, lane):
     from tests.merge_library_support import FAULTABLE
     groups = {}
-    rank = {'sqlite_commit': 0, 'exchange': 1, 'rename_noreplace': 2, 'sqlite_write': 3,
+    _rank = {'sqlite_commit': 0, 'exchange': 1, 'rename_noreplace': 2, 'sqlite_write': 3,
             'write': 4, 'fullfsync': 5, 'fsync': 5, 'mkdir': 6, 'unlink': 7, 'rmdir': 8,
             'open': 9, 'sqlite_read': 10}
     for key, call in points:

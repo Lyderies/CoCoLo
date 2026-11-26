@@ -200,7 +200,9 @@ class ReservationFileSafetyTests(unittest.TestCase):
     WHY = 'The CLI reservation step on a temporary state root; no service, ledger or provider is reached.'
 
     def setUp(self):
-        import json, os, tempfile
+        import json
+        import os
+        import tempfile
         from pathlib import Path
         import cli
         self.cli, self.os, self.json = cli, os, json
@@ -289,7 +291,8 @@ class ReservationFileSafetyTests(unittest.TestCase):
 
     @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
     def test_a_held_lock_gives_a_bounded_wait_then_no_recheck(self):
-        import fcntl, time
+        import fcntl
+        import time
         self.private_dir()
         lock = self.os.open(self.dir / '.lock', self.os.O_RDWR | self.os.O_CREAT, 0o600)
         self.addCleanup(self.os.close, lock)

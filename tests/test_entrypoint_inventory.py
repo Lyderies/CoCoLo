@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from test_framework import requirements
+from test_framework import requirements  # noqa: E402
 
 
 @requirements('TF-13', 'TF-16', why_not_scenario='Cold interpreter/argument boundaries complement product scenarios and verify shipped programs start without test dependencies.')

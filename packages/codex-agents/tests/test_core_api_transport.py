@@ -132,7 +132,8 @@ class NeutralityTests(CoreCase):
 
 class SeparateProcessTests(unittest.TestCase):
     def test_term5_core_runs_headless_as_its_own_process(self):  # TERM-5, API-1
-        import shutil, tempfile
+        import shutil
+        import tempfile
         from pathlib import Path
         d = Path(tempfile.mkdtemp(dir=support.SHORT_TMP, prefix="core"))
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)

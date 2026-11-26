@@ -12,11 +12,11 @@ CREATE INDEX is timed separately; file growth is the whole set of five.
 
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 768, "rss_mib": 2048}  # ~295 MiB ledger plus index and WAL
-import json
-from pathlib import Path
-import sys
-import time
-from unittest import mock
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+from unittest import mock  # noqa: E402
 
 TARGET_BYTES = 295 * 2**20
 U3_INDEXES = ('records_run', 'records_candidate', 'records_type_observed', 'records_foreign_admissions',
@@ -26,7 +26,8 @@ U3_INDEXES = ('records_run', 'records_candidate', 'records_type_observed', 'reco
 def populate(case, growth, support, target):
     connection = case.ledger._connection
     page = connection.execute('PRAGMA page_size').fetchone()[0]
-    size = lambda: page * connection.execute('PRAGMA page_count').fetchone()[0]
+    def size():
+        return page * connection.execute('PRAGMA page_count').fetchone()[0]
     started = time.perf_counter()
     seed = connection.execute("SELECT * FROM records WHERE record_type='provider_billing' LIMIT 1").fetchone()
     usage = {'schema_version': 1, 'record_type': 'provider_usage', 'record_id': 'u3-seed-usage', 'provider': 'claude',

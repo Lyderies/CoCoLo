@@ -157,11 +157,11 @@ def _write_authorization(path: Path, content: bytes) -> None:
                 restore.write_bytes(previous)
                 restore.chmod(0o600)
                 os.replace(restore, path)
-            except BaseException as failed:
+            except BaseException:
                 outcome = QuiesceLeftStopped("the earlier authorization could not be put back")
                 try:
                     restore.unlink(missing_ok=True)
-                except OSError as stuck:
+                except OSError:
                     outcome = QuiesceLeftStopped("the earlier authorization could not be put back; a temporary copy remains")
                 raise outcome from error
             try:

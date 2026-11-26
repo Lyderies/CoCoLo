@@ -4,13 +4,11 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-import types
 import unittest
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from test_framework import requirements
+from test_framework import requirements  # noqa: E402
 
 
 @requirements(why_not_scenario='Metadata rejection and helper-change controls cannot be established by product lifecycle scenarios.')

@@ -7,10 +7,7 @@ service runs). The sweep tests use the lease-backed run fixtures, with the admis
 unexpected failure. Time budget: scenario.
 """
 import hashlib
-import threading
 import time
-import unittest
-from contextlib import closing
 from types import SimpleNamespace
 from unittest import mock
 
@@ -18,11 +15,11 @@ import tests.support  # noqa: F401
 from tests import test_codex_worker as workers
 from tests import test_deadlines_retention as dr
 from tests import test_record_context as rc
-from tests.test_b2_service_outcome import B2Fixture, requirement
+from tests.test_b2_service_outcome import requirement
 from tests.test_bridge import result
 from tests.test_project_history import binding as history_binding
 
-from codex_agents import project_result_contexts, result_persistence, service_record
+from codex_agents import project_result_contexts, service_record
 from codex_agents.history_contracts import HistoryError
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.project_history import ProjectHistory

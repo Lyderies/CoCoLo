@@ -82,17 +82,20 @@ class FailureMatrixTests(unittest.TestCase):
                 row = case.rows()[0]
                 kind, identity = 'run_slot', row['handle_digest']
                 now = row['deadline_at_ms'] + learning_store.CRASHED_CLAIM_GRACE_MS + 1
-                operation = lambda: case.sweep(now, row['clock_reference_ns'] - 1)
+                def operation():
+                    return case.sweep(now, row['clock_reference_ns'] - 1)
             else:
                 project, launch = case.new_attempt()
                 from codex_agents.learning_contracts import keyed_digest
                 kind, identity = 'binding', keyed_digest(case.ledger.state.digest_key(), launch.run_handle)
                 if name == 'binding/withdrawn':
-                    operation = lambda: case.withdraw(project, launch.run_handle)
+                    def operation():
+                        return case.withdraw(project, launch.run_handle)
                 else:
                     expires = case.ledger._connection.execute(
                         'SELECT expires_at_ms FROM host_run_bindings WHERE handle_digest=?', (identity,)).fetchone()[0]
-                    operation = lambda: case.sweep(expires + 1, 1)
+                    def operation():
+                        return case.sweep(expires + 1, 1)
 
         def snapshot():
             return tuple(case.ledger._connection.execute(
@@ -245,7 +248,8 @@ class FailureMatrixTests(unittest.TestCase):
             case.until(lambda: case.lane.snapshot(handle)['state'] in {'cleaned', 'unknown'})
             self.assertEqual('cleaned', case.lane.snapshot(handle)['state'])
             owner = case.lane
-            operation = lambda: owner.retire(handle)
+            def operation():
+                return owner.retire(handle)
         else:
             from tests.test_billing_probe_worker import BillingProbeWorkerTests
             case = self.fixture(BillingProbeWorkerTests)
@@ -261,7 +265,8 @@ class FailureMatrixTests(unittest.TestCase):
                 case.until(lambda: case.pool.snapshot(handle)['state'] in {'cleaned', 'unknown'})
                 self.assertEqual('cleaned', case.pool.snapshot(handle)['state'])
             owner = case.pool
-            operation = lambda: owner.retire(handle)
+            def operation():
+                return owner.retire(handle)
         self.assertNotIn(None, owner._jobs)
         self.assertIn(handle, owner._jobs)
         mutated = None
@@ -321,7 +326,8 @@ class FailureMatrixTests(unittest.TestCase):
             closure = closure['closure']
             self.assertEqual('claim_not_open', closure['denial']['reason_code'])
             store, kind, reason = case.store, name.split('/')[0], 'fenced'
-            operation = lambda: store.settle_denied_result_lease(case.scope, canonical_json(closure))
+            def operation():
+                return store.settle_denied_result_lease(case.scope, canonical_json(closure))
         elif name.startswith('open_binding/'):
             from tests import test_open_withdrawal as opens
             case = self.fixture(opens.OpenBindingStoreTests)
@@ -330,7 +336,8 @@ class FailureMatrixTests(unittest.TestCase):
             reason = name.split('/')[1]
             case.store.mark_open_withdrawing(target.run_handle, 1, 'cancelled_before_claim',
                 project_id=opens.PROJECT, runtime_digest=opens.COLLECTOR_RUNTIME_DIGEST)
-            operation = lambda: case.store.release_open_binding(target.run_handle, 1, reason, receipt='6' * 64)
+            def operation():
+                return case.store.release_open_binding(target.run_handle, 1, reason, receipt='6' * 64)
             store, kind = case.store, 'open_binding'
         elif name == 'reservation/completed':
             from tests.test_account_cleanup_release import AccountCleanupReleaseTests

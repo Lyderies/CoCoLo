@@ -15,11 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(1, str(ROOT / 'packages/codex-agents/native-package/.codex/orchestration'))
 
-from test_framework import requirements
-from codex_agents.history_contracts import HistoryError
-from codex_agents.project_history import ProjectHistory
-from codex_agents import project_result_contexts
-from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
+from test_framework import requirements  # noqa: E402
+from codex_agents.history_contracts import HistoryError  # noqa: E402
+from codex_agents.project_history import ProjectHistory  # noqa: E402
+from codex_agents import project_result_contexts  # noqa: E402
+from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity  # noqa: E402
 
 PROJECT = 'prj_' + 'a' * 32
 OUTCOME = 'a' * 64

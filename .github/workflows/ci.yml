@@ -58,6 +58,11 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
+      - name: Private runtime folder (as a login session provides)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
       - name: Select trusted review base
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -115,6 +120,11 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
+      - name: Private runtime folder (as a login session provides)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
       - name: Select trusted review base
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -205,6 +215,11 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
+      - name: Private runtime folder (as a login session provides)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
       - name: Select trusted review base
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -294,6 +309,11 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
+      - name: Private runtime folder (as a login session provides)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
       - name: Validate trusted PR merge base
         env:
           EVENT_NAME: ${{ github.event_name }}

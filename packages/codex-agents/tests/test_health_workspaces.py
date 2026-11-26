@@ -518,7 +518,7 @@ class CollectorWiringTests(Case):
     @requirements('HM2A-11')
     def test_HM2A_11_the_collector_registers_the_check_and_a_pass_removes_an_orphan_and_keeps_a_live_folder(self):
         from tests import test_learning_store as store_tests
-        from codex_agents import bridge, learning_store
+        from codex_agents import learning_store
         fixture = store_tests.LearningStoreTests(methodName='runTest')
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
@@ -893,7 +893,8 @@ class TruncationTests(Case):
         hw = workspaces()
         owned = self.folder()
         # Review probe 2: the reader's first MAX_RECORD_PATHS + 1 items are one path repeated; the live folder follows.
-        tail = lambda: itertools.chain(itertools.repeat('/x/same', hw.MAX_RECORD_PATHS + 1), [str(owned)])
+        def tail():
+            return itertools.chain(itertools.repeat('/x/same', hw.MAX_RECORD_PATHS + 1), [str(owned)])
         found = self.run_check(self.check(live=tail))
         self.assertEqual([], found)
         self.assertTrue(owned.is_dir())
@@ -902,11 +903,13 @@ class TruncationTests(Case):
     def test_HM2A_7_a_reader_handing_back_more_items_than_the_check_reads_is_incomplete(self):
         hw = workspaces()
         orphan = self.folder()
-        endless = lambda: itertools.repeat('/x/same', hw.MAX_RECORD_ITEMS + 1)
+        def endless():
+            return itertools.repeat('/x/same', hw.MAX_RECORD_ITEMS + 1)
         found = self.run_check(self.check(live=endless))
         self.assertEqual(['records_unreadable'], self.reasons(found))
         self.assertTrue(orphan.is_dir())
-        exactly = lambda: itertools.repeat('/x/same', hw.MAX_RECORD_ITEMS)
+        def exactly():
+            return itertools.repeat('/x/same', hw.MAX_RECORD_ITEMS)
         self.assertEqual(['orphan_removed'], self.reasons(self.run_check(self.check(live=exactly))))
 
     @requirements('HM2A-7')
@@ -1353,7 +1356,8 @@ class LiveFindingTests(Case):
     def test_HM2A_13_the_finding_names_the_reason_in_its_text_and_subject_with_a_plain_next_step(self):
         for reason, step in (('too_many_projects', 'No action'), ('too_many_pending:' + self.PRJ, 'report'),
                              ('history_unreadable:OperationalError:' + self.PRJ, 'report'), ('deadline', 'No action')):
-            reader = lambda: None
+            def reader():
+                return None
             reader.reason = reason
             orphan = self.folder()
             found = self.run_check(self.check(pending=reader))

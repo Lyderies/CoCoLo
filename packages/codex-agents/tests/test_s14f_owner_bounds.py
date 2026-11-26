@@ -15,7 +15,8 @@ from codex_agents.runtime_lineage import CUSTODY_PASS_ROWS, CustodyScan, live_le
 
 WHY = 'The bound and the exact custody answer are properties of the real SQLite statements and the real owner thread.'
 NOW = 2_000_000_000_000
-H = lambda n: format(n, '064x')
+def H(n):
+    return format(n, '064x')
 
 
 def history(runs, edges=3, old_runs=()):

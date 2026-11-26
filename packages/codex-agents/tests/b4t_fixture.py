@@ -38,7 +38,6 @@ def build(archive, destination):
 def stop_result(archive, destination):
     """A consumed archived run, deliberately not published until service stop."""
     sys.path.insert(0, str(archive / 'packages/codex-agents'))
-    import tests.support
     from tests.test_record_context import RecordedContextFixture
     from tests.test_bridge import result
     from codex_agents.learning_contracts import canonical_json
@@ -147,7 +146,9 @@ def chain(archive, destination):
         data = dict(project=case.project, key=case.key.hex(), now=case.base.stamp,
             clock_reference_ns=case.ledger._capacity_clock_reference(), runtime_digest=COLLECTOR_RUNTIME_DIGEST,
             version=PACKAGE_VERSION, runs=runs)
-        case.store.close(); case.ledger.close(); journal.release()
+        case.store.close()
+        case.ledger.close()
+        journal.release()
         shutil.copytree(case.directory, destination / 'history')
         shutil.copytree(case.ledger.state.root, destination / 'state')
         (destination / 'manifest.json').write_bytes(canonical_json(data))
@@ -166,7 +167,8 @@ def memory(archive, destination):
     from codex_agents.learning_contracts import canonical_json
     case = MemoryFixture(methodName='runTest')
     case.setUp()
-    case.register(); case.prep()
+    case.register()
+    case.prep()
     workspace = destination / 'prepare-b4t'
     workspace.mkdir()
     (workspace / 'pending').write_text('remove this fixture folder')
@@ -185,7 +187,6 @@ def memory(archive, destination):
 
 def rollover(archive, destination):
     """Stop an actual 0.8.67 U1 transaction before or after its atomic commit."""
-    from contextlib import contextmanager
     sys.path.insert(0, str(archive / 'packages/codex-agents'))
     import tests.support  # noqa: F401
     from codex_agents.collector_client import PACKAGE_VERSION, COLLECTOR_RUNTIME_DIGEST
@@ -196,7 +197,8 @@ def rollover(archive, destination):
     from codex_agents.result_contracts import ResultCapacity, MAX_RESULT_BODY_BYTES
     from tests.test_project_history import PROJECT_A
     key = b'j' * 32
-    directory = destination / 'history'; directory.mkdir(mode=0o700)
+    directory = destination / 'history'
+    directory.mkdir(mode=0o700)
     owner = ProjectHistory(directory, PROJECT_A, result_key=key, result_clock_ms=lambda: 1000,
                            result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
                            orchestration_limits=OrchestrationLimits(8, 12))

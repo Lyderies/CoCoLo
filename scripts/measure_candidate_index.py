@@ -7,11 +7,11 @@ Uses the existing isolated account-ledger fixture; never opens an owner ledger.
 
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 768, "rss_mib": 2048}  # ~300 MiB ledger plus index and WAL
-import json
-from pathlib import Path
-import sys
-import time
-from unittest import mock
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+from unittest import mock  # noqa: E402
 
 
 def measure(self):

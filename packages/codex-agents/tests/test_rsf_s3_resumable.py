@@ -24,7 +24,7 @@ from codex_agents.learning_contracts import canonical_json
 from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
 from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope
 from tests.learning_support import attest_provider, event_record, generate_test_owner_key
-from tests.test_project_history import PROJECT_A, binding
+from tests.test_project_history import PROJECT_A
 from tests import test_result_leases as leases
 from tests.project_schema_fixtures import legacy_project_holds_layout
 

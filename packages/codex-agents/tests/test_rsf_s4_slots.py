@@ -370,7 +370,6 @@ class LegacySlotCorrectionTests(LegacySlotEvidenceTests):
         self.assertEqual(2, self.count())
 
     def test_collector_timer_releases_a_slot_whose_process_proof_appears(self):
-        import threading
         with mock.patch.object(launch_journal, 'tree_state', return_value='alive'):
             self.seed(native=True, journal='watched')
         self.assertEqual(1, self.count())

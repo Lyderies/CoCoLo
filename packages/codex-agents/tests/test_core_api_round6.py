@@ -341,7 +341,6 @@ class RoutingDurability(Helpers, CoreCase):
         self.assertEqual("unavailable", raised.exception.code)
 
     def test_a_write_that_makes_no_progress_fails_instead_of_looping(self):  # R4
-        from tests.test_core_api_round5 import ROUTING
         owner = self.client("owner")
         done = []
         stalled_writes(self, ".routing.")
@@ -391,7 +390,8 @@ class EmptyTokenStoreIsReported(Helpers, CoreCase):
     def test_health_says_the_token_store_is_empty(self):  # R3 (verifier: the owner is told only if they mint)
         path = self.records / "tokens.json"
         self.mod._mint_token(str(self.records), "read")
-        codes = lambda: [f["code"] for f in self.service._findings()]  # no token works once the store is empty
+        def codes():
+            return [f["code"] for f in self.service._findings()]
         self.assertNotIn("tokens_empty", codes())
         with open(path, "r+b") as handle:
             handle.truncate(0)

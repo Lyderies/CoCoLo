@@ -24,20 +24,20 @@ from __future__ import annotations
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 1024, "rss_mib": 3072}
 
-import argparse
-import cProfile
-import hashlib
-import io
-import json
-import os
-import pstats
-import re
-import shutil
-import sqlite3
-import sys
-import threading
-import time
-from pathlib import Path
+import argparse  # noqa: E402
+import cProfile  # noqa: E402
+import hashlib  # noqa: E402
+import io  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import pstats  # noqa: E402
+import re  # noqa: E402
+import shutil  # noqa: E402
+import sqlite3  # noqa: E402
+import sys  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'packages/codex-agents'))
@@ -156,8 +156,10 @@ class Cloner:
             remap[token] = 'brg_' + new[:32] if token.startswith('brg_') else new
         suffix = f'-c{k}'
         shift = 9 * DAY_MS + (k * DAY_MS) // RUNS_PER_DAY  # older than the 7-day open-request window
-        sub = lambda m: remap[m.group(0)] if m.group(0) in remap else m.group(0)
-        sub_bytes = lambda m: remap[m.group(0).decode()].encode() if m.group(0).decode() in remap else m.group(0)
+        def sub(m):
+            return remap[m.group(0)] if m.group(0) in remap else m.group(0)
+        def sub_bytes(m):
+            return remap[m.group(0).decode()].encode() if m.group(0).decode() in remap else m.group(0)
         blob_token = re.compile(TOKEN.pattern.encode())
         out = {}
         for table, plan_rows in self.plans.items():
@@ -368,11 +370,11 @@ def main():
     # ---- status read and idle retention (on the open fixture ledger)
     started = time.perf_counter()
     for _ in range(5):
-        status = ledger.account_holds_status(project)
+        _status = ledger.account_holds_status(project)
     report['status_read_seconds'] = round((time.perf_counter() - started) / 5, 4)
     report['status_profile'] = status_profile(ledger, project)  # S14h: where the status read spends its time
     started = time.perf_counter()
-    lineage = runtime_lineage.lineage_status(db)
+    _lineage = runtime_lineage.lineage_status(db)
     report['lineage_status_seconds'] = round(time.perf_counter() - started, 4)
     seconds, result, prof, finished = profiled(lambda: ledger.sweep_run_retention(now_ms=now))
     report['idle_run_retention'] = {'seconds': seconds, 'finished': finished, 'result': result if finished else None}
@@ -434,7 +436,6 @@ def upgrade_copy(clients, path, root, LearningLedger):
     from codex_agents.learning_store import LearningState
     state = LearningState(copy / path.name, create=False)
     connection = sqlite3.connect(state.root / 'learning.sqlite3')
-    from codex_agents.run_retention import RETENTION_INDEX_NAMES
     try:
         # What a schema-17 ledger lacks: the B4t authority tables and the S14b retention indexes.
         for table in ('runtime_floor', 'runtime_lineage', 'runtime_takeover'):

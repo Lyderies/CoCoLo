@@ -12,11 +12,9 @@ that needs a hand stop must fail its check. The children are the fake clients; t
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -33,7 +31,7 @@ from e2e_core import CLAUDE_MODEL, ORCHESTRATION_VERSION, PROBE, _SCENES, Phase,
 import e2e_checks_recovery as recovery  # noqa: E402
 import e2e_checks_shared as shared  # noqa: E402
 from e2e_checks_setup import summary_states  # noqa: E402
-from e2e_checks_shared import add_project, child_frames, project_records, project_view, write_patches  # noqa: E402
+from e2e_checks_shared import add_project, child_frames, project_view, write_patches  # noqa: E402
 
 S5_IDS = ("L11.2", "L12.2", "L12.3", "L12.4", "L12.5", "G6")
 # L12.2 is unchecked ON PURPOSE (decision 259: a check is green only through the real product path): the requirement's 0.2.x
@@ -487,7 +485,8 @@ def handover_history_kept(before: dict, after: dict) -> bool:
     def original_rows(snapshot):
         return {**snapshot, 'rows': {key: value for key, value in snapshot.get('rows', {}).items()
                                     if not key.startswith('runtime_takeover:')}}
-    epoch_keys = lambda value: {key for key in value.get('rows', {}) if key.startswith('runtime_takeover:')}
+    def epoch_keys(value):
+        return {key for key in value.get('rows', {}) if key.startswith('runtime_takeover:')}
     if epoch_keys(before) != epoch_keys(after):
         return False
     left, right = original_rows(before), original_rows(after)

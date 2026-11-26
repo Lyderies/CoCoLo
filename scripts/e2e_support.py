@@ -242,6 +242,35 @@ class HarnessError(Exception):
     """The harness itself could not be built (a missing tool, a refused location): the check fails."""
 
 
+_TRUSTED_SHIM: list = []
+
+
+def setup_environment() -> dict:
+    """child_environment for a setup.sh probe (--print-python, --print-git). setup.sh trusts only a python3 in an
+    installation folder it names, so a runner whose first python3 is elsewhere (CI's toolcache) gets a folder holding
+    a python3 link to one that is, put first on PATH. Nothing the product trusts is widened: setup.sh still judges
+    the interpreter by its own rule, and a machine with none still fails as before."""
+    env = child_environment(os.environ)
+    if not _TRUSTED_SHIM:
+        shim = ""
+        for candidate in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"):
+            real = os.path.realpath(candidate)
+            if not os.path.isfile(real) or (sys.platform == "darwin" and os.path.dirname(real) == "/usr/bin"):
+                continue
+            if subprocess.run([real, "-I", "-c", "import sys; sys.exit(sys.version_info < (3, 11))"],
+                              capture_output=True, check=False, env=env).returncode != 0:
+                continue
+            folder = tempfile.mkdtemp(prefix="e2e-trusted-python-")
+            os.symlink(real, os.path.join(folder, "python3"))
+            atexit.register(shutil.rmtree, folder, True)
+            shim = folder
+            break
+        _TRUSTED_SHIM.append(shim)
+    if _TRUSTED_SHIM[0]:
+        env["PATH"] = _TRUSTED_SHIM[0] + os.pathsep + env.get("PATH", "")
+    return env
+
+
 def strip_ansi(data: bytes | str) -> str:
     text = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
     return ANSI.sub("", text).replace("\r", "")
@@ -348,7 +377,7 @@ class World:
             (self.home / folder).mkdir(mode=0o700)
         (self.base / "tmp").mkdir()
         printed = subprocess.run(["/bin/bash", str(SETUP), "--print-python"], capture_output=True, text=True,
-                                 check=False, stdin=subprocess.DEVNULL, env=child_environment(os.environ)).stdout.strip()
+                                 check=False, stdin=subprocess.DEVNULL, env=setup_environment()).stdout.strip()
         if not printed.startswith("/"):
             raise HarnessError("no trusted python3 (setup.sh --print-python refused)")
         self.python = printed
@@ -419,7 +448,7 @@ class World:
 
     def git(self, *args: str, project: Path | None = None) -> subprocess.CompletedProcess:
         git = subprocess.run(["/bin/bash", str(SETUP), "--print-git"], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL, env=child_environment(os.environ)).stdout.strip()
+                             stdin=subprocess.DEVNULL, env=setup_environment()).stdout.strip()
         if not git.startswith("/"):
             raise HarnessError("no trusted git")
         return subprocess.run([git, "-C", str(project or self.project), *args], capture_output=True, text=True,

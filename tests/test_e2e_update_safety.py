@@ -8,7 +8,6 @@ accepts only S5 IDs."""
 import ast
 import importlib.util
 import json
-import re
 import sqlite3
 import sys
 import tempfile
@@ -114,7 +113,8 @@ class FaultTests(unittest.TestCase):
 
     def reports(self, normal_red=(), fault_red=(), extra_ids=("G3",)):
         ids = [*us.CHECKED_IDS, *extra_ids]
-        make = lambda red: {"flows": ["L11", "L12"], "requirements": {i: {"passed": i not in red} for i in ids}}
+        def make(red):
+            return {"flows": ["L11", "L12"], "requirements": {i: {"passed": i not in red} for i in ids}}
         return make(normal_red), make(fault_red), set(ids)
 
     def test_a_fault_run_needs_a_real_green_to_red_transition_per_targeted_id(self):

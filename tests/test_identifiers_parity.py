@@ -81,7 +81,8 @@ class SharedScanTreeTests(unittest.TestCase):
 
     def test_cli_scans_untracked_files_and_fails_on_real_path_only(self) -> None:
         root = self.make_repo()
-        run = lambda: subprocess.run([sys.executable, str(_SCRIPT)], cwd=root, capture_output=True, text=True,
+        def run():
+            return subprocess.run([sys.executable, str(_SCRIPT)], cwd=root, capture_output=True, text=True,
                                      env={**os.environ, "AO_IDENTIFIER_DENYLIST": str(root / "none")})
         self.assertEqual(run().returncode, 0)
         (root / "evidence.txt").write_text(REAL, encoding="utf-8")

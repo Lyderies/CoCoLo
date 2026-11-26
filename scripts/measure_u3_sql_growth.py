@@ -9,13 +9,13 @@ from __future__ import annotations
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # 1k vs 100k rows
 
-import argparse
-import hashlib
-import json
-from pathlib import Path
-import sys
-import time
-import unittest
+import argparse  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+import unittest  # noqa: E402
 
 
 def main():

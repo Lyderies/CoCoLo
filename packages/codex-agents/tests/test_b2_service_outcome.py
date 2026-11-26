@@ -21,8 +21,6 @@ from unittest import mock
 import tests.support  # noqa: F401
 from tests import test_deadlines_retention as dr
 from tests import test_record_context as rc
-from tests import test_result_leases as leases
-from tests.learning_support import assignment
 from tests.project_schema_fixtures import legacy_orchestration_state_layout  # B6: the format 19 fixtures
 from tests.test_project_history import binding as history_binding
 
@@ -30,7 +28,6 @@ from codex_agents import history_api, project_history, project_result_contexts, 
 from codex_agents.history_contracts import AttemptBinding, HistoryError
 from codex_agents.hosts import CLAUDE_HOST_CLIENT as CLAUDE, CODEX_HOST_CLIENT as CODEX
 from codex_agents.host_result_contracts import HostResultReference, decode_host_result_reference
-from codex_agents.learning_contracts import canonical_json
 from codex_agents.orchestration_store import OrchestrationOwner
 from codex_agents.project_history import ProjectHistory
 from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
@@ -188,7 +185,7 @@ class ServiceRecordsTests(B2Fixture):
                 self.assertEqual([True], ran)
                 db = other._connection
                 self.assertEqual((1, 1, 1), tuple(db.execute(
-                    f'SELECT COUNT(*) FROM records WHERE record_type=?', (kind,)).fetchone()[0]
+                    'SELECT COUNT(*) FROM records WHERE record_type=?', (kind,)).fetchone()[0]
                     for kind in ('event', 'outcome', 'host_result_admission')))
                 self.assertEqual(1, db.execute('SELECT COUNT(*) FROM project_result_recorders').fetchone()[0])
                 self.assertEqual(first, service_record.recorder_of(other, self.receipt))
@@ -253,7 +250,8 @@ class EligibilityTests(B2Fixture):
         self.assertEqual(before, self.counts())  # nothing written
 
     def test_each_break_is_refused_with_its_named_reason_and_writes_nothing(self):
-        other_runtime = lambda: self.store.admit_service_result(self.binding,
+        def other_runtime():
+            return self.store.admit_service_result(self.binding,
                                                                final_check=self.authority(runtime_digest=OTHER_RUNTIME))
         self.refused('history_unrecordable_other_runtime', record=other_runtime)
         with self.orchestration(client=CLAUDE):

@@ -315,9 +315,11 @@ class ContractCapTests(unittest.TestCase):
             with mock.patch.object(module, constant, size - 1), self.assertRaises(error):
                 operation()
             self.assertEqual(expected, operation())
-        operation = lambda: billing_probe_worker.probe_payload(PROJECT_A, 'request', '/tmp/project', {}, deadline_ns=1000, created_at_ms=1)
+        def operation():
+            return billing_probe_worker.probe_payload(PROJECT_A, 'request', '/tmp/project', {}, deadline_ns=1000, created_at_ms=1)
         boundary(billing_probe_worker, 'MAX_PROBE_INPUT_BYTES', operation, billing_probe_worker.ProbeWorkerError)
-        operation = lambda: billing_probe_worker._normalized([], None, {'account_fingerprint': 'a'*64}, 1)
+        def operation():
+            return billing_probe_worker._normalized([], None, {'account_fingerprint': 'a'*64}, 1)
         boundary(billing_probe_worker, 'MAX_PROBE_PACKET_BYTES', operation, billing_probe_worker.ProbeWorkerError, len(operation()[0]))
         reply = dict(probe='denied', reason_code='provider_identity_missing', records=[], known=False, observed_at_ms=1)
         boundary(billing_probe_contracts, 'MAX_BILLING_REPLY_BYTES',
@@ -514,7 +516,6 @@ class ContractCapTests(unittest.TestCase):
 
     def test_enrollment_consumer_verifier_and_frontend_cross_byte_limits_without_sockets(self):
         import json
-        from types import SimpleNamespace
         from codex_agents import service_host
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             proofs = Path(directory) / 'proofs'
@@ -652,7 +653,6 @@ class ContractCapTests(unittest.TestCase):
 
     def test_client_result_body_and_worker_export_cross_byte_limits_before_io(self):
         from codex_agents import bridge, client_runtime
-        from codex_agents.history_contracts import HistoryError
         value = {'fixture': 'actual result bytes'}
         size = len(learning_contracts.canonical_json(value))
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:

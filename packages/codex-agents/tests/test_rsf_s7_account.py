@@ -1,6 +1,5 @@
 """RSF-S7-1/2: permanent account replies through migration and payload pruning."""
 from dataclasses import replace
-import unittest
 
 from tests.rsf_s7_support import AccountFixture
 from codex_agents.account_claim_contracts import ClaimError

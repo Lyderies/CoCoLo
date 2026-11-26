@@ -752,7 +752,7 @@ def _run_update_takeover(args):
                 phase = 'unreadable intent'
         return {'ready': False, 'takeover': phase is not None, 'phase': phase,
                 'reason_code': getattr(error, 'code', 'takeover_unfinished'), 'error': str(error)}
-    except (CollectorError, StateError, OSError, ValueError) as error:
+    except (CollectorError, StateError, OSError, ValueError):
         try:
             pending = TakeoverJournal(state.root).read()
             phase = None if pending is None else pending['phase']

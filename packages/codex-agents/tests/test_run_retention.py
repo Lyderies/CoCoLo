@@ -2,7 +2,6 @@
 import json
 import contextlib
 import sqlite3
-import time
 import unittest
 from unittest import mock
 
@@ -141,7 +140,6 @@ class RunRetentionTests(unittest.TestCase):
 
     @requirements('S14b-3', 'S14b-4', 'S14b-5')
     def test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe(self):
-        from codex_agents import run_retention
         from codex_agents.learning_contracts import content_digest
         for i in range(70):
             self.append(identity(f'rebuild-{i}'))

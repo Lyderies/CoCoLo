@@ -10,12 +10,12 @@ from __future__ import annotations
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # 100,000-event synthetic ledgers
 
-import argparse
-import json
-from pathlib import Path
-import sys
-import time
-from unittest import mock
+import argparse  # noqa: E402
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+from unittest import mock  # noqa: E402
 
 
 def main():

@@ -8,7 +8,6 @@ def main():
     import os
     import sqlite3
     import unittest
-    import tests.support
     from unittest import mock
     from codex_agents.project_history import ProjectHistory
     from codex_agents.takeover_owner import OwnerOperations
@@ -53,7 +52,8 @@ def main():
         with patch:
             result=unittest.TextTestRunner(stream=log,verbosity=0).run(unittest.TestSuite([cls(name)]))
         print(label,name,'RED (mutation detected)' if not result.wasSuccessful() else 'MISSED')
-        if result.wasSuccessful():missed.append(label)
+        if result.wasSuccessful():
+            missed.append(label)
         else:
             for _,failure in result.failures+result.errors:
                 print(failure.strip().splitlines()[-1][:240])

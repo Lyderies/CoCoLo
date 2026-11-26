@@ -56,9 +56,11 @@ class ReleasePathTests(unittest.TestCase):
         elif exit == 'successor':
             case.base.reopen(result_capacity=case.fixture.capacity)
             store = case.store
-            operation = lambda: store.release_earlier_unarmed_leases(set())
+            def operation():
+                return store.release_earlier_unarmed_leases(set())
         else:
-            operation = lambda: store.release_unsent_result_lease(leases.lease_binding())
+            def operation():
+                return store.release_unsent_result_lease(leases.lease_binding())
 
         def oracle():
             self.released(store, 'lease', 'withdrawn_unsent')
@@ -73,7 +75,8 @@ class ReleasePathTests(unittest.TestCase):
         case.register()
         if kind == 'preparation':
             case.prep()
-        operation = lambda: case.release(kind, reason)
+        def operation():
+            return case.release(kind, reason)
         return case, case.store, operation, lambda: self.released(case.store, kind, reason)
 
     def orchestration_row(self, exit):
@@ -84,7 +87,8 @@ class ReleasePathTests(unittest.TestCase):
             operation = case.owner.end_idle
             reason = 'interrupted_unattended'
         else:
-            operation = lambda: case.close(snapshot)
+            def operation():
+                return case.close(snapshot)
             reason = 'closed'
         return case, case.store, operation, lambda: self.released(case.store, 'orchestration', reason)
 
@@ -92,7 +96,8 @@ class ReleasePathTests(unittest.TestCase):
         case = self.fixture(register.DenialRegisterTests)
         raw = canonical_json(case.call())
         store = case.fixture.store
-        operation = lambda: store.settle_denied_result_lease(case.fixture.scope, raw)
+        def operation():
+            return store.settle_denied_result_lease(case.fixture.scope, raw)
         return case, store, operation, lambda: self.released(store, 'lease', 'denied')
 
     def bind_row(self):

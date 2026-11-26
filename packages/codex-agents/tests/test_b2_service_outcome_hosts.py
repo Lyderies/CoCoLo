@@ -7,7 +7,6 @@ and the orchestration status and result read of the command are answered by the 
 """
 import json
 import types
-import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -15,15 +14,13 @@ from unittest import mock
 import tests.support  # noqa: F401
 from tests import test_record_context as rc
 from tests.test_b2_service_outcome import B2Fixture, OTHER_RUNTIME, requirement
-from tests.test_bridge import PARENT_GRANT, result
+from tests.test_bridge import PARENT_GRANT
 
 from codex_agents import client_runtime, history_api, service_record
 from codex_agents.history_api import HistoryRequest, decode_history_response, encode_history_request
-from codex_agents.history_contracts import AttemptBinding, HistoryError
+from codex_agents.history_contracts import HistoryError
 from codex_agents.history_service import HistoryService
 from codex_agents.hosts import CLAUDE_HOST_CLIENT as CLAUDE, CODEX_HOST_CLIENT as CODEX, OWNER_CLIENT
-from codex_agents.host_result_contracts import HostResultReference
-from codex_agents.learning_contracts import canonical_json
 from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope, SCOPE_FIELDS
 from codex_agents.orchestration_store import OrchestrationOwner
 from codex_agents.service_host import ProjectServiceHost

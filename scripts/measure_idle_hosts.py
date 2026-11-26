@@ -9,16 +9,16 @@ from __future__ import annotations
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 120, "data_mib": 64, "rss_mib": 1024}  # --seconds 10 idle observation
 
-import argparse
-import contextlib
-import json
-import os
-from pathlib import Path
-import select
-import subprocess
-import sys
-import tempfile
-import time
+import argparse  # noqa: E402
+import contextlib  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+from pathlib import Path  # noqa: E402
+import select  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
 
 # The monitor reports this process's own user/system CPU, not its parent's or
 # signature subprocesses'. The actual host entry still runs on its main thread.

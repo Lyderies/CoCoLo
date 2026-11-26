@@ -1,6 +1,7 @@
 """T7 S1 (scripts/e2e_checks_run_control.py): the test-only source rewrites the run-control scenes ask the stand-in
 Python for must each match the installed product's source exactly once, or the scene would fail loudly at import."""
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -30,7 +31,6 @@ class PatchTests(unittest.TestCase):
         self.assertLess(silence, 30)  # the silent child's own sleep (45 s) outlasts the cutoff
 
     def test_the_stand_in_python_applies_a_listed_rewrite_and_refuses_one_that_misses(self):
-        import json
         import subprocess
         import tempfile
         import e2e_support
@@ -56,14 +56,13 @@ class PatchTests(unittest.TestCase):
 # ---------------------------------------------------------------------------------------------
 # T7 S1 review round 1 (NOT-READY): one strictness test per harness fix, each red on 1ea7bf8b.
 
-import json
-import os
-import tempfile
-from types import SimpleNamespace
-from unittest import mock
+import os  # noqa: E402
+import tempfile  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest import mock  # noqa: E402
 
-import e2e_core
-import e2e_support
+import e2e_core  # noqa: E402
+import e2e_support  # noqa: E402
 
 
 def run_check(function):
@@ -339,7 +338,7 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------------------------
 # Decision 157 (final targeted fix): each red on 3f190429.
 
-import ast
+import ast  # noqa: E402
 
 
 class DispatchExitJudgingTests(SceneTest):
@@ -439,7 +438,7 @@ class L62ReasonTests(SceneTest):
         self.assertTrue(run_check(control.l6_2_uncommitted_read_path_refused_before_admission))
 
     def test_a_repeat_preflight_refused_for_another_reason_fails(self):
-        scene = uncommitted_scene(uncommitted_preflight_again=(2, {"ready": False, "admission_created": False, "reason": "other"}, ""))
+        _scene = uncommitted_scene(uncommitted_preflight_again=(2, {"ready": False, "admission_created": False, "reason": "other"}, ""))
         self.assertFalse(run_check(control.l6_2_uncommitted_read_path_refused_before_admission))
 
 

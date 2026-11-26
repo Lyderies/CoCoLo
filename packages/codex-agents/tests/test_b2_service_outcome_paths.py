@@ -9,22 +9,15 @@ missing or unverifiable orchestration refuses). Time budget: scenario (60 s); th
 """
 import json
 import threading
-import time
-import types
-import unittest
-from contextlib import closing
-from types import SimpleNamespace
 from unittest import mock
 
 import tests.support  # noqa: F401
-from tests import test_deadlines_retention as dr
 from tests import test_record_context as rc
-from tests.test_b2_service_outcome import B2Fixture, OTHER_RUNTIME, requirement, view
-from tests.test_project_history import binding as history_binding
+from tests.test_b2_service_outcome import B2Fixture, OTHER_RUNTIME, requirement
 
-from codex_agents import project_history, project_result_contexts, refusal_steps, service_record
+from codex_agents import project_history, refusal_steps, service_record
 from codex_agents.history_contracts import AttemptBinding, HistoryError
-from codex_agents.hosts import CLAUDE_HOST_CLIENT as CLAUDE, CODEX_HOST_CLIENT as CODEX, OWNER_CLIENT
+from codex_agents.hosts import CODEX_HOST_CLIENT as CODEX
 from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope, SCOPE_FIELDS
 from codex_agents.orchestration_store import ORCHESTRATION_IDLE_MS, OrchestrationOwner
 from codex_agents.service_record import ServiceRecordAuthority

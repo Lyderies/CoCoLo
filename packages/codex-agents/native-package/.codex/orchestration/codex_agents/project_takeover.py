@@ -49,7 +49,6 @@ def _request_digest(history, runtime, request_id, payload):
 
 def adopt_project(history, intent, *, migration=None):
     """Only inside an authorized owner's transaction, before publication."""
-    from .learning_contracts import canonical_json
     db = history._connection
     if not db.in_transaction or not history._allow_schema_upgrade or history._fence.epoch is None:
         raise HistoryError('history_not_authorized')
@@ -330,7 +329,6 @@ def purge_takeover(db, now, *, transaction=None, checkpoint=None):
     Called after stage B commits and in the ordinary purge cycle. A failed
     retention pass rolls back independently and never fails an update.
     """
-    import json
     from .project_history import SETTLEMENT_REPLAY_WINDOW_MS
     context = db if transaction is None else transaction()
     with context:

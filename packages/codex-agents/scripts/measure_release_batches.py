@@ -22,15 +22,15 @@ from __future__ import annotations
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # drain target is 60 s
 
-import argparse
-import hashlib
-import json
-import statistics
-import sys
-from threading import local as thread_local
-import time
-from pathlib import Path
-from unittest import mock
+import argparse  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import statistics  # noqa: E402
+import sys  # noqa: E402
+from threading import local as thread_local  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+from unittest import mock  # noqa: E402
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPOSITORY_ROOT))

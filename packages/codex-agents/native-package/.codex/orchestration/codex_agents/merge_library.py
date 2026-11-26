@@ -36,8 +36,22 @@ non-commit record, never a third history commit. history() reads durable data.
 """
 from __future__ import annotations
 
+import configparser
+import ctypes
+import errno
+import fcntl
+import hashlib
+import json
+import os
+import sqlite3
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 MAX_FILE_BYTES = 4 * 1024 * 1024
@@ -165,21 +179,6 @@ class QueueItem:
 # The database contains the sealed batch as well as its effective pre/post images.
 # Effective images differ only for a clean three-way merge. Never deserialize code
 # from history: all records are versioned JSON, with explicit bytes encoding.
-import configparser
-import ctypes
-import errno
-import fcntl
-import hashlib
-import json
-import os
-import sqlite3
-import stat
-import subprocess
-import sys
-import tempfile
-import threading
-import unicodedata
-from dataclasses import replace
 
 
 class _Refusal(Exception):
@@ -1087,7 +1086,7 @@ def enqueue(project, private_root, batch, *, policy, hook=None):
         s = _Store(project, private_root, hook)
         try:
             _validate(s, batch, policy)
-            previously_queued = any(x['child'] == batch.child_id for x in s.qrows())
+            _previously_queued = any(x['child'] == batch.child_id for x in s.qrows())
             q = _enqueue(s, batch)
             return QueueItem(q['id'], q['child'], q['state'], q['base'])
         finally:

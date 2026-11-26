@@ -1,6 +1,5 @@
 """Executable memory-hold checkpoints; nothing starts at import."""
 import json
-from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest import mock

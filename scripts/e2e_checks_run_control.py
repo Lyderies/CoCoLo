@@ -8,12 +8,9 @@ alone. The children are the fake clients; the installed CLI is the only CLI run 
 
 from __future__ import annotations
 
-import copy
 import json
 import sqlite3
-import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,8 +18,8 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))  # -I leaves the script's own folder off the path
 import e2e_support  # noqa: E402
-from e2e_checks_run import child_answer, WORK_EVIDENCE, WORK_GRANT, WORK_PATH, trusted_interpreter_checks  # noqa: E402
-from e2e_core import CLAUDE_MODEL, PROBE, ROUTE_TASK, _SCENES, Phase, check  # noqa: E402
+from e2e_checks_run import child_answer, trusted_interpreter_checks  # noqa: E402
+from e2e_core import CLAUDE_MODEL, PROBE, _SCENES, Phase, check  # noqa: E402
 import e2e_checks_shared as shared  # noqa: E402
 from e2e_checks_shared import (INIT, add_project, bridge_run, capacity_read, child_frames, ledger_slots,  # noqa: E402,F401
                                project_records, project_view, slot_of, write_patches)

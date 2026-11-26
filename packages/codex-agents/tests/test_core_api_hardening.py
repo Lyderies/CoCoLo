@@ -14,7 +14,7 @@ import stat
 import time
 from unittest import mock
 
-from tests.core_api_support import CoreCase, jsonl, read_jsonl
+from tests.core_api_support import CoreCase, read_jsonl
 
 
 def raw(path):

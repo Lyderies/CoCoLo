@@ -145,10 +145,13 @@ class DurableDiskTests(unittest.TestCase):
     def test_review_B1_flush_open_inode_after_rename(self):
         import os
         d = self.disk
-        d.write('/model/a', b'old'); d.flush('/model/a'); d.flush('/model')
+        d.write('/model/a', b'old')
+        d.flush('/model/a')
+        d.flush('/model')
         fd = self.call('open', '/model/a', flags=os.O_RDWR)
         self.call('write', '/model/a', fd=fd, data=b'new')
-        d.rename('/model/a', '/model/b'); d.flush('/model')
+        d.rename('/model/a', '/model/b')
+        d.flush('/model')
         self.call('fsync', '/model/a', fd=fd)
         d.crash()
         self.assertEqual(b'new', d.read('/model/b'))
@@ -162,18 +165,24 @@ class DurableDiskTests(unittest.TestCase):
         d = self.disk
         db = _Connection(d, '/model/db')
         db.execute('INSERT OR REPLACE INTO rows VALUES (?,?)', (1, b'row'))
-        db.commit(); d.flush('/model')
-        d.rename('/model/db', '/model/moved'); d.flush('/model'); d.crash()
+        db.commit()
+        d.flush('/model')
+        d.rename('/model/db', '/model/moved')
+        d.flush('/model')
+        d.crash()
         moved = _Connection(d, '/model/moved')
         self.assertEqual([(b'row',)], moved.execute('SELECT value FROM rows ORDER BY id').fetchall())
-        d.unlink('/model/moved'); d.flush('/model'); d.crash()
+        d.unlink('/model/moved')
+        d.flush('/model')
+        d.crash()
         new = _Connection(d, '/model/moved')
         self.assertEqual([], new.execute('SELECT value FROM rows ORDER BY id').fetchall())
 
     def test_review_B7_open_flags_and_B8_directory_errors(self):
         import os
         d = self.disk
-        d.write('/model/file', b'data'); d.mkdir('/model/dir')
+        d.write('/model/file', b'data')
+        d.mkdir('/model/dir')
         with self.assertRaises(NotADirectoryError):
             self.call('open', '/model/file', flags=os.O_RDONLY | os.O_DIRECTORY)
         with self.assertRaises(IsADirectoryError):
@@ -191,20 +200,30 @@ class DurableDiskTests(unittest.TestCase):
     def test_review_B11_left_parent_exchange_and_unflushed_unlink(self):
         d = self.disk
         for name in ('left', 'right'):
-            d.mkdir('/model/' + name); d.flush('/model/' + name)
+            d.mkdir('/model/' + name)
+            d.flush('/model/' + name)
         d.flush('/model')
         for name, data in (('left/a', b'a'), ('right/b', b'b')):
-            d.write('/model/' + name, data); d.flush('/model/' + name)
-        d.flush('/model/left'); d.flush('/model/right')
-        d.rename('/model/left/a', '/model/right/a'); d.flush('/model/left'); d.crash()
+            d.write('/model/' + name, data)
+            d.flush('/model/' + name)
+        d.flush('/model/left')
+        d.flush('/model/right')
+        d.rename('/model/left/a', '/model/right/a')
+        d.flush('/model/left')
+        d.crash()
         self.assertFalse(d.exists('/model/left/a'))
         self.assertFalse(d.exists('/model/right/a'))
-        d.write('/model/left/a', b'a'); d.flush('/model/left/a'); d.flush('/model/left')
+        d.write('/model/left/a', b'a')
+        d.flush('/model/left/a')
+        d.flush('/model/left')
         d.rename('/model/left/a', '/model/right/b', exchange=True)
-        d.flush('/model/left'); d.flush('/model/right'); d.crash()
+        d.flush('/model/left')
+        d.flush('/model/right')
+        d.crash()
         self.assertEqual(b'b', d.read('/model/left/a'))
         self.assertEqual(b'a', d.read('/model/right/b'))
-        d.unlink('/model/left/a'); d.crash()
+        d.unlink('/model/left/a')
+        d.crash()
         self.assertEqual(b'b', d.read('/model/left/a'))
 
     def test_review_B6_power_loss_latches_finally_IO_until_recovery(self):

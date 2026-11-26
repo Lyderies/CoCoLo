@@ -10,7 +10,6 @@ the unlink and fsync calls the store makes, never the real home.
 """
 import builtins
 import os
-import sqlite3
 import stat
 import unittest
 from unittest import mock
@@ -601,7 +600,7 @@ class StartupReconcileTests(RetirementFixture):
         opened = []
         connection = self.store._connection
         connection.set_progress_handler(lambda: steps.append(1), 10)
-        real_open, real_os_open, real_read = builtins.open, os.open, os.read
+        real_open, real_os_open, _real_read = builtins.open, os.open, os.read
 
         def watch(name):
             if str(name).startswith(('.context-', '.result-')) or '/.context-' in str(name) or '/.result-' in str(name):

@@ -85,7 +85,7 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
 
     def test_RS_A_F8_a_recent_earlier_run_has_no_finite_eligible_time(self):
         ledger = self.upgrade_with_runs(learning_store.HOUR if hasattr(learning_store, "HOUR") else HOUR)
-        claimed = ledger._connection.execute(
+        _claimed = ledger._connection.execute(
             "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
         ).fetchone()[0]
         status = ledger.account_holds_status(self.project)["run_slot"]
@@ -137,7 +137,7 @@ class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
 
     def test_the_ledger_says_how_many_earlier_runs_hold_slots_and_when_the_last_stops(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, HOUR, 3 * HOUR)
-        claimed = sorted(row[0] for row in ledger._connection.execute(
+        _claimed = sorted(row[0] for row in ledger._connection.execute(
             "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown'"))
         self.assertEqual({"holding": 3, "finished_by_ms": None},
                          ledger.earlier_version_runs())

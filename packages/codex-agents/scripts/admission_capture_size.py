@@ -132,37 +132,45 @@ def kept(rows, project, at, rules=None):
     for rowid, owner, kind, source, observed, _, record in rows:
         local = owner == project
         if kind == "provider_identity" and local and observed >= at - 30 * MIN:
-            keep.add(rowid); rules[rowid] = 'identity_30min'                        # R1
+            keep.add(rowid)
+            rules[rowid] = 'identity_30min'                        # R1
         elif kind == "billing_attestation" and local:
-            keep.add(rowid); rules[rowid] = 'attestation_every_age'                 # R2
+            keep.add(rowid)
+            rules[rowid] = 'attestation_every_age'                 # R2
         elif kind in ("admission_decision", "probe_admission") and source == "lifecycle":
             if observed >= at - 5 * HOUR:
-                keep.add(rowid); rules[rowid] = 'decision_5h'                       # R3
+                keep.add(rowid)
+                rules[rowid] = 'decision_5h'                       # R3
             fingerprint = record.get("account_fingerprint")
             if record.get("provider") == "claude" and record.get("decision") == "pass" and fingerprint:
                 key = (observed, owner, record.get("record_id", ""), rowid)
                 bootstrap[fingerprint] = min(bootstrap.get(fingerprint, key), key)  # R4
         elif kind == "admission_decision" and local:
-            keep.add(rowid); rules[rowid] = 'non_lifecycle_decision_every_age'      # R3b
+            keep.add(rowid)
+            rules[rowid] = 'non_lifecycle_decision_every_age'      # R3b
         elif kind == "provider_billing" and source == "provider":
             if observed >= at - DAY:
-                keep.add(rowid); rules[rowid] = 'billing_24h'                       # R5
+                keep.add(rowid)
+                rules[rowid] = 'billing_24h'                       # R5
             elif record.get("provider") == "claude":
                 old_billing[record.get("account_fingerprint")].append((observed, rowid))  # R6
         elif kind == "provider_headroom" and source == "provider":
             windows = record.get("windows") or []
             if observed >= at - DAY or any(isinstance(w, dict) and isinstance(w.get("resets_at"), int)
                                            and w["resets_at"] > at for w in windows):
-                keep.add(rowid); rules.setdefault(rowid, 'headroom_24h_or_live')    # R7, R8
+                keep.add(rowid)
+                rules.setdefault(rowid, 'headroom_24h_or_live')    # R7, R8
             elif record.get("provider") == "claude":
                 old_headroom[record.get("account_fingerprint")].append((observed, rowid))  # R9
     for *_, rowid in bootstrap.values():
-        keep.add(rowid); rules.setdefault(rowid, 'first_claude_pass')                       # R4
+        keep.add(rowid)
+        rules.setdefault(rowid, 'first_claude_pass')                       # R4
     for group in (*old_billing.values(), *old_headroom.values()):
         newest = max(observed for observed, _ in group)
         for observed, rowid in group:
             if observed == newest:
-                keep.add(rowid); rules.setdefault(rowid, 'latest_older_claude_reading')     # R6, R9
+                keep.add(rowid)
+                rules.setdefault(rowid, 'latest_older_claude_reading')     # R6, R9
     return keep
 
 

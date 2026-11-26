@@ -147,7 +147,8 @@ class UpgradeCreatesRetentionIndexesTests(unittest.TestCase):
 
     @requirements('S14b-6')
     def test_learning_migrate_status_on_an_offline_schema_17_ledger_changes_nothing(self):
-        import subprocess, sys
+        import subprocess
+        import sys
         from tests.support import ORCHESTRATION_ROOT
         self.set_version(17)
         subprocess.run([sys.executable, str(ORCHESTRATION_ROOT / 'cli.py'), 'learning-migrate-project', '--status',
@@ -177,7 +178,8 @@ class UpgradeCreatesRetentionIndexesTests(unittest.TestCase):
 
     @requirements('S14b-6')
     def test_learning_migrate_that_performs_the_schema_step_creates_the_indexes(self):
-        import subprocess, sys
+        import subprocess
+        import sys
         from tests.support import ORCHESTRATION_ROOT
         with closing(sqlite3.connect(self.database)) as db:  # as a 0.8.67 ledger: B4t tables kept, version set back
             db.execute('PRAGMA user_version=17')

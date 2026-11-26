@@ -375,7 +375,6 @@ class JournalTests(unittest.TestCase):
 
     @requirements('RS-B-B4t-10')
     def test_journal_past_the_run_and_byte_limits_changes_nothing(self):
-        from codex_agents.takeover_journal import JournalError
         self.ops.runs = [run_entry(i) for i in range(1000)]
         result = self.takeover().run()
         self.assertEqual(64, len(result['runs']))
@@ -583,7 +582,8 @@ finally: owner.close()
             capture_output=True,text=True,timeout=30)
         self.assertEqual(0,made.returncode,made.stderr)
         self.data=json.loads((self.case/'manifest.json').read_bytes())
-        self.running=AttemptBinding(**self.data['running']);self.finished=self.running
+        self.running=AttemptBinding(**self.data['running'])
+        self.finished=self.running
         self.key=bytes.fromhex(self.data['key'])
         self.intent.update(project_id=self.data['project'],recorded_at_ms=self.data['now'],
                            runs=[dict(run_handle=self.running.run_handle,attempt=self.running.attempt,bridge_run_id=self.running.claim_id)])
@@ -629,7 +629,8 @@ finally:owner.close()
             authorizer=lambda offered,token:HistoryAuthorization(request.project_id,request.runtime_digest,
                 history_request_digest(offered),'host',frozenset({'history.takeover_report'})))
         before=self.store._connection.total_changes
-        with closing(service):reply=decode_history_response(service.handle(encode_history_request(request),object()),request)
+        with closing(service):
+            reply=decode_history_response(service.handle(encode_history_request(request),object()),request)
         self.assertEqual((1,0),(reply['records'][0]['runs_listed'],reply['records'][0]['runs_unlisted']))
         self.assertEqual(before,self.store._connection.total_changes)
 
@@ -641,7 +642,8 @@ finally:owner.close()
         journal=TakeoverJournal(self.case)
         intent=Operations(self.case).preflight()
         document=journal.create(intent,[run_entry(i) for i in range(70)])
-        for _ in range(4):document=journal.reconcile(document,[run_entry(i) for i in range(70)])
+        for _ in range(4):
+            document=journal.reconcile(document,[run_entry(i) for i in range(70)])
         self.assertEqual((64,6),(len(document['runs']),document['runs_unlisted']))
         self.intent.update(runs=document['runs'],runs_unlisted=document['runs_unlisted'])
         self.open()
@@ -946,7 +948,8 @@ finally:owner.close()
         from codex_agents.account_open_contracts import OpenError
         from codex_agents.learning_store import LearningLedger
         case=OriginalAccountOpenPendingTests(methodName='runTest')
-        case.setUp(); self.addCleanup(case.doCleanups)
+        case.setUp()
+        self.addCleanup(case.doCleanups)
         original,_=case.preflight()
         rows=case.pending()
         state=case.ledger.state
@@ -1398,13 +1401,17 @@ class ProcessProofTests(unittest.TestCase):
                     self.assertTrue(select.select([child.stdout],[],[],10)[0])
                     self.assertEqual('ready',child.stdout.readline().strip())
                     with mock.patch('os.kill',side_effect=AssertionError('unrelated holder signalled')):
-                        with self.assertRaises(TakeoverError) as caught:require_free_locks([path])
+                        with self.assertRaises(TakeoverError) as caught:
+                            require_free_locks([path])
                         self.assertEqual('predecessor_lock_inherited',caught.exception.code)
-                    child.stdin.close();child.stdin=None;child.communicate(timeout=5)
+                    child.stdin.close()
+                    child.stdin=None
+                    child.communicate(timeout=5)
                     self.assertEqual(0,child.returncode)
                     require_free_locks([path])
                 finally:
-                    if child.poll() is None:child.kill()
+                    if child.poll() is None:
+                        child.kill()
                     child.communicate(timeout=5)
 
 
@@ -1531,7 +1538,6 @@ class MigrationCutsTests(unittest.TestCase):
 
     @requirements('RS-B-B4t-10')
     def test_B4t_10_internal_T5_crash_cuts(self):
-        from tests.test_rsf_s3_resumable import open_owner
         for kind in ('account', 'project'):
             with self.subTest(kind=kind):
                 root = self.clone(kind)
@@ -1661,9 +1667,7 @@ class CollectorStopTests(unittest.TestCase):
 
     @requirements('RS-B-B4t-3')
     def test_B4t_3_collector_and_new_services_are_never_signalled(self):
-        from codex_agents.takeover_owner import OwnerOperations
         from codex_agents.orchestration_api import OrchestrationScope
-        from types import SimpleNamespace
         import signal
         identity = self.identity()
         old = dict(version='0.8.67',digest=A,entry='/old/project_host.py',directory='/runtime',
@@ -1806,7 +1810,8 @@ class AccountLineageTests(unittest.TestCase):
         self.addCleanup(lambda: child.kill() if child.poll() is None else None)
         self.addCleanup(lambda: child.communicate(timeout=5))
         self.assertEqual('ready',child.stdout.readline().strip())
-        root = self.case/'P'; root.mkdir()
+        root = self.case/'P'
+        root.mkdir()
         project_p = self.ledger.register_project(root)
         before = [tuple(r) for r in self.ledger._connection.execute('SELECT * FROM active_run_capacity WHERE project_id=?',(self.project,))]
         self.assertTrue(before)
@@ -1826,7 +1831,8 @@ class AccountLineageTests(unittest.TestCase):
         self.test_successor_lost_settlement_and_closure_find_the_original_claim_once()
         self.assertIsNotNone(self.ledger._connection.execute('SELECT released_at_ms FROM active_run_capacity '
             'WHERE project_id=?',(self.project,)).fetchone()[0])
-        child.stdin.close(); child.stdin=None
+        child.stdin.close()
+        child.stdin=None
         child.communicate(timeout=5)
 
     @requirements('RS-B-B4t-5', 'RS-B-B4t-9')
@@ -2163,7 +2169,8 @@ class OwnerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir='/tmp') as folder:
             root = Path(folder).resolve()
             project, other = root / 'project', root / 'other'
-            project.mkdir(); other.mkdir()
+            project.mkdir()
+            other.mkdir()
             state = LearningState(root / 'state')
             intent = Operations(state.root).preflight()
             intent['root_digest'] = keyed_digest(state.digest_key(), str(other))
@@ -2331,8 +2338,10 @@ class OwnerIntegrationTests(unittest.TestCase):
     @requirements('RS-B-B4t-0')
     def test_records_upgrade_approval_keeps_the_other_projects_warning_literal(self):
         from setup_wizard.flow import Wizard
-        wizard=Wizard.__new__(Wizard); wizard.t=mock.Mock()
-        wizard.choice_needed=mock.Mock(return_value=0);wizard.begin_step=mock.Mock()
+        wizard=Wizard.__new__(Wizard)
+        wizard.t=mock.Mock()
+        wizard.choice_needed=mock.Mock(return_value=0)
+        wizard.begin_step=mock.Mock()
         self.assertTrue(wizard.approve_ledger_upgrade())
         self.assertIn(mock.call('Every project on this machine shares these records. The update hands over this project\'s service. Other projects keep running. Their results cannot be recorded until you run this setup for each of them.'),wizard.t.list_sub.call_args_list)
 
@@ -2596,7 +2605,8 @@ class ChainedOutboxTests(unittest.TestCase):
             intact, control_ledger = self.owners(control,
                 dict(version=self.data['version'], digest=self.data['runtime_digest']), dict(version='0.8.68', digest=B), 3)
             baseline = takeover_report(intact)['refused_unverifiable']
-            intact.close(); control_ledger.close()
+            intact.close()
+            control_ledger.close()
             history, _ = self.owners(root, dict(version=self.data['version'], digest=self.data['runtime_digest']),
                                      dict(version='0.8.68', digest=B), 3)
             before = [tuple(r) for r in history._connection.execute('SELECT * FROM project_holds ORDER BY rowid')]
@@ -2747,7 +2757,8 @@ class ChainedOutboxTests(unittest.TestCase):
                 self.send(history, ledger, data['runs'][1], B)  # accepted; reply never recorded by B
                 releases = [tuple(r) for r in ledger._connection.execute(
                     'SELECT handle_digest,released_at_ms,release_digest FROM active_run_capacity ORDER BY handle_digest')]
-                history.close(); ledger.close()
+                history.close()
+                ledger.close()
             with self.build_identity(C, '0.8.69'):
                 history, ledger = self.owners(root, dict(version='0.8.68', digest=B), dict(version='0.8.69', digest=C), 4)
                 from codex_agents.project_takeover import takeover_report
@@ -2802,7 +2813,8 @@ class MemoryTakeoverTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix='b4t-memory-', dir='/tmp')
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = Path(cls.temp.name).resolve()
-        cls.archive = cls.root / 'old'; cls.archive.mkdir()
+        cls.archive = cls.root / 'old'
+        cls.archive.mkdir()
         packed = subprocess.run(['git', '-C', str(Path(__file__).parents[3]), 'archive', 'ce81bd96',
                                  'packages/codex-agents', 'scripts'],
                                  capture_output=True, check=True)
@@ -2822,9 +2834,11 @@ class MemoryTakeoverTests(unittest.TestCase):
         self.assertTrue(select.select([child.stdout], [], [], 10)[0])
         ready = child.stdout.readline().strip()
         if ready != self.fixture_mode + '-custody-ready':
-            child.kill(); _, error = child.communicate(timeout=5)
+            child.kill()
+            _, error = child.communicate(timeout=5)
             self.fail(ready + error)
-        child.kill(); child.communicate(timeout=5)
+        child.kill()
+        child.communicate(timeout=5)
         self.assertLess(child.returncode, 0)
         self.data = json.loads((self.case / 'manifest.json').read_bytes())
 
@@ -2902,8 +2916,8 @@ class RolloverTakeoverTests(unittest.TestCase):
 
     def replay(self, committed):
         from codex_agents.orchestration_api import (OrchestrationScope, OrchestrationRequest,
-            encode_orchestration_request, decode_orchestration_response, orchestration_request_digest)
-        from codex_agents.orchestration_service import OrchestrationService, OrchestrationAuthorization
+            encode_orchestration_request, decode_orchestration_response)
+        from codex_agents.orchestration_service import OrchestrationService
         from codex_agents.history_contracts import HistoryError
         with self.build_identity(B, '0.8.68'):
             history = self.open()
@@ -2981,7 +2995,6 @@ class AmendmentA1Tests(unittest.TestCase):
 
     @contextmanager
     def plan_case(self, *, busy=False, proof_error=True, held=False):
-        from types import SimpleNamespace
         from codex_agents import takeover_preflight as preflight
         from codex_agents.learning_store import LearningState
         from codex_agents.control_api import ControlScope
@@ -3041,7 +3054,7 @@ class AmendmentA1Tests(unittest.TestCase):
             plan = preflight.read_plan(state, project)
             self.assertEqual('hint', plan['report']['service_stop'])
             self.assertTrue(plan['needed'])
-            old = plan['intent']['predecessor_service']
+            _old = plan['intent']['predecessor_service']
             ops = OwnerOperations(state, Path('/cli'), project, lambda: plan['intent'])
             with mock.patch('codex_agents.takeover_owner.require_free_locks'), \
                     mock.patch('codex_agents.project_host_client._hinted_host', return_value=None), \
@@ -3171,7 +3184,8 @@ class AmendmentA1Tests(unittest.TestCase):
             with mock.patch('codex_agents.takeover_owner.require_free_locks'), \
                     mock.patch('codex_agents.project_host_client._hinted_host',return_value=None), \
                     mock.patch('codex_agents.takeover_owner.time.monotonic',side_effect=[0,31]):
-                with self.assertRaises(TakeoverError) as caught:ops.stop_service(intent)
+                with self.assertRaises(TakeoverError) as caught:
+                    ops.stop_service(intent)
                 self.assertEqual('service_still_finishing',caught.exception.code)
 
     @requirements('RS-B-B4t-3', 'RS-B-B4t-10')
@@ -3200,8 +3214,10 @@ class AmendmentA1Tests(unittest.TestCase):
         with self.plan_case() as (preflight,state,project):
             intent=preflight.read_plan(state,project)['intent']
             directory=Path(intent['predecessor_service']['directory'])
-            lock=directory/'hint.lock';lock.touch(mode=0o600)
-            fd=os.open(lock,os.O_RDWR); self.addCleanup(os.close,fd)
+            lock=directory/'hint.lock'
+            lock.touch(mode=0o600)
+            fd=os.open(lock,os.O_RDWR)
+            self.addCleanup(os.close,fd)
             fcntl.flock(fd,fcntl.LOCK_EX)
             ops=OwnerOperations(state,Path('/cli'),project,lambda:intent)
             with mock.patch('codex_agents.takeover_owner.time.monotonic',side_effect=[0,6]):
@@ -3209,7 +3225,8 @@ class AmendmentA1Tests(unittest.TestCase):
                     ops.withdraw_hint(intent)
                 self.assertEqual('service_stop_failed',caught.exception.code)
             state.runtime_lock.touch(mode=0o600,exist_ok=True)
-            owner_fd=os.open(state.runtime_lock,os.O_RDWR); self.addCleanup(os.close,owner_fd)
+            owner_fd=os.open(state.runtime_lock,os.O_RDWR)
+            self.addCleanup(os.close,owner_fd)
             fcntl.flock(owner_fd,fcntl.LOCK_EX)
             with mock.patch('codex_agents.takeover_owner.time.monotonic',side_effect=[0,21]):
                 with self.assertRaises(TakeoverError) as caught:
@@ -3246,7 +3263,11 @@ class AmendmentA1Tests(unittest.TestCase):
         from codex_agents.learning_store import LearningLedger,LearningState,LOCAL_TABLE_COLUMNS,OTHER_TABLE_COLUMNS
         from codex_agents.collector_client import PACKAGE_VERSION
         with tempfile.TemporaryDirectory(dir='/tmp') as folder:
-            root=Path(folder).resolve(); old=root/'old';old.mkdir(); project=root/'project';project.mkdir()
+            root=Path(folder).resolve()
+            old=root/'old'
+            old.mkdir()
+            project=root/'project'
+            project.mkdir()
             packed=subprocess.run(['git','-C',str(Path(__file__).parents[3]),'archive','227b0c5e',
                                    'packages/codex-agents/native-package'],capture_output=True)
             if packed.returncode:
@@ -3273,8 +3294,10 @@ class AmendmentA1Tests(unittest.TestCase):
         for raw in (b'/' + ('é'*2047).encode(), b'/' + ('😀'*1023).encode()+b'xx',
                     b'/' + b'\x01'*4094, b'/' + b'\xff'*4094):
             with self.subTest(path_bytes=len(raw)), tempfile.TemporaryDirectory(dir='/tmp') as folder:
-                root=Path(folder).resolve(); journal=TakeoverJournal(root)
-                intent=Operations(root).preflight();intent['prior_authorization']=b'x'*1024
+                root=Path(folder).resolve()
+                journal=TakeoverJournal(root)
+                intent=Operations(root).preflight()
+                intent['prior_authorization']=b'x'*1024
                 intent['predecessor_service'].update(entry=os.fsdecode(raw),directory=str(root),
                     project_endpoint=str(root/'p.sock'),pid=MAX_INTEGER,birth=str(MAX_INTEGER)+'.999999',stop_op=False,service_stop='signal',
                     scope=dict(project_id=intent['project_id'],runtime_digest=A,primary_session_id='a'*160,
@@ -3291,7 +3314,8 @@ class AmendmentA1Tests(unittest.TestCase):
                     self.assertLessEqual(journal.path.stat().st_size,16384)
                 self.assertEqual(raw,base64.b64decode(journal.read()['predecessor_service']['entry_b64']))
         with tempfile.TemporaryDirectory(dir='/tmp') as folder:
-            root=Path(folder).resolve();intent=Operations(root).preflight()
+            root=Path(folder).resolve()
+            intent=Operations(root).preflight()
             intent['predecessor_service']['entry']='/'+'x'*4095
             with self.assertRaises(JournalError):
                 TakeoverJournal(root).create(intent,[])
@@ -3303,7 +3327,8 @@ class AmendmentA1Tests(unittest.TestCase):
         from codex_agents.takeover_journal import TakeoverJournal,JournalError
         for change in (dict(unknown='x'),dict(pid=2**63),dict(birth='x'*33),dict(birth='\x01'*32),dict(version='١.١.١'),dict(service_generation=2**63)):
             with self.subTest(change=change), tempfile.TemporaryDirectory(dir='/tmp') as folder:
-                root=Path(folder).resolve();intent=Operations(root).preflight()
+                root=Path(folder).resolve()
+                intent=Operations(root).preflight()
                 intent['predecessor_service'].update(change)
                 with self.assertRaises(JournalError):
                     TakeoverJournal(root).create(intent,[])
@@ -3314,14 +3339,17 @@ class AmendmentA1Tests(unittest.TestCase):
     def test_later_stop_generation_and_stopped_count_have_fixed_integer_widths(self):
         from codex_agents.takeover_journal import TakeoverJournal,MAX_INTEGER,JournalError
         with tempfile.TemporaryDirectory(dir='/tmp') as folder:
-            root=Path(folder).resolve();journal=TakeoverJournal(root);intent=Operations(root).preflight()
+            root=Path(folder).resolve()
+            journal=TakeoverJournal(root)
+            intent=Operations(root).preflight()
             intent['predecessor_service']['stop_op']=True
             document=journal.create(intent,[run_entry(i) for i in range(64)])
             with self.subTest(field='future generation'):
                 self.assertEqual(MAX_INTEGER,json.loads(journal.widest(document))['predecessor_service']['service_generation'])
             with self.subTest(field='stopped count'):
                 document.update(runs_unlisted=MAX_INTEGER,stopped_children=MAX_INTEGER+1)
-                with self.assertRaises(JournalError):journal.write(document)
+                with self.assertRaises(JournalError):
+                    journal.write(document)
 
 
 
@@ -3434,8 +3462,13 @@ class NativeExecA1Tests(unittest.TestCase):
         replacement="import os,sys,signal,time;signal.signal(signal.SIGTERM,lambda *_:sys.exit(0));print('new '+str(os.getpid()),flush=True);time.sleep(60)"
         for before in (False,True):
             with self.subTest(exec_before_last_check=before),tempfile.TemporaryDirectory(dir='/tmp') as folder:
-                root=Path(folder).resolve();state=root/'state';state.mkdir(mode=0o700);project=root/'project';project.mkdir()
-                entry=root/'project_host.py';lock=state/'history.lock'
+                root=Path(folder).resolve()
+                state=root/'state'
+                state.mkdir(mode=0o700)
+                project=root/'project'
+                project.mkdir()
+                entry=root/'project_host.py'
+                lock=state/'history.lock'
                 entry.write_text("import os,sys,fcntl,time\nfrom pathlib import Path\n"
                     "fd=os.open(Path(sys.argv[2])/'history.lock',os.O_RDWR|os.O_CREAT,0o600)\n"
                     "fcntl.flock(fd,fcntl.LOCK_EX);os.set_inheritable(fd,True)\n"
@@ -3447,18 +3480,24 @@ class NativeExecA1Tests(unittest.TestCase):
                 try:
                     self.assertTrue(select.select([child.stdout],[],[],10)[0])
                     self.assertEqual('old '+str(child.pid),child.stdout.readline().strip())
-                    kernel=Kernel();pin=pin_predecessor(child.pid,entry=entry,state_root=state,project_root=project,kernel=kernel)
-                    with self.assertRaises(TakeoverError):require_free_locks([lock])
+                    kernel=Kernel()
+                    pin=pin_predecessor(child.pid,entry=entry,state_root=state,project_root=project,kernel=kernel)
+                    with self.assertRaises(TakeoverError):
+                        require_free_locks([lock])
                     def execute():
-                        child.stdin.write('exec\n');child.stdin.flush()
+                        child.stdin.write('exec\n')
+                        child.stdin.flush()
                         self.assertTrue(select.select([child.stdout],[],[],10)[0])
                         self.assertEqual('new '+str(child.pid),child.stdout.readline().strip())
-                        with self.assertRaises(TakeoverError):require_free_locks([lock])
-                    sent=[];real_send=kernel.send
+                        with self.assertRaises(TakeoverError):
+                            require_free_locks([lock])
+                    sent=[]
+                    real_send=kernel.send
                     if before:
                         execute()
                         with mock.patch.object(kernel,'send') as send:
-                            with self.assertRaises(TakeoverError):pin.stop()
+                            with self.assertRaises(TakeoverError):
+                                pin.stop()
                             send.assert_not_called()
                         pin=None
                     else:
@@ -3466,15 +3505,18 @@ class NativeExecA1Tests(unittest.TestCase):
                             execute()  # hook strictly after I4, before signal
                             sent.append(pid)
                             real_send(handle,pid,number)
-                        with mock.patch.object(kernel,'send',side_effect=send):pin.stop()
+                        with mock.patch.object(kernel,'send',side_effect=send):
+                            pin.stop()
                         pin=None
                         child.wait(timeout=5)
                         self.assertEqual(0,child.returncode)
                         self.assertEqual([child.pid],sent)
                         require_free_locks([lock])
                 finally:
-                    if pin is not None:pin.close()
-                    if child.poll() is None:child.kill()
+                    if pin is not None:
+                        pin.close()
+                    if child.poll() is None:
+                        child.kill()
                     child.communicate(timeout=5)
 
     @requirements('RS-B-B4t-3','RS-B-B4t-9')
@@ -3497,14 +3539,17 @@ class NativeExecA1Tests(unittest.TestCase):
                     for node in ast.walk(tree):
                         if isinstance(node,ast.ImportFrom) and (node.module or '').endswith('signature_process'):
                             self.assertFalse({alias.name for alias in node.names}&{'main','_verify'},str(path))
-                        if not isinstance(node,ast.Call):continue
+                        if not isinstance(node,ast.Call):
+                            continue
                         if isinstance(node.func,ast.Attribute) and isinstance(node.func.value,ast.Name) and node.func.value.id=='os' and node.func.attr.startswith('exec'):
                             parent=node
-                            while parent in parents and not isinstance(parent,ast.FunctionDef):parent=parents[parent]
+                            while parent in parents and not isinstance(parent,ast.FunctionDef):
+                                parent=parents[parent]
                             sites.add((path.name,getattr(parent,'name','<module>')))
                         if path.name=='signature_process.py' and isinstance(node.func,ast.Name) and node.func.id=='_verify':
                             parent=node
-                            while parent in parents and not isinstance(parent,ast.FunctionDef):parent=parents[parent]
+                            while parent in parents and not isinstance(parent,ast.FunctionDef):
+                                parent=parents[parent]
                             self.assertEqual('main',parent.name)
                 self.assertEqual({('cli.py','main'),('signature_process.py','_verify')},sites)
                 execution=(runtime/'codex_agents/signature_execution.py').read_text()

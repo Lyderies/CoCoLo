@@ -670,7 +670,7 @@ class AccountBillingAdmission:
                 raise ProbeAdmissionError('probe_conflict')
             identity_at = None if identity is None else identity['observed_at_ms']
             reuse_at = None if latest is None or yes_kind != 'reply' else latest['observed_at_ms']
-            yes = self._gate(reservation, snapshot, guard, final, kind=yes_kind, identity_at=identity_at,
+            _yes = self._gate(reservation, snapshot, guard, final, kind=yes_kind, identity_at=identity_at,
                              reuse_at=reuse_at, appended=appended, stack=signer_turn)
         self._pool.discard(handle)
         self._signatures.pop(reservation)

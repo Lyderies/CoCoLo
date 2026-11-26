@@ -284,7 +284,7 @@ class AccountBillingJobs:
                 self._owner.abort_reserved(original)
             reason = error.reason_code if isinstance(error, ProbeAdmissionError) else 'probe_unavailable'
             if not isinstance(error, ProbeAdmissionError):
-                lane_health.safely(lambda: self.health.note_failure(self._note, 'probe_rejudge_failed', error))
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_rejudge_failed', error))
             self._drop(ticket)
             return BillingJobReply(job.key, None, reason, job.before_publish, job.context)
 
@@ -658,7 +658,7 @@ class AccountBillingJobs:
                 result, reason = None, error.reason_code
             except Exception as error:
                 result, reason = None, 'probe_unavailable'
-                lane_health.safely(lambda: self.health.note_failure(self._note, 'probe_reply_read_failed', error))
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_reply_read_failed', error))
         reply = BillingJobReply(job.key, result, reason, job.before_publish, job.context, history, job.judgment)
         if job.state == 'ready':
             self._drop(ticket)

@@ -43,7 +43,7 @@ from codex_agents import account_billing_admission
 from codex_agents.account_api import AccountError
 from codex_agents.account_billing_admission import PROBE_REUSE_MS, ProbeAdmission, ProbeAdmissionError
 from codex_agents.admission_inputs import AdmissionInputPolicy
-from codex_agents.billing_probe_contracts import BillingProbeError, checked_billing_probe_reply
+from codex_agents.billing_probe_contracts import checked_billing_probe_reply
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.providers import claude_rate_limit_records
 from codex_agents.sql_read_budget import SQLReadError, SQLReadLimits

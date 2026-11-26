@@ -1,6 +1,5 @@
 """RSF-S2: real historical executable and paused/offline persistence owners."""
 import fcntl
-import json
 import os
 from pathlib import Path
 import select
