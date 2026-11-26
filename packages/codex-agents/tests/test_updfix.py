@@ -87,6 +87,9 @@ class UpdateCheckTests(unittest.TestCase):
 
     def test_UPDFIX_2_a_claimed_unreleased_run_is_a_child_that_may_be_running(self):
         self.claim()
+        # B4t A1.5 row 10: a held collector.lock whose holder does not answer health is `collector_unresponsive`.
+        # This fixture's own open ledger was such a holder; "no collector runs here" now means it is closed.
+        self.fixture.ledger.close()
         code, report, _ = self.run_check()
         self.assertEqual(0, code, report)
         self.assertIs(True, report["children_running"])
@@ -262,7 +265,8 @@ class UpdateCheckTests(unittest.TestCase):
                     ("no collector running", dict(health=down), False)):
                 with self.subTest(children=children, case=label):
                     report = self.decide(**kwargs)
-                    self.assertEqual((children, replace, children and replace),
+                    # B4t-0 (SW-3): `child_run_active` is no longer a refusal; the update takes over instead.
+                    self.assertEqual((children, replace, False),
                                      (report["children_running"], report["would_replace"], report["refused"]))
 
     def test_UPDFIX_2_the_check_changes_nothing(self):

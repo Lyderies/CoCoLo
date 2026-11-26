@@ -420,7 +420,9 @@ class AuthorityTests(unittest.TestCase):
         'history.orchestration_report', 'history.capacity_report', 'history.result_reference',
         'history.holds_report',
         # T7 S2 (L14.1): learning-status reads this project's orchestrations from its store (s2fix, assertions.md).
-        'history.orchestration_counts'})
+        'history.orchestration_counts',
+        # B4t (DESIGN-0.4.0-B4-takeover D2.9, D2.8, H4b): the one new read and the owner stop for an update.
+        'history.takeover_report', 'service.stop_for_update'})
 
     def test_operation_set_unchanged(self):
         self.assertEqual(self.OPERATIONS, history_api.HISTORY_OPERATIONS)

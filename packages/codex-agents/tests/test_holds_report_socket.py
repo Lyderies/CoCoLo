@@ -111,7 +111,8 @@ with mock.patch.object(cli, '_require_protected_runtime'), \\
             self.assertEqual(expected, value[name])
         for private in (unit.PROJECT_A, unit.PROJECT_B, 'PRIVATE', '.context-', '.result-', str(self.endpoint)):
             self.assertNotIn(private, json.dumps(value))
-        self.assertEqual(['history.holds_report'], [r['operation'] for r in self.requests])
+        # B4t D2.8: learning-status also reads the one new project read for its hand-over lines.
+        self.assertEqual(['history.holds_report', 'history.takeover_report'], [r['operation'] for r in self.requests])
 
 
 if __name__ == '__main__':

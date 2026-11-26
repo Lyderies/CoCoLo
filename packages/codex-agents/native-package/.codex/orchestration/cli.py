@@ -3051,8 +3051,10 @@ def main() -> int:
             from codex_agents.project_takeover import takeover_lines, journal_notice
             takeover = takeover_report_client(args.state_root, args.project_root, host_client=label)
             predecessor = None if takeover is None or not takeover['records'] else takeover['records'][0]['predecessor_version']
-            account = account_takeover_report_client(args.state_root, args.project_root, host_client=label,
-                                                     predecessor_version=predecessor)
+            # The account pages are read only for takeover_lines, which needs the project's own report: without it
+            # no extra account exchange is made, so the status account exchange stays exactly as on 0.8.67.
+            account = None if takeover is None else account_takeover_report_client(
+                args.state_root, args.project_root, host_client=label, predecessor_version=predecessor)
             notices = journal_notice(args.state_root, args.project_root)
             if takeover is not None:
                 notices.extend(takeover_lines(takeover, account=account))

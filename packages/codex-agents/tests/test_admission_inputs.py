@@ -137,7 +137,8 @@ class AdmissionInputOwnerTests(unittest.TestCase):
             captured.rows = ()
         self.assertEqual({"account.health", "account.project", "account.owner_key", "account.owner_public_key",
                           "account.open_host_run", "account.claim_launch", "account.capacity_status", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.lost_run_closure", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable", "account.record_rate_limit_event", "account.billing_probe", "account.withdraw_open", "account.provider_state_snapshot",
-                          "account.publish_wake"}, ACCOUNT_OPERATIONS)  # E2a; Approved: decision 170
+                          "account.publish_wake",
+                          "account.takeover_report"}, ACCOUNT_OPERATIONS)  # E2a; Approved: decision 170; B4t D2.8/D2.9
 
     def test_exact_field_and_row_quotas_refuse_before_raw_fetch(self):
         baseline = self.capture()

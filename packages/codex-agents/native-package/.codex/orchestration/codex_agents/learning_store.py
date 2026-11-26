@@ -3500,9 +3500,16 @@ class LearningLedger:
         if current > LEDGER_SCHEMA_VERSION:
             raise LedgerError('ledger schema is newer than this package')
         initial = current
-        if current < 18 and self._connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE name IN ('runtime_floor','runtime_lineage')").fetchone() is not None:
-            raise LedgerError('predecessor ledger schema is incompatible')
+        # A pre-18 ledger that already carries the B4t authority tables (a records
+        # copy whose user_version was set back) upgrades as on 0.8.67 (owner 129.3).
+        # Both tables must have the exact B4t layout; they are kept, never
+        # re-created, and their floor still binds (checked at every open and
+        # acquisition, and again by raise_floor at stage B below).
+        retained_authority = current < 18 and self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name IN ('runtime_floor','runtime_lineage')").fetchone() is not None
+        if retained_authority:
+            takeover_schema.check_layout(self._connection, takeover_schema.LEDGER_SCHEMA,
+                                         lambda: LedgerError('predecessor ledger schema is incompatible'))
         if current <= 17:
             _resume_predecessor_migration(self)
             current = self._connection.execute('PRAGMA user_version').fetchone()[0]
@@ -3510,9 +3517,10 @@ class LearningLedger:
             if not self._allow_schema_upgrade and initial not in (0, 16):
                 raise LedgerError('ledger schema upgrade requires owner authorization')
             with self._account_transaction():
-                takeover_schema.install(self._connection, takeover_schema.LEDGER_SCHEMA)
+                if not retained_authority:
+                    takeover_schema.install(self._connection, takeover_schema.LEDGER_SCHEMA)
                 takeover_schema.raise_floor(self._connection, PACKAGE_VERSION, lambda: LedgerError(FENCE_MESSAGE),
-                                            initialize=True)
+                                            initialize=not retained_authority)
                 self._adopt_runtime_lineage_locked()
                 self._initialize_run_holds_locked(target_version=18)
                 self._validate_current_ledger()
