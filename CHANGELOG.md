@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.68: batch of health holds, workspace checks, run retention (indexes in schema 18), usage install and test-speed changes (IP-B).
+
 - Package 0.8.67: one thread now owns all account-records access, fair and bounded; a child's temp folder that will not delete is retried in the background with a warning in status, and never blocks an update; long sessions roll over to a new orchestration automatically, staying paused if paused.
 
 - Package 0.8.66: the records cleanup no longer holds the account records lock for seconds when a backlog builds up (it works in small batches), and status, project health and open admission checks stay fast as history grows (LOCKHOLD).
