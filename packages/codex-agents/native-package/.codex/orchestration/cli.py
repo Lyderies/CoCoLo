@@ -124,7 +124,8 @@ from codex_agents.collector_paths import UNMOVED_STATE, CollectorPaths  # noqa: 
 from codex_agents.project_usage_report import DEFAULT_ROWS as USAGE_REPORT_ROWS  # noqa: E402
 from codex_agents.project_usage_report import UsageReportError, status_run_usage, usage_report  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
-    RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
+    RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResourceRefusal,
+    RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
     HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
     provider_state_snapshot_client, routing_evidence_client, owner_learning_client, orchestration_report_client, orchestration_counts_client, run_usage_client, capacity_report_client, holds_report_client, runtime_hint_path,
@@ -4744,6 +4745,12 @@ def main() -> int:
             error = ("the space for results is held by children still running in this project: "
                      "wait for them to finish, then dispatch again")
         _print({"ready": False, "error": error, "reason_code": exc.reason_code})
+        return 2
+    except RuntimeResourceRefusal as exc:
+        # S10 HM-6: no run was opened; the plain reason (folder, free and needed space, how to change the limit) is
+        # the error itself, never nested under a report that looks started.
+        _print({'ready': False, 'state': 'refused', 'error': exc.message, 'reason_code': exc.reason_code,
+                **({'settings_warning': exc.settings_warning} if exc.settings_warning else {})})
         return 2
     except RuntimeOpenError as exc:
         _print({'ready': False, 'error': 'host open unavailable', 'reason_code': exc.reason_code})

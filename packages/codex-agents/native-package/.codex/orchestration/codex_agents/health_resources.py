@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import shutil
@@ -80,13 +81,39 @@ def problems(workspace_root, state_root, settings, usage=None) -> tuple:
 _LIMITS = 'Free some space, or change disk_free_bytes / disk_free_percent in user-settings.json (see docs/configuration.md).'
 _SHORT_LIMITS = 'Free space, or change disk_free_bytes or disk_free_percent in user-settings.json.'
 _NAMES = {'workspace': 'workspace folder', 'state': 'state folder'}
+SETTINGS_TEXT = ('The file user-settings.json could not be read or has a value out of range; the default limits are in '
+                 'force. Fix it (see docs/configuration.md).')
 
 
-def _sentence(problem: DiskProblem, *, short=False) -> str:
+# The client takes a refusal message of at most this many printable characters (client_runtime._run_driver), in a
+# reply frame of 4 KiB with non-ASCII characters escaped; paths are cut in the middle to fit both.
+MAX_MESSAGE = 1_000
+MAX_MESSAGE_BYTES = 3_000
+REFUSAL_PATH = 300  # characters per path in a refusal (two at most)
+FINDING_PATH = 50   # characters per path in a status finding
+
+
+def _escaped(text: str) -> int:
+    return len(json.dumps(text, ensure_ascii=True)) - 2
+
+
+def safe_path(path, limit: int) -> str:
+    """A path as one printable line: unprintable characters become '?', and a long one keeps both ends."""
+    text = ''.join(c if c.isprintable() else '?' for c in str(path))
+    if len(text) <= limit and _escaped(text) <= limit * 3:
+        return text
+    head = max(1, (limit - 3) // 3)
+    tail = max(1, limit - 3 - head)
+    while _escaped(text[:head]) + _escaped(text[-tail:]) + 3 > limit * 3:
+        head, tail = max(1, head // 2), max(1, tail // 2)
+        if head == tail == 1:
+            break
+    return text[:head] + '...' + text[-tail:]
+
+
+def _sentence(problem: DiskProblem, *, short=False, limit=None) -> str:
     name = _NAMES[problem.label]
-    path = problem.path
-    if short and len(path) > 50:
-        path = path[:14] + '...' + path[-33:]
+    path = safe_path(problem.path, limit or (FINDING_PATH if short else REFUSAL_PATH))
     if problem.unreadable:
         return 'CoCoLo could not read the free space of the disk holding the %s (%s)' % (name, path)
     if short:
@@ -96,13 +123,32 @@ def _sentence(problem: DiskProblem, *, short=False) -> str:
             % (_amount(problem.free, problem.needed), name, path, _amount(problem.needed, problem.free)))
 
 
+def _fits(text: str, characters: int, escaped: int) -> bool:
+    return len(text) <= characters and _escaped(text) <= escaped
+
+
 def refusal(workspace_root, state_root, settings, usage=None) -> Refusal | None:
-    """None when new runs may start; else a plain reason naming each low folder."""
+    """None when new runs may start; else a plain reason naming each low folder, bounded for the client."""
     found = problems(workspace_root, state_root, settings, usage)
     if not found:
         return None
-    body = '; and '.join(_sentence(p) for p in found)
-    return Refusal('No new run was started: %s. %s' % (body, _LIMITS), found)
+    limit = REFUSAL_PATH
+    while True:
+        body = '; and '.join(_sentence(p, limit=limit) for p in found)
+        text = 'No new run was started: %s. %s' % (body, _LIMITS)
+        if _fits(text, MAX_MESSAGE, MAX_MESSAGE_BYTES) or limit <= 8:
+            return Refusal(text, found)
+        limit //= 2
+
+
+def finding_text(problem: DiskProblem) -> str:
+    """One status sentence within the finding bound, with the guidance kept whole."""
+    limit = FINDING_PATH
+    while True:
+        text = 'New runs are refused: %s. %s' % (_sentence(problem, short=True, limit=limit), _SHORT_LIMITS)
+        if len(text) <= MAX_TEXT or limit <= 8:
+            return text
+        limit //= 2
 
 
 def read_memory():
@@ -147,10 +193,11 @@ class ResourceCheck(Check):
     def run(self, context: CheckContext) -> Sequence[Finding]:
         settings = self._settings()
         found = []
+        if settings.warning is not None:  # The shared loader fell back to the defaults: say so (review r1 MED).
+            found.append(Finding(CHECK_NAME, 'machine', 'settings', 'reported', 'settings_invalid', SETTINGS_TEXT))
         for problem in problems(self.workspace_root, self.state_root, settings, self._usage):
             code = ('disk_unreadable_' if problem.unreadable else 'disk_low_') + problem.label
-            text = 'New runs are refused: %s. %s' % (_sentence(problem, short=True), _SHORT_LIMITS)
-            found.append(Finding(CHECK_NAME, 'machine', problem.label, 'reported', code, text[:MAX_TEXT]))
+            found.append(Finding(CHECK_NAME, 'machine', problem.label, 'reported', code, finding_text(problem)))
         low = memory_pressure(settings, self._memory)
         if low is not None:
             text = ('This computer is short of memory (%.1f of %.1f GiB available). Runs are not stopped, '

@@ -246,6 +246,62 @@ class ResourceTests(unittest.TestCase):
                             for f in found))
         self.assertIn('user-settings.json', found[0].text + found[1].text)
 
+    def delivered(self, text):
+        """The driver's reply for this refusal, as the client reads it (the real frame limits)."""
+        from codex_agents import client_runtime
+        from codex_agents.learning_contracts import canonical_json
+        reply = canonical_json({'protocol': 1, 'state': 'refused', 'reason_code': 'resource_low', 'message': text})
+        self.assertLessEqual(len(reply), 4_096)
+        with mock.patch.object(client_runtime, 'exchange_frame', return_value=reply):
+            return client_runtime._run_driver({}, '/x/control', 'run.register', 'hrn_' + 'a' * 48, 1, 'd' * 64, {},
+                                              timeout=1)['message']
+
+    @requirements('S10-HM6-4')
+    def test_long_and_unprintable_paths_never_lose_the_reason(self):
+        """Review r1 MED: paths are bounded and rendered safely, so the client never drops the reason."""
+        cases = {'long': Path('/' + 'a' * 3000 + '/end-of-path'),
+                 'newline': Path('/work/line\nbreak\tand\x1bcontrol\u2028sep'),
+                 'wide': Path('/' + '\U0001F600' * 900 + '/tail')}
+        low = (100 * GIB, GIB)
+        for name, folder in cases.items():
+            for unreadable in (False, True):
+                usage = (lambda path: (_ for _ in ()).throw(OSError('x'))) if unreadable else usage_for(
+                    {folder: low, STATE: low})
+                found = hr.refusal(folder, STATE, user_settings.UserSettings(), usage=usage)
+                text = found.text
+                self.assertLessEqual(len(text), 1_000, name)
+                self.assertTrue(text.isprintable(), name)
+                self.assertNotIn('\n', text)
+                for part in ('user-settings.json', 'disk_free_bytes', str(STATE)):
+                    self.assertIn(part, text, name)
+                self.assertEqual(text, self.delivered(text), name)
+                check = hr.ResourceCheck(folder, STATE, usage=usage, memory=lambda: None,
+                                         settings=lambda: user_settings.UserSettings())
+                findings = list(check.run(CheckContext(1e12, 1000, 60_000)))
+                self.assertEqual(2, len(findings), name)
+                for finding in findings:
+                    self.assertTrue(finding.text.isprintable())
+                    self.assertIn('user-settings.json', finding.text, name)
+        text = hr.refusal(cases['long'], STATE, user_settings.UserSettings(), usage=usage_for(
+            {cases['long']: low, STATE: (100 * GIB, 50 * GIB)})).text
+        self.assertIn('/aaaa', text)
+        self.assertIn('end-of-path', text)  # the middle is shortened, both ends stay
+
+    @requirements('S10-HM6-5')
+    def test_invalid_settings_file_is_reported_to_status(self):
+        """Review r1 MED: the shared loader's warning reaches status; defaults stay in force."""
+        healthy = both((100 * GIB, 50 * GIB), (100 * GIB, 50 * GIB))
+        context = CheckContext(1e12, 1000, 60_000)
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as state:
+            check = hr.ResourceCheck(WORKSPACE, state, usage=healthy, memory=lambda: None)
+            self.assertEqual([], list(check.run(context)))
+            (Path(state) / user_settings.FILENAME).write_text(json.dumps({'disk_free_percent': 0}))
+            found = list(check.run(context))
+            self.assertEqual(['settings_invalid'], [f.reason_code for f in found])
+            self.assertEqual('reported', found[0].outcome)
+            self.assertIn('user-settings.json', found[0].text)
+            self.assertIn('default', found[0].text)
+
     @requirements('S10-HM6-8')
     def test_import_does_no_io(self):
         code = ('import builtins, shutil, os\n'

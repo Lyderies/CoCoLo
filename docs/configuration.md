@@ -119,7 +119,10 @@ all user limits. S10 uses `disk_free_bytes` (default 2 GiB, minimum 1 MiB) and
 on the workspace folder or on the account state folder is below the larger of the
 two (2 GiB on disks under 40 GiB, 5% above). The refusal says which folder, how
 much is free and needed, and how to change the limit; if the free space cannot be
-read the run is also refused. Low disks are also shown in the status warning list.
+read the run is also refused. The check happens before anything is recorded for the
+run; the open command then exits with an error that gives the reason. Low disks are also
+shown in the status warning list, and so is an invalid settings file (the open command's
+reply also carries `settings_warning` while the defaults are in force).
 The VM disk joins in S19. `memory_available_percent` (default 10, range 1-99)
 only reports memory pressure in status; it never refuses a run. S35 will use
 `no_merge_warning_ms` (default 5,400,000 ms = 1.5 h, minimum 60,000 ms) for the

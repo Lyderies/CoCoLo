@@ -429,5 +429,6 @@
  "codex:tests.test_b4t_native_audit_p66": "scenario",
  "codex:tests.test_b4t_native_audit_v34": "scenario",
  "codex:tests.test_s14b_upgrade_indexes": "scenario",
- "codex:tests.test_health_resources": "scenario"
+ "codex:tests.test_health_resources": "scenario",
+ "codex:tests.test_health_resources_open": "scenario"
 }

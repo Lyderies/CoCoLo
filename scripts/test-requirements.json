@@ -4948,19 +4948,25 @@
    "codex:tests.test_health_resources.ResourceTests.test_driver_refuses_before_any_state_exists",
    "codex:tests.test_health_resources.ResourceTests.test_driver_retry_of_registered_run_is_not_rechecked",
    "codex:tests.test_health_resources.ResourceTests.test_just_below_amounts_are_distinguishable",
+   "codex:tests.test_health_resources.ResourceTests.test_long_and_unprintable_paths_never_lose_the_reason",
    "codex:tests.test_health_resources.ResourceTests.test_reason_code_is_registered_and_the_client_reply_carries_the_text",
-   "codex:tests.test_health_resources.ResourceTests.test_refusal_is_plain_and_complete"
+   "codex:tests.test_health_resources.ResourceTests.test_refusal_is_plain_and_complete",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_disk_filling_between_admission_and_registration_never_reports_success",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_identical_retry_of_a_registered_open_is_not_probed_again",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_low_disk_open_is_refused_before_any_account_or_run_write"
   ],
   "source": "tests/requirements/s10.json#S10-HM6-4",
-  "statement": "A refused run gives a plain reason naming the folder, free and needed amounts and how to change the limit, before any run state exists."
+  "statement": "A refused run gives a plain reason naming the folder, free and needed amounts and how to change the limit, before any account or run write, and is never reported as started."
  },
  "S10-HM6-5": {
   "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_invalid_settings_file_is_reported_to_status",
    "codex:tests.test_health_resources.ResourceTests.test_out_of_range_values_are_refused",
-   "codex:tests.test_health_resources.ResourceTests.test_settings_file_overrides_limits"
+   "codex:tests.test_health_resources.ResourceTests.test_settings_file_overrides_limits",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_out_of_range_settings_use_defaults_and_the_open_says_so"
   ],
   "source": "tests/requirements/s10.json#S10-HM6-5",
-  "statement": "Limits come from the shared user-settings file; overrides work and out-of-range values are refused."
+  "statement": "Limits come from the shared user-settings file; overrides work and out-of-range values are refused with a visible warning."
  },
  "S10-HM6-6": {
   "checks": [
