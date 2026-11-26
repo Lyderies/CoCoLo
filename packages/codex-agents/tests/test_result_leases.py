@@ -134,6 +134,27 @@ class ResultLeaseTests(unittest.TestCase):
         self.assertEqual("expired", self.store.release_unsent_result_lease(lease_binding(2)).state)
         self.reserve(3)  # The released body space is free again.
 
+    def test_retained_finished_leases_never_bound_live_capacity_reads_or_admission(self):
+        """S15-O0C-P3 (0.3.4 R1d, RS-B-B6-2 decision 210): MAX_LEASE_ROWS bounds the work of verifying the live
+        leases, not retained history. Finished (withdrawn-unsent) lease rows kept until their purge must neither
+        make the live counts unreadable nor refuse a later run; a live lease past them is still charged."""
+        from codex_agents import project_history
+        baseline = self.store._result_counts()
+        with mock.patch.object(project_history, "MAX_LEASE_ROWS", 2):
+            for number in range(1, 5):
+                self.reserve(number)
+                self.assertEqual("expired", self.store.release_unsent_result_lease(lease_binding(number)).state)
+                self.assertEqual(baseline, self.store._result_counts())
+            self.assertEqual(4, self.store._connection.execute("SELECT COUNT(*) FROM result_leases").fetchone()[0])
+            self.reserve(5)  # Admission is not refused by the four retained finished rows.
+            entries, charged, written = self.store._result_counts()
+            self.assertEqual((baseline[0] + 1, baseline[1] + 1, baseline[2]), (entries, charged, written))
+            # The live lease's sealed state still decides: a label alone frees nothing.
+            self.store._connection.execute("UPDATE result_leases SET state='expired' WHERE run_handle=?",
+                                           (lease_binding(5).run_handle,))
+            with self.assertRaisesRegex(HistoryError, "history_incompatible"):
+                self.store._result_counts()
+
     def test_a_lease_is_never_released_once_its_claim_may_have_been_sent(self):
         self.reserve()
         self.store.arm_result_lease(lease_binding())

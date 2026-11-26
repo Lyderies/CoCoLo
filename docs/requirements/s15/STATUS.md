@@ -1,4 +1,34 @@
-# S15 status — STOP: P3 lease verification overflow
+# S15 status — P3 fixed (2026-11-26); matrix and strict guard still open
+
+## P3 fix (lease x failed_before_launch past the verification limit)
+
+- Root cause: `ProjectHistory._result_counts()` verified EVERY `result_leases` row (live or finished) and
+  refused `history_result_capacity` past `MAX_LEASE_ROWS`. Admission checks before its insert, so it admitted
+  row MAX_LEASE_ROWS + 1; finished (withdrawn-unsent) rows stay until the purge (closed orchestration +
+  deadline + 1 h grace), so every later capacity read and admission failed until then.
+- Requirement: 0.3.4 R1d (DESIGN-0.3.4-result-capacity.md:39-43: the lease-row check "exists to bound the
+  work of verifying every lease, not to limit results"; live leases count against the 64 live entries) and
+  the decided B6 pattern RS-B-B6-2 / decision 210 (docs/requirements/b6.md:119-123: held leases found by
+  verified identities, "bounded by the live leases (MAX_LEASE_ROWS), not by retained history"). No conflict.
+- Fix (project_history.py `_result_counts`): verify only live leases: rows in state reserved/claim_pending
+  (lease_expiry index) UNION rows named by held lease register rows (project_holds_kind_due), each set bounded
+  by MAX_LEASE_ROWS, each row verified by its seal. A live lease relabelled finished keeps its held register
+  row, so its seal still refuses it (`history_incompatible`); a held register row with no lease row refuses.
+- Tests red -> green: `tests.test_s15_lease_churn` (S15-O0C-P3 witness, unchanged) and new
+  `tests.test_result_leases...test_retained_finished_leases_never_bound_live_capacity_reads_or_admission`
+  (4 finished rows at limit 2, a 5th admitted and charged, relabel refused).
+- Registry: lifetime_caps.json `project_history.py::_result_counts` checks 2 -> 3, ends text updated
+  (assertions.md). Strict guard unchanged at 361 missing `test` bindings (pre-existing S15 work).
+- Named modules (parallel_tests, jobs 2), metadata_errors [], budget_failures []: batch 1 (s15 x4, guard,
+  result_leases, result_persistence, project_history, project_results, hold_lifecycle, b6_unattended_close,
+  deadlines_retention) 26.9 s; batch 2 (result_lifetime, history_service_upgrade, record_context,
+  open_request_lifetime, project_orchestration, b7b_recovery, b7b_terminal, refusal_steps, holds_report,
+  retirement_sweep, rsd_runtime_close, publication_replay) 40.2 s. Only failures: the known strict-guard red
+  (test_lifetime_cap_guard and test_holds_report B7_3, both the 361 missing bindings, same as base).
+- Runtime file changed: the primary re-records the runtime digest / bumps the version at batch time.
+
+## Earlier stop record (historical)
+
 
 2026-11-26, branch `feat/s15-fault-matrix`, base `88822538`.
 Changes remain uncommitted as requested. No product code changed and no sockets

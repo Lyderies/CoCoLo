@@ -1377,8 +1377,8 @@
    "ends": "RS-D S2 (2026-11-24): a read-only COUNT of update-closed orchestration tombstones (project_holds kind orchestration, release closed), not a limit; nothing is refused by it. The counted tombstones are bounded like every hold tombstone, one per orchestration ever closed. Hold tombstones are kept for good (an identity is taken once, RS-B R2/S4) and no pass purges them; decision 131's partial indexes purge nothing, they keep the retirement and unattended-close selections from visiting expired reservations and released rows (B6 review r1 correction)"
   },
   "project_history.py::_result_counts": {
-   "checks": 2,
-   "ends": "Live charges end at unsent lease release, authenticated settlement, or result retirement; the ordinary purge removes finished lease source rows after the closed orchestration and deadline plus crash grace. S15-P3 exposes that this verification scan still counts retained finished leases, admits MAX_LEASE_ROWS + 1, then refuses live-capacity reads.",
+   "checks": 3,
+   "ends": "Live charges end at unsent lease release, authenticated settlement, or result retirement; the ordinary purge removes finished lease source rows after the closed orchestration and deadline plus crash grace. S15-O0C-P3 (fixed): the verification scan reads only live leases (live state and held lease register rows, each bounded by MAX_LEASE_ROWS), never retained finished rows (three checks: the two bounded reads and their MAX_LEASE_ROWS bound), so finished leases kept until their purge neither refuse admission nor make live-capacity reads fail; live leases stay bounded far below it by the 64 live entries.",
    "test": "test_failed_before_launch_past_lease_verification_limit_keeps_live_counts_readable"
   },
   "project_history.py::_result_file_info": {

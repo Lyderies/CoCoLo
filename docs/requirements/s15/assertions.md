@@ -62,3 +62,11 @@
 - New P3 test remains RED at the live-capacity read after the third successful
   reserve/release/replay cycle. No expected error was substituted for its
   baseline-count assertion. No product fix was made.
+
+## P3 fix: lifetime_caps.json registry entry (not a test assertion)
+
+- `project_history.py::_result_counts` `"checks": 2` -> `"checks": 3`: the function now has two bounded reads
+  (live leases, held lease register rows) and their MAX_LEASE_ROWS check, replacing one all-rows read and its check.
+- Its `ends` text "S15-P3 exposes ... admits MAX_LEASE_ROWS + 1, then refuses live-capacity reads" -> the fixed
+  behaviour (only live leases verified). `test` binding unchanged. No test assertion changed or removed; the S15
+  churn witness is unchanged and now green.
