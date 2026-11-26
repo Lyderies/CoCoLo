@@ -54,3 +54,16 @@ b. S10 `test_account_original_open.test_M11_refused_registration_retries_...`: o
    `register.call_count == 2` is unchanged. Green.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+## IP-C: live reply produces history.run_usage partial_reason (S44A-2)
+
+Finding: `codex:tests.test_reply_shape_live` (soak) failed on 0.8.68 and on the batch: optional field
+`history.run_usage.partial_reason` was never produced by a real reply (red: both A/B runs in
+docs/batch-0869-reply-shape-live-ab.md, 673 s / 633 s).
+Fix (test only, no product hook, no exemption): new driver test
+`HoldsProtocolTests.test_S44A_2_live_service_reply_carries_partial_reason_when_its_deadline_passes` in
+tests/test_holds_report.py (already a reply_shape_live driver). It drives a real HistoryService.handle through the
+real HistoryClient.run_usage with the existing `RUN_USAGE_SECONDS=-1` / `RUN_USAGE_PROGRESS=1` seams, so the live
+suite records a real reply carrying `partial_reason`. No existing assertion changed.
+Green: soak `test_reply_shape_live` 5 tests, failed_units [], metadata_errors [], 638.9 s. Normal profile
+test_s44a_usage_install, test_usage_report, test_reply_shape_compatibility, test_holds_report: 67 tests, pass.

@@ -429,6 +429,26 @@ class HoldsProtocolTests(dr.LeaseBackedFixture):
             self.assertEqual({'results', 'results_in_flight', 'orchestrations', 'cleanup_reservations',
                               'operational_qa', 'qa_check_receipts'}, set(client.capacity_report()))
 
+    def test_S44A_2_live_service_reply_carries_partial_reason_when_its_deadline_passes(self):
+        # LR-1 (reply_shape_live) needs a real HistoryService reply to history.run_usage that carries the optional
+        # partial_reason: the service's own 1 s work bound is replaced by an already-passed one (the module's existing
+        # RUN_USAGE_SECONDS seam, no product hook), and the reply goes through the real handle() and client decoder.
+        from codex_agents import project_usage_report as usage
+
+        def authorize(request, token):
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request),
+                                        'host', frozenset({'history.run_usage'})) if token is TOKEN else None
+        service = HistoryService(self.store.project_id, RUNTIME, lambda: self.store, authorizer=authorize,
+                                 close_history=False)
+        self.addCleanup(service.close)
+        client = HistoryClient(self.fixture.directory / 'unused.sock', PROJECT_A, RUNTIME, timeout=2)
+        with mock.patch.object(usage, 'RUN_USAGE_SECONDS', -1.0), mock.patch.object(usage, 'RUN_USAGE_PROGRESS', 1), \
+             mock.patch('codex_agents.history_api.exchange_frame', side_effect=lambda endpoint, raw, **opts:
+                        service.handle(raw, TOKEN)):
+            reply = client.run_usage()
+        self.assertTrue(reply['truncated'])
+        self.assertIn('unknown', reply['partial_reason'])
+
     def test_B7_6_wrong_project_runtime_and_scope_are_refused(self):
         for request in (command(project=PROJECT_B), command(runtime='b' * 64)):
             with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
