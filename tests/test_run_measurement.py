@@ -10,6 +10,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -18,9 +19,44 @@ from test_framework import requirements
 RUNNER = ROOT / 'scripts' / 'run_measurement.py'
 WHY = ('The runner is a process supervisor; its caps are proven only by real child processes, '
        'and no product service, ledger or provider is involved.')
-DIRECT = re.compile(r'(python[0-9.]*|\$PY|"\$PY"|\bPY)\b[^|\n]*\bmeasure_[A-Za-z0-9_]+\.py')
+INTERP = r'(?:python[0-9.]*|\$PY|"\$PY"|\bPY)'
+MEASURE = r'measure_[A-Za-z0-9_]+'
+DIRECT_FORMS = (
+    re.compile(INTERP + r'\b[^|\n]*\b' + MEASURE + r'\.py'),
+    re.compile(INTERP + r'\b[^|\n]*\s-m\s+[\w.]*' + MEASURE + r'\b'),
+    re.compile(r'(?:^|[\s`"\'(])\./[\w./-]*' + MEASURE + r'\.py'),
+    re.compile(r'\[[^\]\n]*' + MEASURE + r'\.py'),               # subprocess argument lists
+    re.compile(r'\bsubprocess\.\w+\([^\n]*' + MEASURE + r'\b'),
+)
+RUNNER_AS_PROGRAM = (
+    re.compile(INTERP + r'(?:\s+-\S+)*\s+[\w./$"-]*run_measurement\.py\b'),
+    re.compile(r'\[[^\]\n]*run_measurement\.py[^\]\n]*' + MEASURE),
+)
 SCAN_ROOTS = ('docs', 'scripts', 'packages/*/scripts')
 SCAN_SUFFIXES = {'.md', '.py', '.sh', '.txt', '.yml', '.yaml'}
+
+
+def invokes_directly(text):
+    """True when text runs a measure script other than as the argument of scripts/run_measurement.py."""
+    for part in re.split(r'&&|\|\||;|\|', text):
+        if any(form.search(part) for form in DIRECT_FORMS) and not any(form.search(part) for form in RUNNER_AS_PROGRAM):
+            return True
+    return False
+
+
+def command_texts(path):
+    """The lines to test: every line of code files; only fenced blocks and `inline code` of Markdown prose."""
+    fenced = False
+    for number, line in enumerate(path.read_text(errors='replace').splitlines(), 1):
+        if path.suffix != '.md':
+            yield number, line
+        elif line.strip().startswith('```'):
+            fenced = not fenced
+        elif fenced:
+            yield number, line
+        else:
+            for span in re.findall(r'`([^`]+)`', line):
+                yield number, span
 
 
 def measure_scripts():
@@ -137,8 +173,9 @@ class RunnerCapTests(RunnerCase):
         refused = self.run_runner(over)
         self.assertEqual(2, refused.returncode)
         self.assertIn('decision', refused.stderr + refused.stdout)
-        approved = self.fake('pass\n', header='MEASUREMENT_BUDGET = {"wall_seconds": 901, "decision": 371}\n')
-        self.assertEqual(0, self.run_runner(approved).returncode)
+        selfish = self.fake('pass\n', header='MEASUREMENT_BUDGET = {"wall_seconds": 901, "decision": 371}\n')
+        self.assertEqual(2, self.run_runner(selfish).returncode)
+        self.assertEqual(0, self.run_runner(selfish, '--approve-decision', '371').returncode)
 
     @requirements('S14D-1', why_not_scenario=WHY)
     def test_the_script_is_not_imported_or_executed_to_read_its_budget(self):
@@ -146,6 +183,113 @@ class RunnerCapTests(RunnerCase):
         script = self.fake(f'open({str(marker)!r}, "w").write("x")\n', header='MEASUREMENT_BUDGET = {"wall_seconds": 1000}\n')
         self.assertEqual(2, self.run_runner(script).returncode)
         self.assertFalse(marker.exists())
+
+
+class RunnerReviewTests(RunnerCase):
+    def grandchild_body(self, marker, parent_sleep):
+        return ('import subprocess\np = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)\n'
+                f'open({str(marker)!r}, "w").write(str(p.pid))\ntime.sleep({parent_sleep})\n')
+
+    def assertDies(self, pid):
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+        os.kill(pid, signal.SIGKILL)
+        self.fail('a descendant survived the runner')
+
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_data_written_outside_the_data_dir_is_a_volume_breach(self):
+        outside = self.dir / 'elsewhere.bin'
+        body = (f'f = open({str(outside)!r}, "wb")\nf.write(b"x" * (40 * 1048576))\nf.flush()\nos.fsync(f.fileno())\ntime.sleep(20)\n')
+        done = self.run_runner(self.fake(body), '--max-data-mib', '3', '--wall', '60')
+        self.assertEqual(3, done.returncode, done.stdout + done.stderr)
+        self.assertLess(done.elapsed, 20)
+        self.assertIn('outside the data directory', done.stdout)
+
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_a_setsid_grandchild_is_found_killed_after_the_child_exits(self):
+        marker = self.dir / 'gc.pid'
+        done = self.run_runner(self.fake(self.grandchild_body(marker, 1.5)), '--wall', '30')
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertDies(int(marker.read_text()))
+
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_a_setsid_grandchild_is_killed_on_a_breach(self):
+        marker = self.dir / 'gc.pid'
+        done = self.run_runner(self.fake(self.grandchild_body(marker, 60)), '--wall', '2')
+        self.assertEqual(3, done.returncode)
+        self.assertDies(int(marker.read_text()))
+
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_data_written_and_gone_between_polls_is_still_a_breach(self):
+        body = 'open(os.path.join(out, "a"), "wb").write(b"x" * (6 * 1048576))\n'
+        done = self.run_runner(self.fake(body), '--max-data-mib', '3')
+        self.assertEqual(3, done.returncode, done.stdout + done.stderr)
+        self.assertIn('generated data', done.stdout)
+        self.assertEqual([], self.leftovers())
+
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_a_short_memory_spike_is_a_breach_after_exit(self):
+        body = 'block = bytearray(b"y" * (120 * 1048576))\n'
+        done = self.run_runner(self.fake(body), '--max-rss-mib', '60')
+        self.assertEqual(3, done.returncode, done.stdout + done.stderr)
+        self.assertIn('memory', done.stdout)
+
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_a_ps_failure_is_an_error_not_zero_memory(self):
+        empty = self.dir / 'nobin'
+        empty.mkdir()
+        self.env['PATH'] = str(empty)
+        done = self.run_runner(self.fake('time.sleep(5)\n'))
+        self.assertEqual(4, done.returncode, done.stdout + done.stderr)
+        self.assertIn('ps', done.stderr)
+        self.assertEqual([], self.leftovers())
+
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_hard_maxima_and_odd_numbers(self):
+        script = self.fake('pass\n')
+        for flags in (('--max-data-mib', '4097'), ('--max-rss-mib', '6145'), ('--wall', 'inf'), ('--wall', 'nan'),
+                      ('--max-data-mib', '-5'), ('--max-rss-mib', '0')):
+            self.assertEqual(2, self.run_runner(script, *flags).returncode, flags)
+        self.assertEqual(0, self.run_runner(script, '--max-data-mib', '4097', '--approve-decision', '371').returncode)
+        for key in ('data_mib', 'rss_mib'):
+            over = self.fake('pass\n', header='MEASUREMENT_BUDGET = {"%s": 99999, "decision": 1}\n' % key)
+            self.assertEqual(2, self.run_runner(over).returncode)
+        weird = self.fake('pass\n', header='MEASUREMENT_BUDGET = {"wall_seconds": 1e999}\n')
+        self.assertEqual(2, self.run_runner(weird).returncode)
+
+    @requirements('S14D-2', why_not_scenario=WHY)
+    def test_an_unreadable_subdirectory_is_still_deleted(self):
+        body = 'd = os.path.join(out, "locked")\nos.mkdir(d)\nopen(os.path.join(d, "f"), "w").write("x")\nos.chmod(d, 0)\n'
+        done = self.run_runner(self.fake(body))
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([], self.leftovers())
+
+    @requirements('S14D-2', why_not_scenario=WHY)
+    def test_launch_failure_and_deletion_failure_are_reported_and_clean_up(self):
+        import run_measurement
+        script = self.fake('pass\n')
+        with mock.patch.object(tempfile, 'tempdir', str(self.dir)), \
+                mock.patch.object(run_measurement.subprocess, 'Popen', side_effect=OSError('no exec')):
+            self.assertEqual(4, run_measurement.main([str(script)]))
+        self.assertEqual([], self.leftovers())
+        with mock.patch.object(tempfile, 'tempdir', str(self.dir)), \
+                mock.patch.object(run_measurement, 'delete_tree', return_value=False):
+            self.assertEqual(4, run_measurement.main([str(script)]))
+        for name in self.leftovers():
+            __import__('shutil').rmtree(self.dir / name)
+
+    @requirements('S14D-1', why_not_scenario=WHY)
+    def test_the_directory_walk_is_bounded(self):
+        import run_measurement
+        for number in range(300):
+            (self.dir / f'f{number}').write_text('x')
+        total, complete = run_measurement.tree_bytes(self.dir, 0)
+        self.assertFalse(complete)
+        self.assertTrue(run_measurement.tree_bytes(self.dir, 30)[1])
 
 
 class RunnerCleanupTests(RunnerCase):
@@ -212,9 +356,10 @@ class RegistryTests(unittest.TestCase):
     def test_the_registry_rule_rejects_bad_declarations(self):
         import run_measurement
         for bad in ({'wall_seconds': 901}, {'wall_seconds': 0}, {'data_mib': -1}, {'rss_mib': 'big'},
-                    {'wall_seconds': 901, 'decision': 'x'}, {'unknown': 1}, {'wall_seconds': True}):
+                    {'wall_seconds': 901, 'decision': 371}, {'data_mib': 4097}, {'rss_mib': 6145, 'decision': 1},
+                    {'wall_seconds': float('inf')}, {'data_mib': 1.5}, {'unknown': 1}, {'wall_seconds': True}):
             self.assertTrue(run_measurement.budget_errors(bad), bad)
-        for good in ({}, {'wall_seconds': 900}, {'wall_seconds': 901, 'decision': 371}, {'data_mib': 512, 'rss_mib': 1024}):
+        for good in ({}, {'wall_seconds': 900}, {'wall_seconds': 900, 'decision': 371}, {'data_mib': 4096, 'rss_mib': 1024}):
             self.assertEqual([], run_measurement.budget_errors(good), good)
 
 
@@ -230,17 +375,42 @@ class DirectInvocationTests(unittest.TestCase):
     def test_no_doc_or_script_invokes_a_measure_script_directly(self):
         found = []
         for path in self.files():
-            for number, line in enumerate(path.read_text(errors='replace').splitlines(), 1):
-                if DIRECT.search(line) and 'run_measurement.py' not in line:
-                    found.append(f'{path.relative_to(ROOT)}:{number}: {line.strip()[:120]}')
+            for number, text in command_texts(path):
+                if invokes_directly(text):
+                    found.append(f'{path.relative_to(ROOT)}:{number}: {text.strip()[:120]}')
         self.assertEqual([], found, 'invoke measure_*.py through scripts/run_measurement.py')
 
     @requirements('S14D-4', why_not_scenario=WHY)
-    def test_the_direct_invocation_pattern_catches_the_known_forms(self):
+    def test_the_scanner_catches_every_known_direct_form(self):
         for line in ('$PY -B scripts/measure_x.py --out a', '    python -B scripts/measure_s13.py [--n 1]',
-                     'TMPDIR=/tmp/x "$PY" -B scripts/measure_lockhold.py', 'PYTHONPATH=../../scripts $PY -B scripts/measure_s14_admission_day.py'):
-            self.assertTrue(DIRECT.search(line), line)
-        self.assertFalse(DIRECT.search('Measurement code: `packages/codex-agents/scripts/measure_s13.py` (suite scale)'))
+                     'TMPDIR=/tmp/x "$PY" -B scripts/measure_lockhold.py', 'PYTHONPATH=../../scripts $PY -B scripts/measure_s14_admission_day.py',
+                     'python -m scripts.measure_x --out a', '$PY -B -m packages.measure_y',
+                     'subprocess.run([sys.executable, "scripts/measure_x.py"])', 'cmd = [sys.executable, "-B", "x/measure_x.py"]',
+                     './scripts/measure_x.py --out a', 'subprocess.run(cmd + ["measure_x"])',
+                     '$PY scripts/run_measurement.py && $PY -B scripts/measure_x.py'):
+            self.assertTrue(invokes_directly(line), line)
+
+    @requirements('S14D-4', why_not_scenario=WHY)
+    def test_only_a_real_runner_invocation_is_exempt(self):
+        for line in ('$PY -B scripts/run_measurement.py scripts/measure_x.py --out a',
+                     'python -B scripts/run_measurement.py --wall 60 packages/x/scripts/measure_x.py --',
+                     'subprocess.run([sys.executable, "-B", "scripts/run_measurement.py", "scripts/measure_x.py"])'):
+            self.assertFalse(invokes_directly(line), line)
+        self.assertTrue(invokes_directly('# see run_measurement.py. $PY -B scripts/measure_x.py'))
+
+    @requirements('S14D-4', why_not_scenario=WHY)
+    def test_prose_only_counts_inside_code(self):
+        path = Path(tempfile.mkdtemp()) / 'a.md'
+        self.addCleanup(lambda: path.parent.exists() and __import__('shutil').rmtree(path.parent))
+        path.write_text('We ran python scripts to measure_x.py results.\n`$PY -B scripts/measure_x.py`\n```\n$PY -B scripts/measure_y.py\n```\n')
+        hits = [number for number, text in command_texts(path) if invokes_directly(text)]
+        self.assertEqual([2, 4], hits)
+
+    @requirements('S14D-4', why_not_scenario=WHY)
+    def test_a_measure_script_never_writes_outside_the_runner_dir_by_name(self):
+        for path in measure_scripts():
+            text = path.read_text()
+            self.assertNotRegex(text, r'["\'](/private)?/tmp[/"\']', f'{path.name} names /tmp; use TMPDIR or MEASUREMENT_OUTPUT_DIR')
 
 
 if __name__ == '__main__':

@@ -5229,7 +5229,15 @@
    "root:test_run_measurement.RunnerCapTests.test_the_script_is_not_imported_or_executed_to_read_its_budget",
    "root:test_run_measurement.RunnerCapTests.test_the_whole_process_group_is_killed_and_nothing_else",
    "root:test_run_measurement.RunnerCapTests.test_wall_clock_cap_kills_and_says_plainly",
-   "root:test_run_measurement.RunnerCapTests.test_wall_clock_hard_maximum_needs_a_decision_number"
+   "root:test_run_measurement.RunnerCapTests.test_wall_clock_hard_maximum_needs_a_decision_number",
+   "root:test_run_measurement.RunnerReviewTests.test_a_ps_failure_is_an_error_not_zero_memory",
+   "root:test_run_measurement.RunnerReviewTests.test_a_setsid_grandchild_is_found_killed_after_the_child_exits",
+   "root:test_run_measurement.RunnerReviewTests.test_a_setsid_grandchild_is_killed_on_a_breach",
+   "root:test_run_measurement.RunnerReviewTests.test_a_short_memory_spike_is_a_breach_after_exit",
+   "root:test_run_measurement.RunnerReviewTests.test_data_written_and_gone_between_polls_is_still_a_breach",
+   "root:test_run_measurement.RunnerReviewTests.test_data_written_outside_the_data_dir_is_a_volume_breach",
+   "root:test_run_measurement.RunnerReviewTests.test_hard_maxima_and_odd_numbers",
+   "root:test_run_measurement.RunnerReviewTests.test_the_directory_walk_is_bounded"
   ],
   "source": "tests/requirements/s14d.json#S14D-1",
   "statement": "scripts/run_measurement.py runs one measurement script as a child with enforced caps (wall clock default 300 s, declared override, hard maximum 900 s without --approve-decision N; generated data under its own output dir, default 1 GiB; peak RSS default 3 GiB); on a breach it kills only the process group it started, deletes the data, prints one plain line and exits non-zero."
@@ -5240,7 +5248,9 @@
    "root:test_run_measurement.RunnerCleanupTests.test_a_failing_script_returns_its_status_and_still_deletes_the_data",
    "root:test_run_measurement.RunnerCleanupTests.test_keep_leaves_the_data_and_names_it",
    "root:test_run_measurement.RunnerCleanupTests.test_success_reports_bytes_and_deletes_the_data",
-   "root:test_run_measurement.RunnerCleanupTests.test_the_child_writes_its_temporary_files_into_the_output_dir"
+   "root:test_run_measurement.RunnerCleanupTests.test_the_child_writes_its_temporary_files_into_the_output_dir",
+   "root:test_run_measurement.RunnerReviewTests.test_an_unreadable_subdirectory_is_still_deleted",
+   "root:test_run_measurement.RunnerReviewTests.test_launch_failure_and_deletion_failure_are_reported_and_clean_up"
   ],
   "source": "tests/requirements/s14d.json#S14D-2",
   "statement": "The runner always deletes the generated-data dir at the end (success or failure) unless --keep is given, and reports bytes written."
@@ -5255,8 +5265,11 @@
  },
  "S14D-4": {
   "checks": [
+   "root:test_run_measurement.DirectInvocationTests.test_a_measure_script_never_writes_outside_the_runner_dir_by_name",
    "root:test_run_measurement.DirectInvocationTests.test_no_doc_or_script_invokes_a_measure_script_directly",
-   "root:test_run_measurement.DirectInvocationTests.test_the_direct_invocation_pattern_catches_the_known_forms"
+   "root:test_run_measurement.DirectInvocationTests.test_only_a_real_runner_invocation_is_exempt",
+   "root:test_run_measurement.DirectInvocationTests.test_prose_only_counts_inside_code",
+   "root:test_run_measurement.DirectInvocationTests.test_the_scanner_catches_every_known_direct_form"
   ],
   "source": "tests/requirements/s14d.json#S14D-4",
   "statement": "A test fails if any doc, brief or script in docs/, scripts/ or packages/*/scripts invokes a measure_*.py directly instead of through run_measurement.py."

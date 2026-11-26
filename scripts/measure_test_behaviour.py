@@ -176,7 +176,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     parser.add_argument("--suite", action="append", choices=sorted(SUITES))
     args = parser.parse_args()
-    scratch = Path(tempfile.mkdtemp(prefix="measure", dir="/private/tmp" if sys.platform == "darwin" else None))
+    scratch = Path(tempfile.mkdtemp(prefix="measure", dir=os.environ.get("MEASUREMENT_OUTPUT_DIR")))
     work = [(suite, module) for suite in (args.suite or sorted(SUITES)) for module in sorted(discover(suite))]
     started = time.monotonic()
     with ThreadPoolExecutor(args.jobs) as pool:
