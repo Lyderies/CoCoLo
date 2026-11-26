@@ -142,7 +142,8 @@ def live_ledger_custody(db, now):
         'SELECT i.runtime_digest FROM launch_inputs i JOIN host_run_bindings h '
         'ON h.project_id=i.project_id AND h.handle_digest=i.handle_digest '
         'WHERE h.expires_at_ms>=? OR EXISTS(SELECT 1 FROM run_holds r '
-        "WHERE r.project_id=i.project_id AND r.identity=i.handle_digest AND r.state<>'released')", (cutoff,)))
+        "WHERE r.project_id=i.project_id AND r.kind IN ('run_slot','binding') "
+        "AND r.identity=i.handle_digest AND r.state<>'released')", (cutoff,)))
     return digests
 
 
