@@ -313,9 +313,10 @@ class LearningSourceImageTests(unittest.TestCase):
         pages = []
         original = image._page
         def observe(*args):
-            rows = original(*args)
+            result = original(*args)
+            rows = result[0]  # _page returns (rows, encoded bytes) since 0f1cc213; assertions unchanged
             pages.append((args[4], len(rows), sum(len(canonical_json(r)) for r in rows)))
-            return rows
+            return result
         with mock.patch.object(image, '_page', side_effect=observe):
             result = self.capture()
         self.assertEqual(71, dict(result['counts'])['stored_files'])
