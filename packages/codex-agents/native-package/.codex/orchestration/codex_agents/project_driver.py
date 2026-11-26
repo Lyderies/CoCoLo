@@ -152,6 +152,8 @@ def _wall_ms():
 FENCE_RETRY_SECONDS = 1.0
 FENCE_RETRY_MAX_SECONDS = 300.0
 MAX_FENCE_ATTEMPTS = 10
+# UH-3 (decision 367): runs this service learnt the takeover left unverified; the durable record stays the authority.
+MAX_UNVERIFIED_KNOWN = 64
 # B4s confirming check: `settled` journal entries checked against the project store, remembered at most this many
 # (past it only those of the current pass stay; a forgotten one is checked once more, harmlessly).
 MAX_SETTLED_CHECKED = 1024
@@ -2240,8 +2242,8 @@ class RunDriver:
                         if entry['state'] == 'stop_failed':
                             stops.add(handle)
                         if adopted or (instance != journal.instance and not own):
-                            if recovery is not None:
-                                recovering.append(entry)
+                            if recovery is not None and entry['bridge_run_id'] not in self._unverified_known:
+                                recovering.append(entry)  # UH-3: a run learnt unverified is not recovered again
                             continue
                         if instance != journal.instance or not self._own_container_gone(entry):
                             continue
@@ -2255,7 +2257,7 @@ class RunDriver:
                     elif tree_state(entry) != 'gone':
                         process_pending.add(handle)
                         continue
-                    if entry['bridge_run_id'] in self._unverified_settlements:
+                    if entry['bridge_run_id'] in self._unverified_known:
                         continue  # UH-3: the update left this hold unverified; it stays unchanged, never retried here
                     try:
                         reply = self._settle_entry(entry)
@@ -2264,8 +2266,8 @@ class RunDriver:
                             unreachable.add(handle)
                         continue
                     except HistoryError as error:
-                        if error.reason_code == 'history_conflict' and self._takeover_unverified(entry):
-                            self._unverified_settlements = self._unverified_settlements | {entry['bridge_run_id']}
+                        if error.reason_code == 'history_conflict':
+                            self._takeover_unverified(entry)
                         continue
                     except Exception:
                         continue  # A local failure is not evidence that the account is unreachable.
@@ -2318,16 +2320,32 @@ class RunDriver:
             if call is not None:
                 call.recovery_unreachable = None
 
-    _unverified_settlements = frozenset()
+    _unverified_known = ()
 
     def _takeover_unverified(self, entry):
-        """UH-3 (decision 366): after a `history_conflict`, is this run's hold one the update takeover left unverified
-        (A1: unchanged, never released)? Any failure to ask is 'no': the settlement is tried again as before."""
+        """UH-3 (decisions 366/367): after a `history_conflict`, does the store's durable record (written by the
+        takeover's adoption) say this run's hold was left unverified (A1: unchanged, never released)? A yes is kept in
+        a small memory, capped at MAX_UNVERIFIED_KNOWN, oldest first out; the store stays the authority, so after a
+        restart or an eviction one more refused attempt (local, no account request) learns it again. Any failure to
+        ask is 'no': the settlement is tried again as before."""
         try:
-            return self._settlement_step('takeover_unverified', entry['run_handle'], entry['attempt'],
-                                         entry['bridge_run_id']) is True
+            found = self._settlement_step('takeover_unverified', entry['run_handle'], entry['attempt'],
+                                          entry['bridge_run_id']) is True
         except Exception:
             return False
+        if found and entry['bridge_run_id'] not in self._unverified_known:
+            self._unverified_known = (*self._unverified_known, entry['bridge_run_id'])[-MAX_UNVERIFIED_KNOWN:]
+        return found
+
+    def _settle_recovered(self, entry):
+        """Container recovery's settlement (C4): the same `_settle_entry`; a conflict for a run the store records
+        unverified is learnt here too, so the next sweep no longer hands that run to recovery (UH-3)."""
+        try:
+            return self._settle_entry(entry)
+        except HistoryError as error:
+            if error.reason_code == 'history_conflict' and entry.get('bridge_run_id') is not None:
+                self._takeover_unverified(entry)
+            raise
 
     def _settle_intent(self, entry, claimed):
         """Sweep thread, B4s r1 HIGH 3 (decision 146): a stopped instance's process intent with no later entry.
@@ -2423,7 +2441,7 @@ class RunDriver:
         if self._recovery is None:
             self._recovery = ContainerRecovery(
                 self._containers, self._journal, fence=lambda entry: self._fence_entry(entry),
-                settle=lambda entry: self._settle_entry(entry),
+                settle=lambda entry: self._settle_recovered(entry),
                 remove_workspace=lambda workspace: self._remove_workspace(workspace), clock=self._clock)
         return self._recovery
 

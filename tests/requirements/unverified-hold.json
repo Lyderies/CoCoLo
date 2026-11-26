@@ -1,10 +1,12 @@
 {
  "authority": "docs/requirements/unverified-hold.md",
  "requirements": [
-  {"id": "UH-1", "statement": "A project hold the update takeover left unverified (releasing, no takeover obligation row, run listed in an adopted takeover journal) is not reported as hold_overdue.", "source": "tests/requirements/unverified-hold.json#UH-1"},
+  {"id": "UH-1", "statement": "A project hold the update takeover recorded as unverified at adoption (a releasing lease/reservation hold whose takeover_obligations row carries the unverified marker) is not reported as hold_overdue.", "source": "tests/requirements/unverified-hold.json#UH-1"},
   {"id": "UH-2", "statement": "Such a hold is reported as its own plain finding, hold_unverified_takeover, once per project, saying it is harmless, takes no run slot, will not clear by itself and needs nothing.", "source": "tests/requirements/unverified-hold.json#UH-2"},
-  {"id": "UH-3", "statement": "The driver stops retrying settlement of a run whose hold the takeover left unverified: it is identified once, remembered, and never attempted again by that service, with no release or account change.", "source": "tests/requirements/unverified-hold.json#UH-3"},
+  {"id": "UH-3", "statement": "The driver stops retrying settlement of a run the store records as left unverified by the takeover, on the lost-run sweep and the container recovery path: learnt from the durable record after a history_conflict (also after a restart), kept in a capped memory, with no release or account change; a conflict for any other run is still retried.", "source": "tests/requirements/unverified-hold.json#UH-3"},
   {"id": "UH-4", "statement": "docs/troubleshooting.md Update hand-over explains in plain words the run an update left counted because its records could not be checked.", "source": "tests/requirements/unverified-hold.json#UH-4"},
-  {"id": "UH-5", "statement": "Verified takeover rows and genuinely overdue holds behave exactly as before.", "source": "tests/requirements/unverified-hold.json#UH-5"}
+  {"id": "UH-5", "statement": "Verified takeover rows, a run still held at adoption that later goes releasing, and genuinely overdue holds behave exactly as before (never taken for unverified).", "source": "tests/requirements/unverified-hold.json#UH-5"},
+  {"id": "UH-6", "statement": "The takeover records each releasing hold it refuses as unverifiable as a durable fact in the same adoption transaction (an additive takeover_obligations row, no schema change); the fact survives journal completion, maintenance, restarts and copies of the store, and is kept and pruned under the A1 obligation retention.", "source": "tests/requirements/unverified-hold.json#UH-6"},
+  {"id": "UH-7", "statement": "The unverified-hold health finding reads live holds only through the live partial index: its work does not grow with released history (1k vs 100k released rows) and it completes within the health deadline.", "source": "tests/requirements/unverified-hold.json#UH-7"}
  ]
 }

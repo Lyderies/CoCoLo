@@ -411,6 +411,36 @@ class ConfirmFixSweepTests(unittest.TestCase):
             self.driver._settle_lost(False)
         self.assertEqual(3, len(attempts))
 
+    @requirements('UH-3')
+    def test_UH_3_what_this_service_remembers_of_unverified_runs_is_capped(self):
+        """Review r1 MED (decision 367): the durable marker is the authority; the service keeps at most a capped
+        memory of runs it learnt are unverified, however many stopped runs conflict."""
+        from codex_agents.launch_journal import LaunchJournal
+        from tests.test_launch_journal import claimed
+        earlier = LaunchJournal(self.base / 'launches-earlier')
+        runs = ['brg_' + f'{n:032x}' for n in range(1, 11)]
+        for bridge in runs:
+            claimed(earlier, bridge)
+        earlier.release()
+        self.journal.release()
+        journal = LaunchJournal(self.base / 'launches-earlier')
+        self.addCleanup(journal.release)
+        self.driver._journal = journal
+        self.driver._remove_workspace = lambda workspace: True
+
+        def settle(item):
+            raise project_driver.HistoryError('history_conflict')
+        self.driver._settle_entry = settle
+        self.driver._settlement_step = lambda operation, *arguments, **options: True
+        with mock.patch.object(project_driver, 'MAX_UNVERIFIED_KNOWN', 4, create=True):
+            for _ in range(3):
+                self.driver._settle_lost(False)
+        remembered = [value for value in vars(self.driver).values()
+                      if isinstance(value, (set, frozenset, tuple, list, dict))
+                      and any(isinstance(item, str) and item in runs for item in value)]
+        self.assertTrue(remembered)
+        self.assertLessEqual(max(len(value) for value in remembered), 4)
+
     def scratch(self):
         from codex_agents import bridge
         patcher = mock.patch.object(bridge, 'WORKSPACE_PARENT', str(self.base / 'scratch'))

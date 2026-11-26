@@ -234,9 +234,11 @@ class HoldsCheck(Check):
         if overdue:
             findings.append(_finding(project_id, 'hold_overdue',
                                      'A held resource is more than one sweep late for its next check; the supervisor must act.'))
+        # UH-7 (decision 367): live holds only, through the live partial index; released history is never read.
         unverified = connection.execute(
-            'SELECT 1 FROM project_holds h WHERE h.project_id=? AND ' + unverified_hold_condition('h') + ' LIMIT 1',
-            (project_id,)).fetchone()
+            "SELECT 1 FROM project_holds h INDEXED BY project_holds_kind_due WHERE h.state<>'released' "
+            "AND h.kind IN ('lease','reservation') AND h.project_id=? AND " + unverified_hold_condition('h')
+            + ' LIMIT 1', (project_id,)).fetchone()
         if unverified:
             findings.append(_finding(project_id, 'hold_unverified_takeover', UNVERIFIED_TEXT))
         return findings
