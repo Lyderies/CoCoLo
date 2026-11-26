@@ -361,7 +361,6 @@ class ProjectServiceStartupTests(unittest.TestCase):
         fresh root of its own and runs the real holds check there, on that root's own ledger owner."""
         import shutil
         import sqlite3
-        from codex_agents.health_holds import HoldsCheck
         from codex_agents.ledger_owner import LedgerOwner
         from codex_agents.project_service import history_directory
         copy = Path(tempfile.mkdtemp(dir=TEMP_ROOT))
@@ -392,7 +391,6 @@ class ProjectServiceStartupTests(unittest.TestCase):
         owner = LedgerOwner(state)
         try:
             server = CollectorServer(owner.client)
-            server.health_monitor.register(HoldsCheck(state, sweep_interval_seconds=60))
             worker = threading.Thread(target=server._run_health_pass)
             worker.start()
             end = time.monotonic() + 5
@@ -404,7 +402,7 @@ class ProjectServiceStartupTests(unittest.TestCase):
         finally:
             owner.close()
         self.assertEqual(expected, 'service_writer_fault' in [f['reason_code'] for f in view['findings']], view)
-        self.assertIn('finding(s) to look at' if expected else 'no findings', view['summary'])
+                        self.assertIn('finding(s) to look at' if expected else 'no findings', view['summary'])
 
     @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes and the unmodified CLI; '
                                                'the lifecycle check L15.1 also counts the ledger rows table by table.')

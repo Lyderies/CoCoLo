@@ -262,3 +262,16 @@ Both registrations are done (IP-B 0.8.68), tests first (red on 506f6d1a, green a
   and have no debt entry. Classified load-related, unconfirmed.
 - Retire notices: test_container_stop, test_session_guard now within layer budget.
 - Only action needed: the test_project_service_startup regression (primary/builder to fix; no fix made here).
+
+## Final IP-B pass: memholds merge and test_project_service_startup (decision after 5cd6edd8)
+- Merged fix/ipb-memholds-bound f282d69a (HM2A-11 bounded pending read) into merge/batch-0868 (a9fba888, no conflicts).
+- tests/test_project_service_startup.py, assert_service_health_fault: OLD `from codex_agents.health_holds import HoldsCheck` and
+  `server.health_monitor.register(HoldsCheck(state, sweep_interval_seconds=60))` -> NEW both removed (the product registers the
+  check via HealthMonitor.register_state_checks in LearningStore). Every assertion kept.
+- Result: the ValueError is gone and the holds check now runs from the product registration (first pass reports
+  service_writer_fault/holds as expected). BUT both HM3 tests still fail on the second observation: `assertIn('no findings')`
+  gets 17 `owner_unknown` findings from the S11 workspaces check. That check (registered by the same wiring) scans the real
+  per-user scratch container (host_scratch_base()/codex-agents-scratch, shared by every agent run on the machine) for
+  prepare-* folders, and finds other runs' leftover folders. Classification: ENVIRONMENTAL / test isolation gap (the test
+  does not point bridge.WORKSPACE_PARENT at a private directory). Not fixed here; decision needed (isolate the container in
+  the test, or filter the view to the holds check).
