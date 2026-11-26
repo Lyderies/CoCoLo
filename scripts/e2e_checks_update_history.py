@@ -50,7 +50,7 @@ def fault_patches() -> list:
 
 def trusted_git() -> str:
     found = subprocess.run(["/bin/bash", str(e2e_support.SETUP), "--print-git"], capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, env=e2e_support.child_environment(os.environ)).stdout.strip()
+                           stdin=subprocess.DEVNULL, env=e2e_support.setup_environment()).stdout.strip()
     if not found.startswith("/"):
         raise e2e_support.HarnessError("no trusted git")
     return found
