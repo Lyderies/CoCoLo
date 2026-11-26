@@ -3555,7 +3555,11 @@
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_resumed_classification_keeps_original_wall_and_monotonic_evidence"
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_resumed_classification_keeps_original_wall_and_monotonic_evidence",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_project_kill.ResumableProjectKillTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_project_last.ResumableProjectLastTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically"
   ],
   "source": "tests/requirements/rsf-s3.json#RSF-S3-1",
   "statement": "**RSF-S3-1 \u2014 Durable bounded progress.** Adopt historical account slots,\nbindings and probes, and project leases, reservations, contexts, custody and\norchestrations by class, seeking a durable source cursor. Each adoption batch visits at\nmost 64 source rows. Its writes and cursor commit together. Resume skips\ncommitted batches and retries an uncommitted batch. A migration whose entire\nadoption fits in 64 source rows may retain one atomic transaction. Freeze\nclassification time across resumptions. Historical records remain upgradeable.\nThe first transaction's legacy backfills for account ledgers below 17 and the\nfinal transaction's account release-due sweep and full account/project validators\nare **not batch-bounded**. These transactions are atomic and idempotent on resume;\nthe 64-row bound applies to adoption, not to the entire upgrade."
@@ -3565,7 +3569,10 @@
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished"
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
+   "codex:tests.test_rsf_s3_resumable_project_kill.ResumableProjectKillTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically"
   ],
   "source": "tests/requirements/rsf-s3.json#RSF-S3-2",
   "statement": "**RSF-S3-2 \u2014 Fence every batch.** Retain S2's lifetime writer lock and claim\nthe runtime_takeover epoch before adoption. Check ownership and epoch at each\nbatch transaction and commit. A dead owner releases its lock; a successor\nclaims a fresh epoch. Revocation must roll back the pending batch and cursor.\nPreserve the authorization and verified backup gates on the original upgrade.\nExercise a real successor process after SIGKILL, assert its epoch increments on\nresume, and prove a retained stale owner cannot commit adoption rows and cursor."
@@ -3579,7 +3586,11 @@
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_resume_refuses_missing_kept_before_copy_without_writes",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished"
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_project_kill.ResumableProjectKillTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_project_last.ResumableProjectLastTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically"
   ],
   "source": "tests/requirements/rsf-s3.json#RSF-S3-3",
   "statement": "**RSF-S3-3 \u2014 Validate before exposure.** Pending migration metadata prevents\nordinary startup from serving a partial register. Only an explicitly authorized\nowner may resume it. Before the first durable batch, install the existing\ntarget version to exclude old executables. This version is an exclusion fence,\nnot publication: remove the pending marker only with successful register,\ncustody and schema validation. Keep the original project pre-upgrade copy\nthrough an interrupted migration. A failure before the first checkpoint keeps\nthe existing rollback behavior; after it, retain progress for retry.\nPending refusals give the plain next step and `Run: ./setup.sh --update`.\nReset the connection's temporary migration context even if adoption or validation\nraises. Before resuming a project, require the kept before-copy named by the\noriginal attempt marker; refuse plainly if that recovery copy is missing."
@@ -3592,7 +3603,12 @@
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_resumed_classification_keeps_original_wall_and_monotonic_evidence",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished"
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
+   "codex:tests.test_rsf_s3_resumable_project_kill.ResumableProjectKillTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_project_last.ResumableProjectLastTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically"
   ],
   "source": "tests/requirements/rsf-s3.json#RSF-S3-4",
   "statement": "**RSF-S3-4 \u2014 Process-death equivalence.** Use real subprocesses and SIGKILL\nimmediately before and after a batch commit, including a second interruption\nafter resume, the last short batch / `done=1` commit for every class, and the\npublication commit containing progress-table removal after full validation.\nReopen twice and compare all historical identities, row counts,\nsigned/sealed bytes and adopted rows against an uninterrupted upgrade from\nthe same source. Verify durable cursors at the kill boundary, class coverage,\nbounded batches, failed validation and revoked ownership."
@@ -3602,7 +3618,11 @@
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically"
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_project_kill.ResumableProjectKillTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable_project_last.ResumableProjectLastTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically"
   ],
   "source": "tests/requirements/rsf-s3.json#RSF-S3-5",
   "statement": "**RSF-S3-5 \u2014 Stable final formats.** Reuse ledger 17 and project 22. Temporary\nprogress metadata exists only during migration and disappears atomically on\npublication; no permanent schema step, VERSION or runtime catalogue bump is\nneeded. Keep progress out of backups and source images by withholding the\nowner until validation. Exercise the source-image reader and named copy,\nbackup, restore, move and record-enumeration modules. Register scenario tests\nand prove `metadata_errors: []`. Record evidence and limitations in\n[STATUS.md](rsf-s3/STATUS.md); pair any existing assertion edits in\n[assertions.md](rsf-s3/assertions.md)."
@@ -5105,6 +5125,7 @@
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewCoreTests.test_A8b_local_measurement_never_requires_retirement_only_ci_evidence_does",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
@@ -5143,6 +5164,7 @@
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewCoreTests.test_A8b_local_measurement_never_requires_retirement_only_ci_evidence_does",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-16",
@@ -5391,6 +5413,7 @@
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewCoreTests.test_A8b_local_measurement_never_requires_retirement_only_ci_evidence_does",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
@@ -5411,6 +5434,7 @@
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewCoreTests.test_A8b_local_measurement_never_requires_retirement_only_ci_evidence_does",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
@@ -5460,6 +5484,7 @@
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewCoreTests.test_A8b_local_measurement_never_requires_retirement_only_ci_evidence_does",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
@@ -5487,6 +5512,7 @@
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewCoreTests.test_A8b_local_measurement_never_requires_retirement_only_ci_evidence_does",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
    "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
    "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
@@ -5506,6 +5532,7 @@
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewCoreTests.test_A8b_local_measurement_never_requires_retirement_only_ci_evidence_does",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",

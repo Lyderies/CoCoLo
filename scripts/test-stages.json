@@ -457,5 +457,8 @@
  "codex:tests.test_learning_cli_records": "integration",
  "codex:tests.test_learning_cli_keys_upgrade": "integration",
  "codex:tests.test_b4t_takeover_store": "integration",
- "codex:tests.test_b4t_takeover_owner": "integration"
+ "codex:tests.test_b4t_takeover_owner": "integration",
+ "codex:tests.test_rsf_s3_resumable_project_kill": "integration",
+ "codex:tests.test_rsf_s3_resumable_project_last": "integration",
+ "codex:tests.test_rsf_s3_resumable_account": "integration"
 }

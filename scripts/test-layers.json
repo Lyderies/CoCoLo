@@ -457,5 +457,8 @@
  "codex:tests.test_learning_cli_records": "scenario",
  "codex:tests.test_learning_cli_keys_upgrade": "scenario",
  "codex:tests.test_b4t_takeover_store": "scenario",
- "codex:tests.test_b4t_takeover_owner": "scenario"
+ "codex:tests.test_b4t_takeover_owner": "scenario",
+ "codex:tests.test_rsf_s3_resumable_project_kill": "scenario",
+ "codex:tests.test_rsf_s3_resumable_project_last": "scenario",
+ "codex:tests.test_rsf_s3_resumable_account": "scenario"
 }

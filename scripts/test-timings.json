@@ -2417,7 +2417,7 @@
  "codex:tests.test_routing_risk": 0.95,
  "codex:tests.test_rsf_s2_fence": 5.0,
  "codex:tests.test_rsf_s2_regressions": 2.0,
- "codex:tests.test_rsf_s3_resumable": 15.0,
+ "codex:tests.test_rsf_s3_resumable": 3.5,
  "codex:tests.test_rsf_s6_classify": 8.0,
  "codex:tests.test_run_driver_retries": 0.16,
  "codex:tests.test_run_holds": 46.88,
@@ -3210,5 +3210,8 @@
  "codex:tests.test_learning_cli_records": 18.48,
  "codex:tests.test_learning_cli_keys_upgrade": 13.23,
  "codex:tests.test_b4t_takeover_store": 10.77,
- "codex:tests.test_b4t_takeover_owner": 2.24
+ "codex:tests.test_b4t_takeover_owner": 2.24,
+ "codex:tests.test_rsf_s3_resumable_project_kill": 4.1,
+ "codex:tests.test_rsf_s3_resumable_project_last": 3.8,
+ "codex:tests.test_rsf_s3_resumable_account": 5.6
 }
