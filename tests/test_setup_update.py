@@ -20,6 +20,8 @@ REGISTERED = {"FAKE_REGISTER": '{"ready": true, "state_moved": null}'}
 
 
 class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
+    shared_pycache = True  # TESTSPEED-2 (as test_setup_straight): one bytecode cache for the interpreters the wizard starts
+
     def installed(self) -> Path:
         """A project installed and committed by an ordinary setup run, as the update starts from. Codex
         children are off, so the commands step is skipped: with Codex on it fails here (the test's HOME is
