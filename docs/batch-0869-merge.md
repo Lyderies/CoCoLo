@@ -103,3 +103,9 @@ Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-
 Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-run3-timings.json` (output docs/batch-0869-full-run3.txt).
 - Exit 0. 554 units, tests claude 134 / codex 6923 / root 1194. Elapsed 650.9 s. `failed_units` [], `requirement_failures` [], `metadata_errors` [], not partial. Digest re-recorded (8635516814af...), test_runtime_release green.
 - Budget failures (5), all load flakes; each alone through the runner has no budget failure: test_b2_service_outcome_paths 73.8 -> 44.1 s, test_billing_gate 82.9 -> 53.9 s, test_project_start 197.5 (sum of fragments) -> 24.4 s, test_routing_judgment 5.1 -> 3.4 s, test_run_retention_scale 84.7 -> 34.7 s. No test failures, so no base comparison needed. Nothing fixed.
+
+## Full run 4 (0.8.69, after merging fix/0869-takeover-proof @df9fd5d1 (decision 372) and re-recording the digest; HEAD cdaf876d; base e46759a5)
+
+Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-run4-timings.json` (output docs/batch-0869-full-run4.txt).
+- Exit 0. 555 units, tests claude 134 / codex 6925 / root 1194. Elapsed 629.3 s, preflight 8.1 s. `failed_units` [], `requirement_failures` [], `metadata_errors` [], not partial. test_runtime_release green; new test_b4t_native_p68 included and passing.
+- Budget failures (2), load flakes; each alone through the runner has no budget failure: test_project_start 194.3 -> 24.0 s, test_run_retention_scale 74.1 -> 33.2 s. No test failures, so no base comparison. Nothing fixed.
