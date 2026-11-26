@@ -169,6 +169,21 @@ class RequirementGateProfiles(unittest.TestCase):
                 fw.combine_run_records(self.soak(s=status))
 
     @fw.requirements('TF-5')
+    def test_skipped_does_not_hide_a_check_that_never_ran(self):
+        self.CATALOGUE = {'M': {'checks': ['root:u.a', 'root:u.b']}, 'S': {'checks': ['root:s.a', 'root:s.b']}}
+        self.assertEqual('not_run', fw.coverage(self.CATALOGUE, {'root:u.a': 'skipped'})['M'])
+        self.assertEqual('failed', fw.coverage(self.CATALOGUE, {'root:u.a': 'skipped', 'root:u.b': 'failed'})['M'])
+        self.assertEqual('skipped', fw.coverage(self.CATALOGUE, {'root:u.a': 'skipped', 'root:u.b': 'passed'})['M'])
+        with self.assertRaisesRegex(ValueError, 'requirements failed/not_run.*M'):
+            fw.combine_run_records([self.record('ci', {'u': {'a': 'skipped'}}, None)])
+        with self.assertRaisesRegex(ValueError, 'requirements failed/not_run.*S'):
+            fw.combine_run_records([self.record('soak', {'s': {'a': 'skipped'}, 'v': {'a': 'passed'}}, None)])
+        with self.assertRaisesRegex(ValueError, 'requirements failed/not_run.*M'):
+            fw.combine_run_records([self.record('ci', {'u': {'a': 'failed', 'b': 'skipped'}}, None)])
+        report = fw.combine_run_records([self.record('ci', {'u': {'a': 'skipped', 'b': 'passed'}}, None)])
+        self.assertEqual('skipped', report['requirements']['M'])
+
+    @fw.requirements('TF-5')
     def test_gate_cli_reports_planned_and_release_mode_fails_on_them(self):
         paths = []
         for i, record in enumerate(self.ci()):
