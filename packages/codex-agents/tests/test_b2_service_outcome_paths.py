@@ -369,11 +369,20 @@ from codex_agents.learning_contracts import canonical_json  # noqa: E402
 from codex_agents.result_contracts import CodexUsageObservation, ResultObservation  # noqa: E402
 
 
-StatedFixture = RealFixture
+class StatedFixture(RealFixture):
+    """The B2 run (RealFixture) for tests that use it directly."""
+
+
+class SparesOnly(RealFixture):
+    """For tests that build every run they use themselves (`Spare`): the class's own run would be built and unused,
+    and a run costs about 0.45 s, so it is not built."""
+
+    def setUp(self):
+        pass
 
 
 @requirement
-class StatedRunTests(StatedFixture):
+class StatedRunTests(SparesOnly):
     """B2-4, B2-16: the first admission (K1), the retrieval (K2) and the association repair (K3) of a run that is
     open, closed, expired or retired, by exact reason, and what each writes."""
 
@@ -447,7 +456,7 @@ class StatedRunTests(StatedFixture):
 
 
 @requirement
-class AlteredRowsTests(StatedFixture):
+class AlteredRowsTests(SparesOnly):
     """B2-3, B2-7: an altered terminal, grant, context or body is refused with its exact reason, writes nothing and is
     counted by the sweep as an integrity refusal."""
 
