@@ -2455,6 +2455,7 @@
  },
  "RS-10-DUE-TX-1": {
   "checks": [
+   "codex:tests.test_s13_batch_tx.BatchTransactionTests.test_a_row_that_fails_after_its_writes_is_restored_by_its_savepoint_and_the_others_commit",
    "codex:tests.test_s13_batch_tx.BatchTransactionTests.test_a_row_that_fails_verification_rolls_back_alone_is_backed_off_and_the_others_commit"
   ],
   "source": "tests/requirements/s13.json#RS-10-DUE-TX-1",

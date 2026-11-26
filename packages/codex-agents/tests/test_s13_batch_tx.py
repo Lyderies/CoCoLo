@@ -88,6 +88,43 @@ class BatchTransactionTests(unittest.TestCase):
         self.assertEqual(ROWS - 1, len(self.finished))  # file removal only for rows whose release committed
         self.assertFalse(self.store._connection.in_transaction)
 
+    def snapshot(self, number):
+        run = self.store._connection.execute
+        handle = self.handle(number)
+        return {'lease': [tuple(r) for r in run("SELECT * FROM result_leases WHERE run_handle=?", (handle,))],
+                'context': [tuple(r) for r in run("SELECT * FROM project_result_contexts WHERE run_handle=?", (handle,))],
+                'holds': [tuple(r) for r in run("SELECT * FROM project_holds WHERE identity LIKE ? ORDER BY kind,identity",
+                                                (handle + '%',))]}
+
+    @requirements('RS-10-DUE-TX-1', why_not_scenario=WHY)
+    def test_a_row_that_fails_after_its_writes_is_restored_by_its_savepoint_and_the_others_commit(self):
+        # Red if the savepoint rollback is removed: the failure comes after the row's lease/hold/context writes.
+        before = self.snapshot(3)
+        inner = project_result_contexts.release_unfinished
+        def failing(history, run_handle, attempt, *args):
+            result = inner(history, run_handle, attempt, *args)  # the row's lease, hold and context writes have run
+            if run_handle == self.handle(3):
+                raise HistoryError('history_incompatible')
+            return result
+        with mock.patch.object(project_result_contexts, 'release_unfinished', failing):
+            with self.assertRaises(HistoryError):
+                self.store.release_earlier_unarmed_leases(frozenset(), limit=64)
+        after = self.snapshot(3)
+        self.assertEqual(before['lease'], after['lease'])
+        self.assertEqual(before['context'], after['context'])
+        self.assertEqual(['expired'] * 2 + ['reserved'] + ['expired'] * (ROWS - 3), self.states())
+        self.assertEqual(len(before['holds']), len(after['holds']))
+        for old, new in zip(before['holds'], after['holds']):
+            self.assertEqual('held', new[list(self.hold(3)).index('state')])
+        held = self.hold(3)
+        self.assertEqual('held', held['state'])
+        self.assertEqual(1, json.loads(held['evidence'])['start_pass_failures'])
+        self.assertGreater(held['next_check_ms'], self.base.fixture.now)
+        self.assertEqual([n for n in range(1, ROWS + 1) if n != 3],
+                         [n for n in range(1, ROWS + 1) if self.hold(n)['state'] == 'released'])
+        self.assertEqual(ROWS - 1, len(self.finished))
+        self.assertFalse(self.store._connection.in_transaction)
+
     @requirements('RS-10-DUE-TX-2', why_not_scenario=WHY)
     def test_a_kill_in_the_middle_of_the_batch_leaves_every_row_reserved_and_the_next_pass_releases_each_once(self):
         # Red on the per-row design: rows before the kill had already committed.
