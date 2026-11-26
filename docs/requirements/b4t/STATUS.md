@@ -1,4 +1,4 @@
-# S5 B4t build status — Fix round
+# S5 B4t build status — Final fix
 
 Branch `feat/b4t-takeover`, review head `44f16529` / product `146955fc`, base
 `ce81bd96` (0.8.67). Accepted Amendment A1, including A1.15 (decision 337), is
@@ -11,6 +11,67 @@ pin and pipe-only exec residual. The new socket acceptance module is explicitly
 skipped here. The exact reruns and the two failed native fixture attempts are
 listed in [fix-round-rerun.md](fix-round-rerun.md). A skipped native check is not
 a passing requirement or evidence that its fixture is correct.
+
+## Final fix (S5, last round) — read first
+
+Head before this round: `094f73d1` (fix round `ff35ecdd` plus the primary's native-run evidence). Scope: exactly
+the three items of the primary's final brief. VERSION and the catalogue are unchanged.
+
+**Root cause of "archived host did not serve: None".** The archived 0.8.66 host did serve (hint, sockets and
+locks were on disk). The fixture polled `_hinted_host(self.state, …)` with a `LearningState`, and
+`runtime_hint_path` accepts only the exact `CollectorPaths` type, so every read was `dispatch_unavailable`.
+Fixing the fixture exposed the same mistake in the product (below), then three more fixture faults.
+
+**Product defects found and fixed (each red on the real archived host first, `evidence/final-fix/red-product-hint-type.txt`):**
+1. `takeover_preflight.read_plan`, `OwnerOperations.withdraw_hint` and the T4 straggler re-read passed the owner
+   command's `LearningState` to the hint readers. Every hint read failed, so a live pre-B4t service was never seen:
+   T0 waited 5 s on its held locks and refused every such update as `project_store_busy` (B4t-0/-1 blocked
+   outright; A1 rows 3-6 unreachable). New `takeover_preflight.client_paths(state)` hands them `CollectorPaths`.
+2. `run_owner_takeover` opened `collector-runtime.lock` without `O_CREAT`, so a state root whose collector was
+   never auto-started crashed with `FileNotFoundError` instead of taking a free lock. It now creates it 0600 as
+   every other taker does.
+3. No behaviour change: the T3 self-stop wait (A1.5 rows 3/4) is the named constant
+   `takeover_owner.SERVICE_SELF_STOP_SECONDS = 30.0`, pinned by the stub tests.
+
+**Fixture faults fixed (no assertion loosened, no new skip; pairs in [assertion-audit.md](assertion-audit.md)):**
+the `CollectorPaths` type in the native tests; the P66 audit stopped its World service through
+`pin_predecessor`, which rightly refuses the World's stand-in interpreter launch line (now: exact peer pid after
+an argument check); the audited service ran on the real interpreter and so the real account home (now the
+World's stand-in); the V34 audit used 0.8.6x wizard answers (now the L12.1 `set_up_release` path, with V34's
+Claude tool set in the fake init frame).
+
+**E2c-7 verdict: the fixture (its oracle) was wrong, the product is right.** D2.8's RS-5 line is
+"recovery: needs update hand-over: <B4m command>", and B4m gives the local command whenever an install binding
+exists. Both tests record the launch of a bound copy (`install_copy` binds the project as its own clone), so the
+correct literal is the command form `cd <root> && ./setup.sh <root>`, not the "record unavailable" guidance. The
+OtherVersion fixture also deleted a ledger this build had opened (leaving the `initialized` marker, which every
+build refuses); the earlier runtime now originates the ledger, as before a real update, and no floor is lowered.
+
+**Budget.** `test_b4t_native` was 372 s. Each stub case lost 30 s to the self-stop wait of a stub that never stops
+by itself (now 1 s in those cases only, value pinned) and the module held two archived Worlds. Split, all
+registered (scenario/integration, timings, RS-B-B4t-3/-9 checks), 60 s ceiling unchanged:
+`test_b4t_native` (5 tests, ~19 s), `test_b4t_native_kill` (TERM-ignoring stub, real 30 s TERM bound, now
+asserted ≥ 29.9 s, ~35 s), `test_b4t_native_audit_p66` (~39-43 s), `test_b4t_native_audit_v34` (~25-28 s).
+
+Two more faults found by the affected run and fixed here: the C stub closed each accepted connection at once,
+so macOS `LOCAL_PEERPID` sometimes reported no peer and the plan fell back to `hint` under load (reproduced in
+isolation; the stub now holds connections as a real service does); and the L12.5 e2e fault rewrite named the
+replaced `runtime_hint_path(self.state, …)` line (now `paths`).
+
+**Runs (unsandboxed, short TMPDIR; [run1](evidence/final-fix/run1-named.txt), [run2](evidence/final-fix/run2-named.txt), after every fix).**
+Named modules (the brief's four plus the three split modules), twice: 239 tests, exit 0, `metadata_errors: []`,
+no budget failures, no failed units or requirement failures; all eight native A1 tests, both E2c-7 cases, E2a-1
+and the wizard wording passed (150 s and 160 s). Only `test_project_start` and `test_setup_wizard_direct` are over
+60 s, both under their existing budget-debt ceilings.
+
+**Affected run ([evidence/final-fix/affected.txt](evidence/final-fix/affected.txt)): NOT clean.** No coverage map
+here, so it ran in full: 7906 tests, 1366 s, `metadata_errors: []`. Besides the expected `test_runtime_release`
+and the two faults above (fixed, reruns green), 22 tests in 13 modules fail. Each fails identically on 094f73d1
+and passes on ce81bd96: regressions of the earlier B4t rounds, outside this round's brief, left for the primary.
+They are op-set pins missing `history.takeover_report` / `account.takeover_report` (and the captured family
+sets), downgraded-schema fixtures now refused as `predecessor ledger schema is incompatible`, and
+`test_cli_status_client_boundary`, `test_updfix` UPDFIX_2 and `test_host_slots` M1. The four full-run budget
+failures are load-induced (named reruns within debt; ce81bd96 itself fails one).
 
 ## Fix round: finding → test → evidence
 

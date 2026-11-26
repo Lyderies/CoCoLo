@@ -60,6 +60,7 @@ Relative to `44f16529` (same reviewed product as `146955fc`). VERSION and the ru
 - `packages/codex-agents/tests/b4t_fixture.py`
 - `packages/codex-agents/tests/lifetime_caps.json`
 - `packages/codex-agents/tests/test_b4t_native.py`
+- `packages/codex-agents/tests/test_b4t_native_kill.py`, `test_b4t_native_audit_p66.py`, `test_b4t_native_audit_v34.py` (S5 final fix split)
 - `packages/codex-agents/tests/test_b4t_takeover.py`
 - `packages/codex-agents/tests/test_project_orchestration.py`
 - `packages/codex-agents/tests/test_project_start.py`

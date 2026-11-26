@@ -887,3 +887,40 @@ Base `history_kept(..., exact=True)` → `handover_history_kept(...)` now calls 
 ### Renames retaining every assertion
 
 The real kernel candidate-pin test retains its readiness, exit and lock-free comparisons under its A1 name. The formerly standalone SIGKILL/missing-inode memory test becomes T-30 with all its cell, reason and held-count assertions retained. The oversized argument test retains its OSError under its new name. Retired two-opener/census cases map to A1 E's real cross-process flock refusal and T-36's ban on all descriptor/process censuses.
+
+## S5 final fix — pairs against 094f73d1 (fix round ff35ecdd)
+
+No assertion was removed or loosened and no failure became a skip. Each change below is an oracle correction
+from the requirement, a fixture correction, or an added check.
+
+### test_project_start E2c-7 (both cases): oracle corrected from the requirement
+
+| Test | Old → new | Reason |
+|---|---|---|
+| `StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced` | literal `... holds the project service. The local install record is unavailable. In a plain terminal, open your CoCoLo clone, run ./setup.sh with this project's path, then choose Configure, then "Update the install and walk through every step".` → literal `recovery: needs update hand-over: Another CoCoLo version (number unavailable) holds the project service. In a plain terminal, run:\ncd <root> && ./setup.sh <root>\nThen choose Configure, then "Update the install and walk through every step".` (`<root>` = the fixture's own project path, no product call) | Verdict: the fixture oracle was wrong, the product is right. D2.8's RS-5 line names the B4m command; B4m gives the local command whenever the install binding exists and the "record unavailable" guidance only when it is missing. The collector status is read through the project's recorded launch copy, and `install_copy` (via `install_runtime_copy`, no `clone_root`) binds that copy with the project itself as its clone. So the binding exists and the command form is the requirement's answer. Still an exact literal, independent of `compatibility_message`. The failure message is now a lambda (it printed the status of the first poll, `None`, instead of the last). |
+| `OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced` | same literal change as above | Same reason (its launch is recorded with the same bound copy). |
+| `OtherVersionTests.test_E2c_7_…` fixture | `self.add('alpha', record=False)` (first owner open by this build, which writes its runtime floor) then delete `learning.sqlite3`/-wal/-shm and reopen with the earlier runtime (`create=False`) → install the package, have the earlier runtime make the first owner open (`LearningState(create=True)` of a bootstrap-pending root) and register the project, then `install_copy`; added `assertEqual(0, database size)` before it | Deleting the ledger left the state's `ledger-initialized` marker, which every build rightly refuses ("initialized ledger database is missing or empty"). A real earlier runtime originates its own ledger before an update, and no build may lower B4t's floor (E4), so the earlier runtime now opens first. Every host, no-spawn, collector and status assertion is unchanged. |
+
+### test_b4t_native (fixture defects; product defects found)
+
+| Test / fixture | Old → new | Reason |
+|---|---|---|
+| `NativeArchiveTests.setUp` serving wait | `_hinted_host(self.state, …)` → `_hinted_host(self.paths, …)` | `runtime_hint_path` accepts only `CollectorPaths`; with a `LearningState` every read is `dispatch_unavailable`, so the predicate was never true although the archived host served (its hint, sockets and locks were all on disk). Same wait, same 30 s, same assertion. |
+| `ResidualStub.run_stub` hint path | `runtime_hint_path(self.state, …)` → `runtime_hint_path(self.paths, …)` | Same type rule. |
+| `ArchivedServiceAudit` hint reads | `_hinted_host(state, …)` → `_hinted_host(CollectorPaths(state.root), …)` | Same type rule. |
+| `ArchivedServiceAudit` P66 fixture stop | `pin_predecessor(pid, entry=<project>/…/project_host.py).stop()` → check the peer pid's arguments (stand-in `boot.py`, an archived `project_host.py` inside the World and outside this tree, exact `--state-root/--project-root`), then `os.kill(pid, SIGTERM)` and wait for `process_gone` | The World runs every product process through its stand-in interpreter, so a World service never presents A1 I3's launch line and `pin_predecessor` rightly refuses it (`predecessor_unproven`). This is only the fixture's own teardown of its idle service by exact pid; the audited assertions are unchanged. |
+| `ArchivedServiceAudit` audited service interpreter | `sys.executable` → `world.shim` (the World's stand-in) | Without the stand-in the audited service resolves the account home from the password database, i.e. the real home; the stand-in confines it to the World. The audit hook and every event assertion are unchanged; added: the hint's peer pid is the audited process. |
+| `ArchivedServiceAudit` V34 setup | `set_up_previous` (0.8.6x scripted wizard answers) → `e2e_checks_update_history.archive_tag` + `set_up_release` (the L12.1 path: 0.3.4's own installer, registration and attestation); no fixture service exists to stop (0.3.4 has no collector starter), asserted; the fake Claude init frame lists V34's `CLAUDE_TOOLS` (Read/Glob/Grep) | The 0.8.6x wizard answers never complete 0.3.4's setup; 0.3.4 rejects an init frame with the later `StructuredOutput` tool (`init_tool_not_allowed`). The offline plain skip stays exactly as before (archive unavailable). Every audit assertion is unchanged. |
+| `ResidualStub.run_stub` | added `assertEqual(30.0, takeover_owner.SERVICE_SELF_STOP_SECONDS)`; the run patches that wait to 1 s; added `assertGreaterEqual(KILL time − TERM time, 29.9)` for the TERM-ignoring case | The stub never stops by itself, so A1.5 row 3's wait for a withdrawn idle service always ran out (30 s per case) before the proven signal. The product value is pinned, the TERM/KILL bounds these cases witness are untouched and now measured. |
+| `ResidualStub` C stub accept loop | accept then close at once → keep each accepted connection until its client closes it (up to 64) | Found as a flake in the affected run (`'signal' != 'hint'`): macOS `LOCAL_PEERPID` reports no peer once the listener has closed its side (reproduced in isolation), so `_peer` read `None` whenever the stub won the race, and the plan correctly fell back to `hint`. A real service keeps the connection open for its request; the stub now does too. No assertion change. |
+| `relaunch` | account start after the hand-over keeps the stopped predecessor collector for reaping | Removes the unreaped-child `ResourceWarning`s; no assertion change. |
+
+### Module split (budget), every assertion retained
+
+| Old name | New name |
+|---|---|
+| `test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound` | `test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound` |
+| `test_b4t_native.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim` | `test_b4t_native_audit_p66.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim` |
+| `test_b4t_native.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim` | `test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim` |
+
+All three are registered (scenario layer, integration stage, timings, RS-B-B4t-3/-9 checks). The 60 s scenario ceiling is unchanged.

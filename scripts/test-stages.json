@@ -407,5 +407,8 @@
  "codex:tests.test_ledger_owner_wiring": "integration",
  "codex:tests.test_u1_orchestration_lifetime": "integration",
  "codex:tests.test_b4t_takeover": "integration",
- "codex:tests.test_b4t_native": "integration"
+ "codex:tests.test_b4t_native": "integration",
+ "codex:tests.test_b4t_native_kill": "integration",
+ "codex:tests.test_b4t_native_audit_p66": "integration",
+ "codex:tests.test_b4t_native_audit_v34": "integration"
 }

@@ -2480,14 +2480,14 @@
  },
  "RS-B-B4t-3": {
   "checks": [
-   "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound",
    "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_expected_arguments_is_the_only_signal_target",
    "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_unchanged_entry_hash_and_held_lock_refuses_adoption",
-   "codex:tests.test_b4t_native.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim",
-   "codex:tests.test_b4t_native.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim",
    "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
    "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_with_native_identity_updates_without_a_signal",
    "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_no_other_process_is_inspected",
+   "codex:tests.test_b4t_native_audit_p66.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim",
+   "codex:tests.test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim",
+   "codex:tests.test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_exec_after_last_check_is_recorded",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_held_store_lock_without_a_service",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
@@ -2623,12 +2623,12 @@
  },
  "RS-B-B4t-9": {
   "checks": [
-   "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound",
    "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_expected_arguments_is_the_only_signal_target",
    "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_unchanged_entry_hash_and_held_lock_refuses_adoption",
-   "codex:tests.test_b4t_native.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim",
-   "codex:tests.test_b4t_native.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim",
    "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_no_other_process_is_inspected",
+   "codex:tests.test_b4t_native_audit_p66.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim",
+   "codex:tests.test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim",
+   "codex:tests.test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound",
    "codex:tests.test_b4t_takeover.AccountLineageTests.test_earlier_runtime_is_passed_only_at_the_four_approved_call_sites",
    "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_lost_settlement_and_closure_find_the_original_claim_once",
    "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_terminal_uses_original_scope_and_capacity_row_and_missing_lineage_writes_nothing",

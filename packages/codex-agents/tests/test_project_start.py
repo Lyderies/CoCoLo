@@ -541,11 +541,14 @@ class StartTests(StarterBase):
             'result_endpoint': str(directory / 'result.sock')}))
         hint.chmod(0o600)
         started = self.launch()['started_at_ms']
+        # S5 final fix: the launch record names this project's protected copy, whose install binding
+        # names its clone (this fixture's `install_copy` binds the project itself as the clone). So the
+        # B4m command is the local one, not the "record unavailable" guidance (B4t D2.8 RS-5 line).
         expected = ('recovery: needs update hand-over: Another CoCoLo version (number unavailable) holds the '
-                    'project service. The local install record is unavailable. In a plain terminal, open your '
-                    'CoCoLo clone, run ./setup.sh with this project\'s path, then choose Configure, then '
-                    '"Update the install and walk through every step".')
-        wait_for(self, lambda: self.status('alpha') == expected, 20, f'status: {self.status("alpha")}')
+                    'project service. In a plain terminal, run:\n'
+                    f'cd {root} && ./setup.sh {root}\n'
+                    'Then choose Configure, then "Update the install and walk through every step".')
+        wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
         time.sleep(1.5)  # rechecked, still not replaced
         self.assertEqual([], self.events('spawned'))
         self.assertIsNone(self.collector.poll())
@@ -973,21 +976,26 @@ class OtherVersionTests(StarterBase):
     def test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced(self):
         """Review round 1, MED 2: the competing host is a real project host process of another runtime."""
         from codex_agents.project_host_client import other_version_host
-        root, _project_id, copy = self.add('alpha', record=False)
+        # S5 final fix: the account ledger originates under the earlier runtime, as it does before a
+        # real update. `self.add` would first open it with this build, whose runtime floor an earlier
+        # runtime may never pass (B4t E4); deleting that ledger afterwards leaves the state's
+        # "initialized" marker, which every build rightly refuses. So the earlier runtime makes the
+        # first owner open and registers the project; this build's copy is installed beside it, as
+        # `self.add(record=False)` installs it, and no published floor is lowered.
+        root = install_package(self.base / 'alpha').resolve()
+        (root / '.git').mkdir()
         older = self.older_runtime()
-        # The earlier-runtime fixture predates this build's published floor.
-        # Recreate its empty, registered account with that runtime's own owner
-        # open; lowering a published floor in SQL would invalidate this witness.
-        for path in (self.state.database, Path(str(self.state.database)+'-wal'), Path(str(self.state.database)+'-shm')):
-            path.unlink(missing_ok=True)
+        self.assertEqual(0, self.state.database.stat().st_size)  # bootstrap pending: no owner opened it yet
         made = subprocess.run([sys.executable, '-I', '-B', '-c',
-            'import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
+            'import sys, json; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
             'from codex_agents.learning_store import LearningLedger,LearningState; '
-            'owner=LearningLedger(LearningState(Path(sys.argv[2]),create=False)); '
-            'owner.register_project(Path(sys.argv[3])); owner.close()',
+            'owner=LearningLedger(LearningState(Path(sys.argv[2]))); '
+            'print(json.dumps(owner.register_project(Path(sys.argv[3])))); owner.close()',
             str(older), str(self.state.root), str(root)], env={'PATH':os.defpath,'TMPDIR':SHORT_TMP},
             capture_output=True, text=True, timeout=30)
         self.assertEqual(0, made.returncode, made.stderr)
+        copy = self.install_copy(root)
+        self.projects['alpha'] = (root, json.loads(made.stdout), copy)
         # The earlier runtime was the authorized one when its service started (as before an update).
         self.state.collector_authorization.unlink()
         done = subprocess.run(  # authorized by that runtime's own code, as its registration did
@@ -1010,10 +1018,13 @@ class OtherVersionTests(StarterBase):
         authorize_collector_runtime(self.state, ORCHESTRATION_ROOT / 'cli.py')
         started = self.launch()['started_at_ms']
         CollectorClient(self.state.socket, timeout=30).record_launch(root, str(copy), copy.name)
+        # S5 final fix: the launch record names this project's protected copy, whose install binding
+        # names its clone (this fixture's `install_copy` binds the project itself as the clone). So the
+        # B4m command is the local one, not the "record unavailable" guidance (B4t D2.8 RS-5 line).
         expected = ('recovery: needs update hand-over: Another CoCoLo version (number unavailable) holds the '
-                    'project service. The local install record is unavailable. In a plain terminal, open your '
-                    'CoCoLo clone, run ./setup.sh with this project\'s path, then choose Configure, then '
-                    '"Update the install and walk through every step".')
+                    'project service. In a plain terminal, run:\n'
+                    f'cd {root} && ./setup.sh {root}\n'
+                    'Then choose Configure, then "Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
         time.sleep(1.5)  # rechecked, still not replaced
         self.assertIsNone(host.poll())  # the earlier runtime's host still serves

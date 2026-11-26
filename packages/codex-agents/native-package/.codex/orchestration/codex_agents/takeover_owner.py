@@ -24,6 +24,10 @@ from .update_takeover import TakeoverError, UpdateTakeover, stop_until_excluded
 
 # UPG-6: these and later collectors judge the stop using their loaded digest.
 FIRST_IDENTITY_STOP_VERSION = (0, 8, 56)
+# A1.5 rows 3/4 (T3): how long a withdrawn service is given to stop by itself before the proven
+# signal path (row 3) or `service_still_finishing` (row 4). The signal's own TERM/KILL bounds are
+# separate (takeover_process.PinnedPredecessor.stop).
+SERVICE_SELF_STOP_SECONDS = 30.0
 
 
 class OwnerOperations:
@@ -151,11 +155,13 @@ class OwnerOperations:
                     if time.monotonic() >= deadline:
                         raise TakeoverError('service_stop_failed')
                     time.sleep(0.02)
-            hinted = _hinted_host(self.state, self.project_root, any_runtime=True, hint_locked=True)
+            from .takeover_preflight import client_paths
+            paths = client_paths(self.state)
+            hinted = _hinted_host(paths, self.project_root, any_runtime=True, hint_locked=True)
             if hinted is not None and (hinted[0].runtime_digest != old['digest']
                     or hinted[1][0].parent != Path(old['directory'])):
                 raise TakeoverError('predecessor_unverified')
-            runtime_hint_path(self.state, self.project_root).unlink(missing_ok=True)
+            runtime_hint_path(paths, self.project_root).unlink(missing_ok=True)
         finally:
             os.close(descriptor)
 
@@ -231,7 +237,7 @@ class OwnerOperations:
             # is not another reason to wait a second service-stop budget.
             require_free_locks(self._service_locks(journal))
             return
-        deadline = time.monotonic() + 30.0
+        deadline = time.monotonic() + SERVICE_SELF_STOP_SECONDS
         while True:
             try:
                 require_free_locks(self._service_locks(journal))
@@ -313,7 +319,8 @@ class OwnerOperations:
             service_stop='signal' if not old.get('stop_op') else 'stop_op')
         if old.get('stop_op'):
             from .project_host_client import _hinted_host
-            hinted = _hinted_host(self.state, self.project_root, any_runtime=True)
+            from .takeover_preflight import client_paths
+            hinted = _hinted_host(client_paths(self.state), self.project_root, any_runtime=True)
             if hinted is None or hinted[0].runtime_digest != old['digest'] or not hinted[2]:
                 raise TakeoverError('predecessor_lock_inherited')
             journal['predecessor_service']['service_generation'] = hinted[0].supervisor_generation
@@ -399,8 +406,12 @@ class OwnerOperations:
 def run_owner_takeover(operations, *, action='run'):
     """T0 first; one runtime-lock descriptor stays owned through account restart."""
     operations.preflight()
-    descriptor = os.open(operations.state.runtime_lock, os.O_RDWR | os.O_NOFOLLOW)
+    # Created as every other taker creates it (collector start, owner registration): a state root
+    # whose collector was never auto-started has no lock file yet, and that is a free lock, not a
+    # crash (S5 final fix, found by the native archive witness).
+    descriptor = os.open(operations.state.runtime_lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     operations.descriptor = descriptor
+    os.fchmod(descriptor, 0o600)
     try:
         deadline = time.monotonic() + 20.0
         while True:

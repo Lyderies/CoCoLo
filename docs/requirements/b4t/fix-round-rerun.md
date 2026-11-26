@@ -8,22 +8,24 @@ causing two attempted native fixture starts to fail. Those failures are in
 
 ## Socket acceptance — exact new test names
 
-Module `codex:tests.test_b4t_native` (scenario layer, integration stage):
+Modules `codex:tests.test_b4t_native`, `codex:tests.test_b4t_native_kill`, `codex:tests.test_b4t_native_audit_p66`
+and `codex:tests.test_b4t_native_audit_v34` (scenario layer, integration stage; split in the S5 final fix, which
+also made every one of these pass unsandboxed, see STATUS.md "Final fix"):
 
 - `NativeArchiveTests.test_B4t_A1_no_other_process_is_inspected` (T-36).
 - `NativeArchiveTests.test_B4t_A1_idle_predecessor_with_native_identity_updates_without_a_signal` (T-37a).
 - `NativeArchiveTests.test_B4t_A1_idle_predecessor_updates_without_process_proof` (T-37b; injected EPERM).
 - `AcceptedResidualStubTests.test_same_user_impostor_with_expected_arguments_is_the_only_signal_target` (T-12 / A1.7 item 6 / TL).
 - `AcceptedResidualStubTests.test_same_user_impostor_with_unchanged_entry_hash_and_held_lock_refuses_adoption` (macOS unnamed-holder residual; Linux has I5).
-- `AcceptedResidualStubTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound` (real TERM/KILL bounds).
-- `ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim` (T-43).
-- `ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim` (T-43; requires the archived V34 source, plain offline skip if absent).
+- `test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound` (real TERM/KILL bounds).
+- `test_b4t_native_audit_p66.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim` (T-43).
+- `test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim` (T-43; requires the archived V34 source, plain offline skip if absent).
 
 The residual stub fixture needs a C compiler; lack of one is an explicit skip,
 not acceptance. It presents the trusted launch arguments with an unchanged
 entry on disk. These tests record the accepted trust level and do not claim to
-attest the running executable. Native fixture startup and these added scenarios
-remain unvalidated here. Run on both supported platforms, with each supported
+attest the running executable. S5 final fix: all eight pass on macOS (Darwin 27.2,
+Python 3.14) unsandboxed; Linux remains unrun. Run on both supported platforms, with each supported
 macOS interpreter for the I1–I4 read/NOTE_EXEC checks.
 
 ## Primary addendum and PTY regressions — exact names

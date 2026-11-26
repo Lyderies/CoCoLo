@@ -94,9 +94,9 @@ FAULTS = {
     # project's service hint with it, so the first project's service stops. (L12.5's own red proof.)
     "update_stops_other_projects": [
         {"module": "codex_agents.takeover_owner",
-         "old": "            runtime_hint_path(self.state, self.project_root).unlink(missing_ok=True)\n",
-         "new": "            runtime_hint_path(self.state, self.project_root).unlink(missing_ok=True)\n"
-                "            _mark = runtime_hint_path(self.state, self.project_root).parent / 'e2e-withdrew-for'\n"
+         "old": "            runtime_hint_path(paths, self.project_root).unlink(missing_ok=True)\n",
+         "new": "            runtime_hint_path(paths, self.project_root).unlink(missing_ok=True)\n"
+                "            _mark = runtime_hint_path(paths, self.project_root).parent / 'e2e-withdrew-for'\n"
                 "            if _mark.exists() and _mark.read_text() != str(self.project_root):\n"
                 "                for _other in _mark.parent.glob('*.json'):\n"
                 "                    _other.unlink(missing_ok=True)\n"

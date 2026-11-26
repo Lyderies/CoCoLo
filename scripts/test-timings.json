@@ -3100,5 +3100,8 @@
  "root:test_test_stages": 2.03,
  "root:test_wizard_clock": 0.27,
  "codex:tests.test_b4t_takeover": 32.4,
- "codex:tests.test_b4t_native": 60.0
+ "codex:tests.test_b4t_native": 20.0,
+ "codex:tests.test_b4t_native_kill": 36.0,
+ "codex:tests.test_b4t_native_audit_p66": 41.0,
+ "codex:tests.test_b4t_native_audit_v34": 26.0
 }

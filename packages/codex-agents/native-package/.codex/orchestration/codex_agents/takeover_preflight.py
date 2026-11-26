@@ -162,6 +162,16 @@ def _project_owner(state, project_id):
         raise TakeoverError('predecessor_unverified') from None
 
 
+def client_paths(state):
+    """The client paths type the hint readers accept (`runtime_hint_path` refuses any other type).
+
+    Owner commands hold a LearningState; given one, every hint read refused as `dispatch_unavailable`,
+    so a live predecessor service was never seen and its held locks read as `project_store_busy`
+    (S5 final fix, found by the native archive witness)."""
+    from .collector_paths import CollectorPaths
+    return state if type(state) is CollectorPaths else CollectorPaths(state.root)
+
+
 def read_plan(state, project_root, *, runtime_locked=False):
     """Return the trusted intent and a redacted plan. Every refusal precedes J1."""
     from .collector_runtime import _collector_runtime_authorization
@@ -224,12 +234,13 @@ def read_plan(state, project_root, *, runtime_locked=False):
         collector = checked_collector_identity(health, authorization, releases=releases)
     from .client_runtime import runtime_directory
     directory = runtime_directory(state, root)
-    hinted = _hinted_host(state, root, any_runtime=True)
+    paths = client_paths(state)
+    hinted = _hinted_host(paths, root, any_runtime=True)
     if row is not None and not (hinted is not None and hinted[2] is True):
         deadline = time.monotonic() + 5.0
         while (_lock_held(state.root / 'projects' / row['project_id'] / 'history.lock')
                or _lock_held(directory / 'host.lock')):
-            hinted = _hinted_host(state, root, any_runtime=True)
+            hinted = _hinted_host(paths, root, any_runtime=True)
             if hinted is not None and hinted[2] is True:
                 break
             if time.monotonic() >= deadline:

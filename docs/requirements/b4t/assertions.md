@@ -314,3 +314,12 @@ Base `history_kept(..., exact=True)` → `handover_history_kept(...)` now calls 
 ### Renames retaining every assertion
 
 The real kernel candidate-pin test retains its readiness, exit and lock-free comparisons under its A1 name. The formerly standalone SIGKILL/missing-inode memory test becomes T-30 with all its cell, reason and held-count assertions retained. The oversized argument test retains its OSError under its new name. Retired two-opener/census cases map to A1 E's real cross-process flock refusal and T-36's ban on all descriptor/process censuses.
+
+## S5 final fix
+
+The E2c-7 literal oracles change from the "local install record is unavailable" guidance to the bound local
+command (`cd <root> && ./setup.sh <root>` between the same lead and closing words), because the fixture's
+recorded launch copy carries an install binding and D2.8/B4m then require the command. The OtherVersion fixture's
+ledger is now originated by the earlier runtime instead of being deleted after this build opened it. The native
+fixtures pass `CollectorPaths` to hint readers. Three native tests move to their own modules unchanged. Every
+old → new pair, with reasons, is in [assertion-audit.md](assertion-audit.md), "S5 final fix".
