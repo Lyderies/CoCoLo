@@ -82,3 +82,5 @@ codex:tests.test_health_workspaces --module codex:tests.test_codex_preparation -
 --module codex:tests.test_lifetime_cap_guard --module codex:tests.test_host_paths`: 131 tests, `failed_units: []`,
 `metadata_errors: []`, 25 s wall. VERSION and digest unchanged. Not run here (primary, before merge): the
 `--affected` run and `tests.test_project_driver`.
+
+IP-B 0.8.68: wired (HM2A-11), see docs/batch-0868-merge.md "S8/S11 wiring".

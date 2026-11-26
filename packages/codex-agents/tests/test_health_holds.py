@@ -206,6 +206,32 @@ class HoldsTests(unittest.TestCase):
             self.assertFalse(any(PROJECT_A in sql for sql, args in recording.calls))
             self.assertTrue(any(PROJECT_A in args for sql, args in recording.calls))
 
+    def test_collector_health_pass_runs_the_holds_check_and_reports_its_findings(self):
+        # S8-HM3-7: the collector registers the holds check; a real pass over a fixture project reports a durable
+        # service finding, scoped to that project, and the status view lists the check.
+        from codex_agents import learning_store
+        fixture, owner = self.account_fixture()
+        server = learning_store.CollectorServer(owner.client)
+        directory = fixture.state.root / 'projects' / fixture.project_a_id
+        directory.mkdir(parents=True, mode=0o700)
+        holds.save_service_finding(directory, holds._finding(
+            fixture.project_a_id, 'service_writer_fault', holds._SERVICE_TEXT['service_writer_fault'], 'service'))
+        from codex_agents import health_workspaces
+        # the machine's real scratch folder is not this test's business
+        self.enterContext(mock.patch.object(health_workspaces.WorkspaceCheck, '_container_path', lambda check: None))
+        worker = threading.Thread(target=server._run_health_pass)
+        worker.start()
+        end = time.monotonic() + 10
+        while worker.is_alive() and time.monotonic() < end:
+            owner.pump()
+            worker.join(.01)
+        self.assertFalse(worker.is_alive())
+        view = server.health_monitor.view(fixture.project_a_id)
+        self.assertIn('holds', [c['check'] for c in view['checks']])
+        self.assertIn('service_writer_fault', [f['reason_code'] for f in view['findings']])
+        self.assertEqual([], server.health_monitor.view(fixture.project_b_id)['findings'])
+        self.assertEqual({'self_check', 'containers', 'workspaces', 'holds'} - {c['check'] for c in view['checks']}, set())
+
     def test_registration_does_not_edit_primary_owned_files_or_builtin_api(self):
         # S8 does not wire its holds check into learning_store.py; the primary does that after S5.
         # Other accepted steps change this file, so scan for the specific registration or import.
@@ -508,6 +534,7 @@ for _name, _ids in {
     'test_runtime_account_sql_runs_only_on_owner_without_opening_reader': ('S8-HM3-5',),
     'test_project_id_is_bound_in_validator_queries': ('S8-HM3-5',),
     'test_registration_does_not_edit_primary_owned_files_or_builtin_api': ('S8-HM3-6',),
+    'test_collector_health_pass_runs_the_holds_check_and_reports_its_findings': ('S8-HM3-7',),
     'test_unrelated_lifetime_caps_bytes_are_preserved': ('S8-HM3-5',),
 }.items():
     getattr(HoldsTests, _name).__requirements__ = _ids

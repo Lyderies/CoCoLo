@@ -41,6 +41,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 import tests.support  # noqa: F401
 from tests.support import SHORT_TMP
@@ -50,6 +51,7 @@ from tests import test_learning_store as store_tests
 
 from codex_agents import container_launch, health_containers as hc, health_monitor as hm, learning_store
 from codex_agents import container_runtime as cr
+from codex_agents import health_workspaces as hw
 from codex_agents.launch_journal import LaunchJournal
 
 OTHER = 'prj_' + 'b' * 32
@@ -451,9 +453,11 @@ class CollectorWiringTests(unittest.TestCase):
         store = store_tests.LearningStoreTests(methodName='runTest')
         store.setUp()
         self.addCleanup(store.tearDown)
+        self.enterContext(mock.patch.object(hw.WorkspaceCheck, '_container_path', lambda check: None))  # not the real scratch
         server = learning_store.CollectorServer(store.ledger)
         names = [check.name for check in server.health_monitor._checks]
-        self.assertEqual(['self_check', 'containers'], names)
+        # S11 wiring adds the workspaces check; S8's holds check needs a ledger owner, which this collector lacks
+        self.assertEqual(['self_check', 'containers', 'workspaces'], names)
         check = server.health_monitor._checks[1]
         self.assertIsInstance(check, hc.ContainerCheck)
         self.assertEqual(store.ledger.state.root / 'projects', check.projects)
@@ -462,7 +466,8 @@ class CollectorWiringTests(unittest.TestCase):
         server._run_health_pass()
         view = server.health_monitor.view(store.project_a_id)
         self.assertEqual([], view['findings'])
-        self.assertEqual({'self_check': 'ok', 'containers': 'ok'}, {c['check']: c['state'] for c in view['checks']})
+        self.assertEqual({'self_check': 'ok', 'containers': 'ok', 'workspaces': 'ok'},
+                         {c['check']: c['state'] for c in view['checks']})
 
 
 # --------------------------------------------------------------------------------------------

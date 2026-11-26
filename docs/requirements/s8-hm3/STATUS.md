@@ -91,3 +91,5 @@ Known pre-existing flake, not from S8: tests.test_project_service_startup L15.1 
 (test_L15_1_deletion_removes_the_projects_history_store, test_L15_1_deleting_a_project_stops_its_service_and_leaves_the_other_running)
 sometimes see 'cleanup pending' (the stopped service still holds its history store), and stop_hosts can raise
 ProcessLookupError. Reproduced on the unmodified 0.8.67 base (about 1 in 25 alone, more under parallel load).
+
+IP-B 0.8.68: wired (S8-HM3-7), see docs/batch-0868-merge.md "S8/S11 wiring".

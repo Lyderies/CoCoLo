@@ -4920,5 +4920,21 @@
   ],
   "source": "tests/requirements/s14b.json#S14b-6",
   "statement": "Retention indexes are created inside the consented records-upgrade step (the ledger 17->18 open of --upgrade-ledger, and the B4t takeover adoption) on every path that performs it; a plain or unconsented open creates none; registration with a running collector leaves them in place (decision 349)."
+ },
+ "S8-HM3-7": {
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_collector_health_pass_runs_the_holds_check_and_reports_its_findings"
+  ],
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-7",
+  "statement": "The collector registers the holds check with its health monitor; a health pass over a fixture project runs it and reports its findings, scoped to the project."
+ },
+ "HM2A-11": {
+  "checks": [
+   "codex:tests.test_health_workspaces.CollectorWiringTests.test_HM2A_11_the_collector_registers_the_check_and_a_pass_removes_an_orphan_and_keeps_a_live_folder",
+   "codex:tests.test_health_workspaces.CollectorWiringTests.test_HM2A_11_registering_does_no_io_and_the_pending_reader_goes_through_the_projects_histories",
+   "codex:tests.test_health_workspaces.CollectorWiringTests.test_HM2A_11_the_pending_reader_goes_past_its_bounds_and_says_unknown"
+  ],
+  "source": "tests/requirements/s11.json#HM2A-11",
+  "statement": "The collector registers the workspaces check with a read-only pending reader over the project histories (no I/O at registration); a pass removes an orphan folder and keeps a live driver's folder."
  }
 }

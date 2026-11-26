@@ -167,6 +167,12 @@ class HealthMonitor:
     def with_builtin_checks(cls, *, sweep_interval_seconds: float, **limits) -> HealthMonitor:
         return cls((SelfCheck(sweep_interval_seconds),), **limits)
 
+    def register_state_checks(self, state, *, sweep_interval_seconds: float) -> None:
+        """The checks that need the collector's learning state (S8 holds, S11 workspaces). Nothing is read or
+        written here: each check reads only when a pass runs it."""
+        from .health_holds import HoldsCheck
+        self.register(HoldsCheck(state, sweep_interval_seconds=sweep_interval_seconds))
+
     def register(self, check: Check) -> None:
         name = getattr(check, "name", None)
         if not _matches(CHECK_NAME, name) or name == MONITOR_NAME:

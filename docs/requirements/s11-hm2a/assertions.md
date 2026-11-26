@@ -54,3 +54,8 @@ No existing test assertion was removed, weakened or changed; six tests were adde
 - `WorkspaceCheck.cursor` (an attribute no test read) is replaced by `WorkspaceCheck._scan` and `close()`.
 - `codex_preparation._write_owner_marker` now returns None or a fixed reason code instead of always None; its caller
   ignores the value (the folder without a marker is the record the health check reads).
+
+## IP-B 0.8.68 wiring (HM2A-11)
+
+- `test_health_containers...CollectorWiringTests.test_HM_1_9...`: check names `['self_check', 'containers']` -> `['self_check', 'containers', 'workspaces']`, and the view's states likewise (S11 registers the workspaces check; holds is absent there because that collector has no ledger owner). The fixture patches `WorkspaceCheck._container_path` to None so the pass does not read the machine's real scratch folder.
+- `test_health_monitor...SweepTests.test_HM_0_5_a_collector_with_only_its_own_checks_is_healthy`: expected check names gain `'workspaces'` the same way. SweepTests, StatusTests and ScopeTests.test_HM_0_4_the_collectors_health... gain the same `_container_path` patch (fixture isolation only; no assertion weakened: without it a developer machine's own leftover `prepare-*` folders would be reported as findings).

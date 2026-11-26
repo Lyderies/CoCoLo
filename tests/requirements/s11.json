@@ -50,6 +50,11 @@
    "id": "HM2A-10",
    "source": "tests/requirements/s11.json#HM2A-10",
    "statement": "register adds the check to a health monitor with the journal live set and the caller's pending reader; a pass removes an orphan and shows it."
+  },
+  {
+   "id": "HM2A-11",
+   "source": "tests/requirements/s11.json#HM2A-11",
+   "statement": "The collector registers the workspaces check with a read-only pending reader over the project histories (no I/O at registration); a pass removes an orphan folder and keeps a live driver's folder."
   }
  ]
 }

@@ -26,6 +26,7 @@ from tests import test_learning_store as store_tests
 
 from codex_agents import health_monitor as hm
 from codex_agents import learning_store
+from codex_agents import health_workspaces
 
 PROJECT_A = 'prj_' + 'a' * 32
 PROJECT_B = 'prj_' + 'b' * 32
@@ -236,6 +237,7 @@ class ScopeTests(unittest.TestCase):
         store = store_tests.LearningStoreTests(methodName='runTest')
         store.setUp()
         self.addCleanup(store.tearDown)
+        self.enterContext(mock.patch.object(health_workspaces.WorkspaceCheck, '_container_path', lambda check: None))  # not the machine's real scratch folder
         server = learning_store.CollectorServer(store.ledger)
         server.start()
         self.addCleanup(server.stop)
@@ -328,6 +330,7 @@ def wait_for(condition, seconds=10):
 
 class SweepTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(mock.patch.object(health_workspaces.WorkspaceCheck, '_container_path', lambda check: None))  # not the machine's real scratch folder
         self.store = store_tests.LearningStoreTests(methodName='runTest')
         self.store.setUp()
         self.addCleanup(self.store.tearDown)
@@ -407,11 +410,12 @@ class SweepTests(unittest.TestCase):
         server._run_health_pass()
         view = server.health_monitor.view(self.store.project_a_id)
         self.assertEqual([], view['findings'])
-        self.assertEqual(['self_check', 'containers'], [c['check'] for c in view['checks']])
+        self.assertEqual(['self_check', 'containers', 'workspaces'], [c['check'] for c in view['checks']])
 
 
 class StatusTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(mock.patch.object(health_workspaces.WorkspaceCheck, '_container_path', lambda check: None))  # not the machine's real scratch folder
         self.harness = status_tests.StatusCliClientBoundaryTests(methodName='runTest')
         self.harness.setUp()
         self.addCleanup(self.harness.doCleanups)

@@ -37,3 +37,8 @@ and does not replace, the real-service normal and stop-first tests.
 Two added MED-2 safety regressions were red before their fixes: a durable service fault must survive an
 unreadable project history, and a report sink I/O error must still attempt host.close. The latter's mock
 host tests close ordering only; the real-service tests remain the wiring proof required from the primary.
+
+## IP-B 0.8.68 wiring (S8-HM3-7)
+
+- No S8 assertion changed. `test_registration_does_not_edit_primary_owned_files_or_builtin_api` stays as it is and passes: the holds check is registered from `health_monitor.py` (`HealthMonitor.register_state_checks`), and `learning_store.py` only calls that method. `with_builtin_checks` is unchanged. The holds check is registered only when the collector has a ledger owner (E1b-1: it can read the account ledger no other way).
+- S8-HM3-5 in the full run (docs/batch-0868-full-run.txt) was `test_unrelated_lifetime_caps_bytes_are_preserved` failing against the old byte-prefix rule; the replaced superset rule (docs/batch-0868-merge.md) already fixed it, it is not a wiring gap. It passes in test_health_holds.

@@ -159,6 +159,7 @@ from .result_contracts import MAX_RESULT_BODY_BYTES
 from .sql_read_budget import SQLReadConnection, SQLReadError
 from . import ledger_waits
 from .health_containers import ContainerCheck
+from . import health_workspaces, memory_holds
 from .health_monitor import HealthMonitor
 from .ledger_waits import LEDGER_LOCK_WAIT_MS, LEDGER_REQUEST_WAIT_MS  # noqa: F401 -- E1a, named here too
 from .account_claim_contracts import (
@@ -13849,6 +13850,14 @@ class CollectorServer:
         self.health_monitor = HealthMonitor.with_builtin_checks(sweep_interval_seconds=WORKER_RESULT_SWEEP_SECONDS)
         # HM-1: every COCOLO run container belongs to a live run, over the journals under this state root.
         self.health_monitor.register(ContainerCheck(self.state.root))
+        # HM-3 (S8) holds and HM-2a (S11) leftover preparation folders. Registering reads and writes nothing; the
+        # workspaces check is given its pending reader (project histories, read-only) and removes only on proof.
+        # The holds check reads the account ledger only through the ledger owner (E1b-1), so a collector without
+        # one has no holds check (it could only report that it cannot read).
+        if self._ledger_owner is not None:
+            self.health_monitor.register_state_checks(self.state, sweep_interval_seconds=WORKER_RESULT_SWEEP_SECONDS)
+        health_workspaces.register(self.health_monitor, self.state.root,
+                                   pending=lambda root=self.state.root: memory_holds.pending_workspaces(root))
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
         )

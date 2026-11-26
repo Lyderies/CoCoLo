@@ -22,6 +22,8 @@ OPERATIONS = frozenset({'register', 'take_preparation', 'release', 'hand_over', 
 # preparation row's evidence (`removal: pending`, `workspace`), which survives the row's release (a tombstone keeps
 # its evidence). A later service reads at most this many such records, the capacity report's run-slot bound.
 MAX_PENDING_REMOVALS = 64
+# HM-2a wiring (S11): the health monitor's reader looks at this many project folders in a pass; more is "unknown".
+MAX_PENDING_READ_PROJECTS = 256
 
 
 def active(history, handle):
@@ -397,3 +399,48 @@ def retire_instance(history, instance, pending=None):
                 evidence = evidence_json(**_pending(json.loads(row['evidence'] or '{}'), pending[row['identity']]))
             release_hold(history._connection, history.project_id, row['kind'], row['identity'],
                          'retired', now_ms=history._hold_now(), evidence=evidence)
+
+
+def pending_workspaces(state_root):
+    """HM-2a (S11): the preparation folders any project of `state_root` still owes a removal for, as a set of paths.
+
+    Read-only: every project history is opened as its own read-only snapshot (as the holds check does), nothing is
+    created, written or migrated. None means the records could not be read completely (a history that does not
+    open, more projects or pending rows than the bounds), so the workspaces check removes nothing that pass."""
+    import sqlite3
+    from contextlib import closing
+    from .health_holds import open_reader
+    projects = Path(state_root) / 'projects'
+    try:
+        names = []
+        with os.scandir(projects) as listing:
+            for entry in listing:
+                names.append(entry.name)
+                if len(names) > MAX_PENDING_READ_PROJECTS:
+                    return None
+    except FileNotFoundError:
+        return set()
+    except OSError:
+        return None
+    found = set()
+    for name in sorted(names):
+        database = projects / name / 'history.sqlite3'
+        if not database.is_file():
+            continue
+        try:
+            with closing(open_reader(database)) as history:
+                rows = history.execute("SELECT evidence FROM project_holds WHERE kind='preparation' "
+                    "AND evidence LIKE '%\"removal\":\"pending\"%' ORDER BY taken_at_ms,identity LIMIT ?",
+                    (MAX_PENDING_REMOVALS + 1,)).fetchall()
+        except (OSError, sqlite3.Error):
+            return None
+        if len(rows) > MAX_PENDING_REMOVALS:
+            return None
+        for (evidence,) in rows:
+            try:
+                facts = json.loads(evidence or '{}')
+            except ValueError:
+                return None
+            if facts.get('removal') == 'pending' and isinstance(facts.get('workspace'), str):
+                found.add(facts['workspace'])
+    return found

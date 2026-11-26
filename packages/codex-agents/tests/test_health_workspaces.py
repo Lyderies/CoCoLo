@@ -511,6 +511,79 @@ class RegistrationTests(Case):
             hw.register(monitor, self.base / 'state', pending=lambda: set())
 
 
+class CollectorWiringTests(Case):
+    """HM2A-11: the collector registers the workspaces check at its documented point."""
+
+    @requirements('HM2A-11')
+    def test_HM2A_11_the_collector_registers_the_check_and_a_pass_removes_an_orphan_and_keeps_a_live_folder(self):
+        from tests import test_learning_store as store_tests
+        from codex_agents import bridge, learning_store
+        fixture = store_tests.LearningStoreTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        self.state = fixture.state.root  # the owner markers name the collector's own state root
+        orphan = self.folder()
+        live = self.folder()
+        driver = self.state / 'projects' / OWNER_PROJECT / 'launches' / ('e' * 32)
+        driver.parent.mkdir(parents=True, exist_ok=True)
+        self.marker(live, instance='e' * 32)
+        lock = driver.with_suffix('.lock')
+        lock.touch(mode=0o600)
+        descriptor = os.open(lock, os.O_RDWR)
+        self.addCleanup(os.close, descriptor)
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)  # its driver is running
+        server = learning_store.CollectorServer(fixture.ledger)
+        self.assertIn('workspaces', [check.name for check in server.health_monitor._checks])
+        with mock.patch.object(workspaces().WorkspaceCheck, '_container_path', lambda check: self.container):
+            server._run_health_pass()
+        self.assertFalse(os.path.lexists(orphan))
+        self.assertTrue(live.is_dir())
+        view = server.health_monitor.view(None)
+        self.assertIn('orphan_removed', [item['reason_code'] for item in view['findings']])
+
+    @requirements('HM2A-11')
+    def test_HM2A_11_registering_does_no_io_and_the_pending_reader_goes_through_the_projects_histories(self):
+        from tests import test_learning_store as store_tests
+        from codex_agents import learning_store
+        fixture = store_tests.LearningStoreTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        before = sorted(p.name for p in fixture.state.root.iterdir())
+        server = learning_store.CollectorServer(fixture.ledger)
+        self.assertEqual(before, sorted(p.name for p in fixture.state.root.iterdir()))
+        check = next(c for c in server.health_monitor._checks if c.name == 'workspaces')
+        self.assertEqual(set(), check._pending())  # no project history owes a removal
+        directory = fixture.state.root / 'projects' / fixture.project_a_id
+        directory.mkdir(parents=True, mode=0o700)
+        (directory / 'history.sqlite3').write_bytes(b'not a database')
+        self.assertIsNone(check._pending())  # unreadable records: the check removes nothing and says so
+
+    @requirements('HM2A-11')
+    def test_HM2A_11_the_pending_reader_goes_past_its_bounds_and_says_unknown(self):
+        import sqlite3
+        from codex_agents import memory_holds
+        root = self.base / 'state2'
+        for name in ('prj_a', 'prj_b', 'prj_c'):
+            (root / 'projects' / name).mkdir(parents=True)
+        self.assertIsNone(self.read_with(memory_holds, 'MAX_PENDING_READ_PROJECTS', 2, root))  # more projects than the bound
+        self.assertEqual(set(), memory_holds.pending_workspaces(root))  # no histories: nothing owed
+        database = root / 'projects' / 'prj_a' / 'history.sqlite3'
+        connection = sqlite3.connect(database)
+        connection.execute('CREATE TABLE project_holds(kind TEXT, identity TEXT, evidence TEXT, taken_at_ms INTEGER)')
+        for number in range(3):
+            connection.execute('INSERT INTO project_holds VALUES(?,?,?,?)', (
+                'preparation', 'i%d' % number, json.dumps({'removal': 'pending', 'workspace': '/x/prepare-%d' % number}, separators=(',', ':')), number))
+        connection.commit()
+        connection.close()
+        self.assertEqual({'/x/prepare-0', '/x/prepare-1', '/x/prepare-2'}, memory_holds.pending_workspaces(root))
+        self.assertIsNone(self.read_with(memory_holds, 'MAX_PENDING_REMOVALS', 2, root))  # more owed than the bound
+
+    @staticmethod
+    def read_with(module, name, value, root):
+        with mock.patch.object(module, name, value):
+            return module.pending_workspaces(root)
+
+
 class OwnerProofTests(Case):
     """Fix round, review r1 HIGH 1: deleting a folder needs positive proof that its owner is gone."""
 

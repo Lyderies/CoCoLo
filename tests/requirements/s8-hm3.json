@@ -30,6 +30,11 @@
    "id": "S8-HM3-6",
    "source": "tests/requirements/s8-hm3.json#S8-HM3-6",
    "statement": "Use scoped fixed plain findings; preserve builtin registration API and defer collector registration to the primary after S5."
+  },
+  {
+   "id": "S8-HM3-7",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-7",
+   "statement": "The collector registers the holds check with its health monitor; a health pass over a fixture project runs it and reports its findings, scoped to the project."
   }
  ]
 }

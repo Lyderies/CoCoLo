@@ -12,6 +12,8 @@ run-supervisor RS-6. Unit base: ce81bd96 (0.8.67, IP-A). No version or digest ca
 | S8-HM3-5 | Bound source reads with keyset pages through existing indexes and deadlines; use owner read snapshots for the ledger and read-only connections for project histories. Continue after each page; no lifetime refusal, full scan, import-time I/O or writes from checks except service stop. | test_past_page_limit; test_account_projects_past_page_limit; test_past_legacy_evidence_limit; test_query_plans_and_read_only; test_unreadable_account_is_plain_machine_finding; test_deadline |
 | S8-HM3-6 | Findings use fixed plain owner wording and project scope, retain findings across project pages and label readings older than one sweep, with no paths, private identities or exception text. Keep with_builtin_checks unchanged; the primary adds the collector registration after S5 (MED-3). | test_scoping_and_private_text; test_registration; test_findings_survive_other_project_pass_and_say_when_stale |
 
+| S8-HM3-7 | Wiring (IP-B 0.8.68): the collector registers the holds check with its health monitor (through `HealthMonitor.register_state_checks`, only when a ledger owner exists); a health pass over a fixture project runs it and reports its findings, project-scoped. `learning_store.py` still names neither `health_holds` nor `HoldsCheck`. | test_collector_health_pass_runs_the_holds_check_and_reports_its_findings |
+
 Implementation boundary: every account read runs on the ledger owner through a bounded request. Project
 histories use independent read-only snapshots. The project service uses D13 shutdown and retains a fixed
 service fault status for the collector to read; a healthy successor acknowledges that status.
