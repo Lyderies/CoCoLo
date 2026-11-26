@@ -417,6 +417,16 @@ class _PendingExpired(Exception):
     """The pending read's single deadline passed."""
 
 
+class _HistoryUnrecognised(Exception):
+    """The database is not a history this reader can tell owes nothing (decision 365, review r1)."""
+
+
+# project_holds arrived with schema step 18 (project_history._SCHEMA_V18); a valid store without it is one whose
+# PRAGMA user_version is 1..17 and that holds its single history_identity row. Anything else is not "older", it is
+# unrecognised and must never count zero.
+LAST_VERSION_WITHOUT_HOLDS = 17
+
+
 def _read_pending(history, deadline):
     """The pending evidence rows of the one project this history holds, or raise _PendingExpired / sqlite3.Error."""
     import sqlite3
@@ -428,13 +438,15 @@ def _read_pending(history, deadline):
             if 'no such table' not in str(error):
                 raise
             identity = None  # a store without the identity table: the whole (bounded) table is this project's
+        if _monotonic() > deadline:
+            raise _PendingExpired
         if identity is None:
             query, arguments = ("SELECT evidence FROM project_holds WHERE kind='preparation' "
                                 "AND evidence LIKE '%\"removal\":\"pending\"%'"), ()
         elif len(identity) == 1:
             query, arguments = PENDING_SQL, (identity[0][0],)
         else:
-            raise sqlite3.DatabaseError('history identity is not a single project')
+            raise _HistoryUnrecognised  # no or several identity rows: not a history of one project
         rows = []
         try:
             for (evidence,) in history.execute(query, arguments):
@@ -446,7 +458,13 @@ def _read_pending(history, deadline):
         except sqlite3.OperationalError as error:
             if not _is_missing_table(error, 'project_holds'):
                 raise
-            return []  # a store written before project_holds existed owes nothing (decision 365); a corrupt one raises
+            # a validated older store owes nothing (decision 365); an unrecognised one is unknown, a corrupt one raises
+            version = history.execute('PRAGMA user_version').fetchone()[0]
+            if identity is None or len(identity) != 1 or version not in range(1, LAST_VERSION_WITHOUT_HOLDS + 1):  # a schema version, not a count
+                raise _HistoryUnrecognised
+            rows = []
+        if _monotonic() > deadline:
+            raise _PendingExpired  # a slow open or a last small query must not be accepted past the one deadline
         return rows
     finally:
         history.set_progress_handler(None, 0)
@@ -464,7 +482,7 @@ def _is_missing_table(error, table):
 def pending_workspaces_detail(state_root):
     """(paths, None) when every project's records were read, else (None, reason). Decision 365: the reason names
     what is left (too_many_projects, projects_unreadable:<Class>, deadline, history_unreadable:<Class>:<project id>,
-    too_many_pending:<project id>, evidence_unreadable:<project id>); a project id is the only name it carries."""
+    history_unrecognised:<project id>, too_many_pending:<project id>, evidence_unreadable:<project id>); a project id is the only name it carries."""
     from contextlib import closing
     from .health_holds import open_reader
     deadline = _monotonic() + PENDING_DEADLINE_SECONDS
@@ -494,6 +512,8 @@ def pending_workspaces_detail(state_root):
                 rows = _read_pending(history, deadline)
         except _PendingExpired:
             return None, 'deadline'
+        except _HistoryUnrecognised:
+            return None, 'history_unrecognised:' + _project_label(name)
         except sqlite3.OperationalError as error:
             if _monotonic() > deadline and 'interrupted' in str(error):
                 return None, 'deadline'
@@ -507,7 +527,11 @@ def pending_workspaces_detail(state_root):
                 facts = json.loads(evidence or '{}')
             except ValueError:
                 return None, 'evidence_unreadable:' + _project_label(name)
-            if facts.get('removal') == 'pending' and isinstance(facts.get('workspace'), str):
+            if not isinstance(facts, dict):
+                return None, 'evidence_unreadable:' + _project_label(name)
+            if facts.get('removal') == 'pending':
+                if not isinstance(facts.get('workspace'), str):
+                    return None, 'evidence_unreadable:' + _project_label(name)
                 found.add(facts['workspace'])
     return found, None
 

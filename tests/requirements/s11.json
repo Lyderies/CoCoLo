@@ -59,12 +59,12 @@
   {
    "id": "HM2A-12",
    "source": "tests/requirements/s11.json#HM2A-12",
-   "statement": "A project whose history has no project_holds table (an older but valid store) owes no removals: it counts zero and does not fail the whole pending read; a corrupt or unreadable store still does."
+   "statement": "A project whose history has no project_holds table counts zero only when it is a validated older store (PRAGMA user_version 1..17, the versions before project_holds in step 18, with exactly one history_identity row); an empty, zero-byte, table-less, current-version-without-the-table, truncated or otherwise unrecognised database is unknown with history_unrecognised:<project id>, never zero; a corrupt or unreadable store still fails. Success is accepted only inside the single deadline, checked after the open and after the last query."
   },
   {
    "id": "HM2A-13",
    "source": "tests/requirements/s11.json#HM2A-13",
-   "statement": "Every remaining unknown pending read names its reason (too_many_projects, projects_unreadable:<Class>, history_unreadable:<Class>:<project id>, too_many_pending:<project id>, deadline); the workspaces finding carries it in its text and subject with a plain next step, within the existing length bounds. No dedupe exists in the health monitor for findings (it shows the last pass's findings), so none was added."
+   "statement": "Every remaining unknown pending read names its reason (too_many_projects, projects_unreadable:<Class>, history_unreadable:<Class>:<project id>, history_unrecognised:<project id>, too_many_pending:<project id>, evidence_unreadable:<project id>, deadline); decoded evidence that is not an object, or a pending row without a text workspace, is evidence_unreadable:<project id>; the workspaces finding carries it in its text and subject with a plain next step, within the existing length bounds. No dedupe exists in the health monitor for findings (it shows the last pass's findings), so none was added."
   }
  ]
 }
