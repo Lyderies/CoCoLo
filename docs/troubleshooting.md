@@ -162,6 +162,13 @@ the installed files intact while investigating.
 project's own service. Nothing was changed and its child keeps running. When
 that run ends, the old service stops by itself; then run `./setup.sh --update`.
 An idle service needs no signal proof: withdrawal of its hint lets it stop.
+An installed service runs from its protected runtime copy under
+`~/.codex/agent-orchestration/`; the update accepts that copy's
+`project_host.py` as well as the project's own. If an idle service still cannot
+be confirmed, the message says it has no child run in progress and names its
+process number: check it with `ps -o pid,lstart,command -p <pid>`, and if that
+line names this project's `project_host.py` and this project's folder, stop it
+with `kill <pid>`, then run `./setup.sh --update`.
 
 `project_store_busy` means another program, such as a backup or records command,
 is using this project's records. Nothing was changed. Let it finish, then run

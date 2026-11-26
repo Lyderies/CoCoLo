@@ -11,3 +11,14 @@ with a plain missing-artifact or digest-mismatch reason. The unit witness runs
 extraction with every subprocess/Git call forbidden, verifies VERSION 0.8.66,
 and rejects a corrupt artifact. The native V34 audit separately names its
 historical object and skips with an explicit offline reason if it is absent.
+
+`0.8.68-native-package.tar.gz` is an unmodified
+`git archive e46759a5 packages/codex-agents/native-package` (the released 0.8.68
+package, runtime digest `28435b17...d9ed0`), compressed with `gzip -n`. SHA-256:
+
+`e05a68602ff65455dc8cdbb4efd0c696b4a61fe9a20665c34d4c622547e9b765`
+
+`packages/codex-agents/tests/test_b4t_native_p68.py` checks this digest, installs
+the package, lets 0.8.68's own collector start its service from the protected
+launch copy (the installed launch line), and runs the update against it
+(decision 372).

@@ -427,6 +427,7 @@
  "codex:tests.test_b4t_takeover": "scenario",
  "codex:tests.test_b4t_native": "scenario",
  "codex:tests.test_b4t_native_kill": "scenario",
+ "codex:tests.test_b4t_native_p68": "scenario",
  "codex:tests.test_b4t_native_audit_p66": "scenario",
  "codex:tests.test_b4t_native_audit_v34": "scenario",
  "codex:tests.test_s14b_upgrade_indexes": "scenario",
