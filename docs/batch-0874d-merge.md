@@ -22,3 +22,5 @@ byte-identical, scripts/test-requirements.json unchanged (already carried the ne
   the lock-holder hook never fires (`holders` empty); the open raises sql_read_unavailable.
 Both exercise the open/publish lock path that the torn-read fence-under-lock change touches. Not changed here; need a decision
 on whether the code or the test follows requirement E1a.
+
+- TORN-1 bounded-wait correction 46ee2492: full run 2 (docs/batch-0874d-full-run2.txt): 576 units, 0 failed, 612.1 s elapsed.
