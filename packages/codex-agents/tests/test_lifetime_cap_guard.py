@@ -49,6 +49,12 @@ def runtime_sites() -> collections.Counter:
 
 def problems(sites: collections.Counter, registry: dict, test_names: set[str]) -> list[str]:
     found = []
+    for key, entry in sorted(registry.items()):
+        for field in ('ends', 'test'):
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                found.append(f"{key}: missing non-empty '{field}'")
+        if isinstance(entry.get('test'), str) and entry['test'].strip() and entry['test'] not in test_names:
+            found.append(f"{key}: its test {entry['test']} does not exist")
     for key, count in sorted(sites.items()):
         entry = registry.get(key)
         if entry is None:
@@ -56,8 +62,6 @@ def problems(sites: collections.Counter, registry: dict, test_names: set[str]) -
                          "(how what it counts goes away) and 'test' (a past-the-limit test)")
         elif count > entry["checks"]:
             found.append(f"{key}: {count} limit checks, {entry['checks']} listed; describe the new one")
-        elif "test" in entry and entry["test"] not in test_names:
-            found.append(f"{key}: its test {entry['test']} does not exist")
     return found
 
 
@@ -68,6 +72,7 @@ def test_names() -> set[str]:
     return names
 
 
+@__import__('test_framework').requirements('S15-O0C-GUARD', why_not_scenario='The count-site and registry guard is a static AST/JSON contract; malformed and missing metadata are tested directly.')
 class LifetimeCapGuardTests(unittest.TestCase):
     def test_every_count_based_limit_in_the_runtime_is_listed_with_its_end(self):
         registry = json.loads(REGISTRY.read_text(encoding="utf-8"))["sites"]
@@ -86,7 +91,20 @@ class LifetimeCapGuardTests(unittest.TestCase):
 
     def test_a_listed_function_gaining_a_limit_is_caught(self):
         sites = collections.Counter({"m.py::take": 2})
-        self.assertIn("2 limit checks, 1 listed", problems(sites, {"m.py::take": {"checks": 1}}, set())[0])
+        self.assertIn("2 limit checks, 1 listed", problems(sites, {"m.py::take": {"checks": 1}}, set())[-1])
+
+    def test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site(self):
+        for field in ('ends', 'test'):
+            for bad in (None, '', '  ', 0, [], {}):
+                with self.subTest(field=field, value=bad):
+                    entry = {'checks': 1, 'ends': 'freed after closure', 'test': 'test_past_limit'}
+                    entry[field] = bad
+                    self.assertIn("missing non-empty '" + field + "'",
+                                  problems(collections.Counter(), {'stale.py::take': entry}, {'test_past_limit'})[0])
+            entry = {'checks': 1, 'ends': 'freed after closure', 'test': 'test_past_limit'}
+            del entry[field]
+            self.assertIn("missing non-empty '" + field + "'",
+                          problems(collections.Counter(), {'stale.py::take': entry}, {'test_past_limit'})[0])
 
     def test_a_listed_test_must_exist(self):
         sites = collections.Counter({"m.py::take": 1})

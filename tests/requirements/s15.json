@@ -1,0 +1,35 @@
+{
+ "authority": "docs/requirements/s15/STATUS.md",
+ "requirements": [
+  {
+   "id": "S15-B0-2",
+   "statement": "B0-6 / B4s, owner decisions 132/377: a reservation stranded by a service restart releases and settles exactly once, frees capacity, and writes no terminal or terminal-outbox row; the original B0-2 terminal test stays skipped.",
+   "source": "tests/requirements/s15.json#S15-B0-2"
+  },
+  {
+   "id": "S15-O0C-GUARD",
+   "statement": "O0c: every lifetime-cap registry entry, including a stale site, must name a nonempty ends description and an existing test; new or increased count-limit sites must be registered.",
+   "source": "tests/requirements/s15.json#S15-O0C-GUARD"
+  },
+  {
+   "id": "S15-O0C-P3",
+   "statement": "O0c / B0-6 P3: failed-before-launch lease lifecycles beyond the lease verification limit must leave live capacity counts readable after their real, exactly-once releases.",
+   "source": "tests/requirements/s15.json#S15-O0C-P3"
+  },
+  {
+   "id": "S15-RS8-SETTLEMENT",
+   "statement": "RS-8 / B0-6: lease, reservation, open-binding and result-custody settlement rows recover across pre-settlement stops, cuts before and after release, and lost post-commit replies, with stable replay and baseline live capacity.",
+   "source": "tests/requirements/s15.json#S15-RS8-SETTLEMENT"
+  },
+  {
+   "id": "S15-RS8-MEMORY",
+   "statement": "RS-8 / B0-6: driver-entry and preparation memory rows retain custody for a live instance, recover across lost registration replies and cuts before and after recovery release, preserve replay after clock rollback, and permit unattended orchestration close.",
+   "source": "tests/requirements/s15.json#S15-RS8-MEMORY"
+  },
+  {
+   "id": "S15-RS8-MUTATION",
+   "statement": "RS-8: independently disabling each covered settlement or memory recovery release must make that same row fail its ordinary release oracle.",
+   "source": "tests/requirements/s15.json#S15-RS8-MUTATION"
+  }
+ ]
+}

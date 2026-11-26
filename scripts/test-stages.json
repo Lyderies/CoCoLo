@@ -434,5 +434,9 @@
  "codex:tests.test_s13a_lease_pass": "integration",
  "codex:tests.test_s13b_due_drain": "integration",
  "codex:tests.test_health_resources": "integration",
- "codex:tests.test_health_resources_open": "integration"
+ "codex:tests.test_health_resources_open": "integration",
+ "codex:tests.test_s15_lease_churn": "integration",
+ "codex:tests.test_s15_memory_matrix": "integration",
+ "codex:tests.test_s15_reservation_recovery": "integration",
+ "codex:tests.test_s15_settlement_matrix": "integration"
 }

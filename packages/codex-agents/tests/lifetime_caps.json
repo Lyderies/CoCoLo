@@ -1368,9 +1368,9 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "project_history.py::release_earlier_unarmed_leases": {
-    "checks": 1,
-    "ends": "S13a/S13b (decisions 354, 356): ONE selection per call of at most min(limit,64) due unarmed lease rows (one index range, oldest next_check_ms first); a row leaves the due set when it is released or backed off (1 s doubling to 5 min), and the next owner step reaches the rows behind it; nothing is refused by the bound; BOUNDED",
-    "test": "test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff"
+   "checks": 1,
+   "ends": "S13a/S13b (decisions 354, 356): ONE selection per call of at most min(limit,64) due unarmed lease rows (one index range, oldest next_check_ms first); a row leaves the due set when it is released or backed off (1 s doubling to 5 min), and the next owner step reaches the rows behind it; nothing is refused by the bound; BOUNDED",
+   "test": "test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff"
   },
   "project_history.py::runtime_close_status": {
    "checks": 1,
@@ -1378,7 +1378,8 @@
   },
   "project_history.py::_result_counts": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Live charges end at unsent lease release, authenticated settlement, or result retirement; the ordinary purge removes finished lease source rows after the closed orchestration and deadline plus crash grace. S15-P3 exposes that this verification scan still counts retained finished leases, admits MAX_LEASE_ROWS + 1, then refuses live-capacity reads.",
+   "test": "test_failed_before_launch_past_lease_verification_limit_keeps_live_counts_readable"
   },
   "project_history.py::_result_file_info": {
    "checks": 1,

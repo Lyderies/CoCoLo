@@ -1192,7 +1192,7 @@
    "codex:tests.test_hold_lifecycle.LostServiceHoldTests.test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal"
   ],
   "source": "packages/codex-agents/tests/test_hold_lifecycle.py#LEGACY-HOLD-LIFECYCLE-B0-2",
-  "statement": "**LEGACY-HOLD-LIFECYCLE-B0-2 \u2014 Deferred run supervisor reservation settlement.**\nA reservation left by a stopped service exists and eventually receives its lost terminal. B0-2 gates the run\nsupervisor and remains skipped under the owner's narrowed B0 scope of 2026-11-20. Its registered executable\nobligation remains not_run and supplies no passing coverage until that deferred work is executed."
+  "statement": "**LEGACY-HOLD-LIFECYCLE-B0-2 \u2014 Deferred terminal expectation.**\nThe original terminal assertions remain skipped by owner decisions 132/377: B4s settlement writes no\nterminal record by specification. S15 proves release, capacity recovery and replay separately."
  },
  "LOCKHOLD-1": {
   "checks": [
@@ -5168,5 +5168,52 @@
   ],
   "source": "tests/requirements/s10.json#S10-HM6-8",
   "statement": "Low or unreadable disks are reported to the user as plain health findings; no import-time I/O."
+ },
+ "S15-B0-2": {
+  "checks": [
+   "codex:tests.test_s15_reservation_recovery.ReservationRecoveryTests.test_successor_settlement_releases_once_frees_capacity_and_writes_no_terminal"
+  ],
+  "source": "tests/requirements/s15.json#S15-B0-2",
+  "statement": "B0-6 / B4s, owner decisions 132/377: a reservation stranded by a service restart releases and settles exactly once, frees capacity, and writes no terminal or terminal-outbox row; the original B0-2 terminal test stays skipped."
+ },
+ "S15-O0C-GUARD": {
+  "checks": [
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_function_gaining_a_limit_is_caught",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_test_must_exist",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-GUARD",
+  "statement": "O0c: every lifetime-cap registry entry, including a stale site, must name a nonempty ends description and an existing test; new or increased count-limit sites must be registered."
+ },
+ "S15-O0C-P3": {
+  "checks": [
+   "codex:tests.test_s15_lease_churn.LeaseChurnTests.test_failed_before_launch_past_lease_verification_limit_keeps_live_counts_readable"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-P3",
+  "statement": "O0c / B0-6 P3: failed-before-launch lease lifecycles beyond the lease verification limit must leave live capacity counts readable after their real, exactly-once releases."
+ },
+ "S15-RS8-MEMORY": {
+  "checks": [
+   "codex:tests.test_s15_memory_matrix.MemoryMatrixTests.test_both_memory_kinds_cross_crashes_and_lost_registration_reply"
+  ],
+  "source": "tests/requirements/s15.json#S15-RS8-MEMORY",
+  "statement": "RS-8 / B0-6: driver-entry and preparation memory rows retain custody for a live instance, recover across lost registration replies and cuts before and after recovery release, preserve replay after clock rollback, and permit unattended orchestration close."
+ },
+ "S15-RS8-MUTATION": {
+  "checks": [
+   "codex:tests.test_s15_memory_matrix.MemoryMatrixTests.test_each_memory_recovery_release_disabled_once_fails_its_row",
+   "codex:tests.test_s15_settlement_matrix.SettlementMatrixTests.test_each_settlement_release_disabled_once_fails_its_own_row"
+  ],
+  "source": "tests/requirements/s15.json#S15-RS8-MUTATION",
+  "statement": "RS-8: independently disabling each covered settlement or memory recovery release must make that same row fail its ordinary release oracle."
+ },
+ "S15-RS8-SETTLEMENT": {
+  "checks": [
+   "codex:tests.test_s15_settlement_matrix.SettlementMatrixTests.test_lease_and_reservation_cross_cuts_before_and_after_release_and_lost_reply"
+  ],
+  "source": "tests/requirements/s15.json#S15-RS8-SETTLEMENT",
+  "statement": "RS-8 / B0-6: lease, reservation, open-binding and result-custody settlement rows recover across pre-settlement stops, cuts before and after release, and lost post-commit replies, with stable replay and baseline live capacity."
  }
 }

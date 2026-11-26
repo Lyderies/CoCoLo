@@ -1,0 +1,183 @@
+{
+ "elapsed_seconds": 4.5,
+ "jobs": 1,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 4.528,
+ "over_budget": [],
+ "budget_failures": [],
+ "budget_warnings": [
+  {
+   "module": "codex:tests.test_b2_service_outcome_paths",
+   "ceiling": 69.16,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_billing_gate",
+   "ceiling": 78.58,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_bridge",
+   "ceiling": 368.25,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_container_stop",
+   "ceiling": 72.23,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "ceiling": 119.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "ceiling": 112.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "ceiling": 119.75,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "ceiling": 520.37,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_project_start",
+   "ceiling": 183.4,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_result_lifetime",
+   "ceiling": 73.05,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_session_guard",
+   "ceiling": 7.23,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "ceiling": 103.34,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "ceiling": 247.71,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install",
+   "ceiling": 113.54,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "ceiling": 135.45,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_sh",
+   "ceiling": 203.64,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_straight",
+   "ceiling": 293.12,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_update",
+   "ceiling": 275,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "ceiling": 282.08,
+   "seconds": null,
+   "status": "not_measured"
+  }
+ ],
+ "debt_retirement_required": [],
+ "discovery_seconds": 2.431454790988937,
+ "preflight_seconds": 7.793459375039674,
+ "metadata_errors": [],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [
+  "S15-O0C-GUARD",
+  "S15-O0C-P3"
+ ],
+ "units": 5,
+ "tests": {
+  "codex": 11
+ },
+ "failed_units": [
+  "codex:tests.test_s15_lease_churn",
+  "codex:tests.test_lifetime_cap_guard"
+ ],
+ "slowest_units": [
+  [
+   "codex:tests.test_s15_settlement_matrix",
+   1.4
+  ],
+  [
+   "codex:tests.test_s15_memory_matrix",
+   1.2
+  ],
+  [
+   "codex:tests.test_lifetime_cap_guard",
+   0.8
+  ],
+  [
+   "codex:tests.test_s15_reservation_recovery",
+   0.6
+  ],
+  [
+   "codex:tests.test_s15_lease_churn",
+   0.6
+  ]
+ ],
+ "logs": "/private/tmp/pt43zj134h",
+ "test_outcomes": {
+  "tests.test_s15_settlement_matrix.SettlementMatrixTests.test_each_settlement_release_disabled_once_fails_its_own_row": "passed",
+  "tests.test_s15_settlement_matrix.SettlementMatrixTests.test_lease_and_reservation_cross_cuts_before_and_after_release_and_lost_reply": "passed",
+  "tests.test_s15_memory_matrix.MemoryMatrixTests.test_both_memory_kinds_cross_crashes_and_lost_registration_reply": "passed",
+  "tests.test_s15_memory_matrix.MemoryMatrixTests.test_each_memory_recovery_release_disabled_once_fails_its_row": "passed",
+  "tests.test_s15_lease_churn.LeaseChurnTests.test_failed_before_launch_past_lease_verification_limit_keeps_live_counts_readable": "failed",
+  "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_function_gaining_a_limit_is_caught": "passed",
+  "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_test_must_exist": "passed",
+  "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught": "passed",
+  "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end": "failed",
+  "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site": "passed",
+  "tests.test_s15_reservation_recovery.ReservationRecoveryTests.test_successor_settlement_releases_once_frees_capacity_and_writes_no_terminal": "passed"
+ },
+ "command_exit_code": 1
+}

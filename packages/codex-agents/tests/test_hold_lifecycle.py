@@ -18,10 +18,9 @@ one released slot with release kind lost. Cancelling a container run removes its
 slot and leaves no failed stop. A container that cannot stop reports cancel_requested and an attention message,
 keeps its slot across repeated stop attempts, then releases it after a retried stop succeeds.
 
-**LEGACY-HOLD-LIFECYCLE-B0-2 — Deferred run supervisor reservation settlement.**
-A reservation left by a stopped service exists and eventually receives its lost terminal. B0-2 gates the run
-supervisor and remains skipped under the owner's narrowed B0 scope of 2026-11-20. Its registered executable
-obligation remains not_run and supplies no passing coverage until that deferred work is executed.
+**LEGACY-HOLD-LIFECYCLE-B0-2 — Deferred terminal expectation.**
+The original terminal assertions remain skipped by owner decisions 132/377: B4s settlement writes no
+terminal record by specification. S15 proves release, capacity recovery and replay separately.
 
 ## Test implementation
 
@@ -128,7 +127,7 @@ class LostServiceHoldTests(LostRunAfterStopTests):
         return None if row is None else (row[0], bool(row[1]))
 
     @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE-B0-2', why_not_scenario='Real service restart exposes the deferred run supervisor reservation settlement boundary.')
-    @unittest.skip("gates the run supervisor: the owner narrowed B0 on 2026-11-20 (stranded reservations)")
+    @unittest.skip('Owner decisions 132/377: B4s writes no terminal record by specification; S15 tests settlement and release separately.')
     def test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal(self):
         """B0-2 (fails on 0.8.37): the next service settles the lost run at the account, but its result
         reservation keeps no terminal, so the orchestration can never close and the row is never purged."""
