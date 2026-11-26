@@ -2,6 +2,7 @@
 from dataclasses import replace
 from pathlib import Path
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -318,8 +319,25 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
 
         p = self.reference
         service, _ = self.wire_service()
-        endpoints = [Path('/private/tmp/m11/control.sock'), Path('/private/tmp/m11/history.sock'),
-                     Path('/private/tmp/m11/account.sock')]
+        # The real _check_new_run guard stays: its run.sock must exist beside the control endpoint.
+        sockets = Path(self.enterContext(tempfile.TemporaryDirectory(prefix='m11-')))
+        (sockets / 'run.sock').touch()
+        endpoints = [sockets / 'control.sock', sockets / 'history.sock', sockets / 'account.sock']
+        real_run_driver = client_runtime._run_driver
+        register = mock.Mock(side_effect=[
+            {'protocol': 1, 'state': 'refused', 'reason_code': 'history_service_unavailable'},
+            {'protocol': 1, 'state': 'preparing', 'reason_code': None}])
+
+        def run_driver(contexts, control, operation, *args, **options):
+            # run.check goes through the real _run_driver and its reply validation; only the socket exchange
+            # beneath it is replaced, with a protocol-valid ready reply. Registration replies stay synthetic.
+            if operation == 'run.check':
+                return real_run_driver(contexts, control, operation, *args, **options)
+            return register(contexts, control, operation, *args, **options)
+
+        def run_check_transport(path, raw, **options):
+            self.assertEqual('run.check', parse_bounded_json(raw, max_bytes=4_096)['operation'])
+            return canonical_json({'protocol': 1, 'state': 'ready', 'reason_code': None})
         requests = []
 
         def exchange(path, raw, **options):
@@ -344,10 +362,8 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
               mock.patch.object(client_runtime.HistoryClient, 'worker_input',
                   return_value={'worker': p.base.context.snapshot()[1]['worker']}),
               mock.patch.object(account_api, 'exchange_frame', side_effect=exchange),
-              mock.patch.object(client_runtime, '_check_new_run'),  # S10: this fixture has no run driver socket
-              mock.patch.object(client_runtime, '_run_driver', side_effect=[
-                  {'protocol': 1, 'state': 'refused', 'reason_code': 'history_service_unavailable'},
-                  {'protocol': 1, 'state': 'preparing', 'reason_code': None}]) as register):
+              mock.patch.object(client_runtime, 'exchange_frame', side_effect=run_check_transport),
+              mock.patch.object(client_runtime, '_run_driver', side_effect=run_driver)):
             first = open_run()
             self.assertFalse(first['project_host_registered'])
             self.assertFalse(first['known'])

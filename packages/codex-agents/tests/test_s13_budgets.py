@@ -136,7 +136,6 @@ class S13Budgets(unittest.TestCase):
         self.assertLess(value['seconds_until_drained'], 60)
 
 
-
 class S13RegressionControls(unittest.TestCase):
     """Each control patches the product here only and must turn the matching check red."""
 

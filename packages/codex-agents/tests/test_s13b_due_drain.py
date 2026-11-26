@@ -166,6 +166,26 @@ class DueDrainTests(unittest.TestCase):
         self.assertEqual(1, len(self.passes))
 
     @requirements('S13B-IDLE', why_not_scenario=WHY)
+    def test_wrapper_failure_before_the_body_leaves_no_stale_continuation(self):
+        # A full pass leaves the writer's continuation flag True. If the next call fails before its body runs
+        # (the operation wrapper raises), that stale True must not requeue: the failed request keeps the cadence.
+        self.start(130)
+        self.step()
+        self.assertEqual(1, len(self.passes))
+        calls = []
+
+        def failing(store, live, *, limit=10):
+            calls.append(limit)
+            raise HistoryError('history_incompatible')
+
+        with mock.patch.object(ProjectHistory, 'release_earlier_unarmed_leases', failing):
+            self.step()  # the queued continuation runs and fails before the body
+            self.assertEqual([64], calls)
+            self.step()
+            self.step()
+        self.assertEqual([64], calls)  # no requeue from the stale flag
+
+    @requirements('S13B-IDLE', why_not_scenario=WHY)
     def test_full_selection_that_cannot_back_rows_off_waits_instead_of_spinning(self):
         self.start(64, blocked=64)
         with mock.patch.object(ProjectHistory, '_defer_unarmed_lease',

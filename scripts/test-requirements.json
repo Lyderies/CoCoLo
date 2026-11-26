@@ -5053,7 +5053,8 @@
   "checks": [
    "codex:tests.test_s13b_due_drain.DueDrainTests.test_non_full_pass_without_backoff_keeps_ten_second_cadence",
    "codex:tests.test_s13b_due_drain.DueDrainTests.test_queued_or_failed_request_never_triggers_immediate_retry",
-   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_selection_that_cannot_back_rows_off_waits_instead_of_spinning"
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_selection_that_cannot_back_rows_off_waits_instead_of_spinning",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_wrapper_failure_before_the_body_leaves_no_stale_continuation"
   ]
  },
  "S13B-BACKOFF": {

@@ -1353,13 +1353,18 @@ class ResultPersistenceLane:
                 with self._lock:
                     live = {(pending.lease_binding.run_handle, pending.lease_binding.attempt)
                             for pending in self._jobs.values() if pending.lease_binding is not None}
+                # A backed-off row may hide eligible rows behind it even when none was released. The next
+                # driver step gets one more bounded request; an empty pass clears this signal. The writer-local
+                # flag is reset here, before the call: a wrapper failure before the body runs (which would never
+                # reset it) cannot leave an earlier pass's True behind to requeue. A body that fails late keeps what
+                # it set (a backoff it made still continues). A lease deferred because a live job holds it also sets
+                # the flag, by design: it is backed off like any blocked row, so the next step reaches rows behind it.
+                history._unarmed_lease_pass_pending = False
                 try:
                     history.release_earlier_unarmed_leases(live, limit=64)
                 except (HistoryError, sqlite3.Error):
                     maintenance_ok = False
-                # A backed-off row may hide eligible rows behind it even when none was released. The next
-                # driver step gets one more bounded request; an empty pass clears this signal.
-                request.lease_pass_pending = getattr(history, '_unarmed_lease_pass_pending', False)
+                request.lease_pass_pending = history._unarmed_lease_pass_pending
                 # An earlier service's unarmed lease past its time can never be armed; release it here,
                 # with no client action (O10 D1). Armed leases are never expired by time.
                 try:

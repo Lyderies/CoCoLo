@@ -2642,6 +2642,8 @@ class ProjectHistory:
             try:
                 with self._transaction():
                     if (run_handle, attempt) in live:
+                        # A live job's lease is backed off like any blocked row; that sets the continuation flag
+                        # (deliberately: the next step reaches the rows behind it, and the backoff bounds the retry).
                         self._defer_unarmed_lease(identity, now)
                         continue
                     value = self._lease(self._connection.execute(
