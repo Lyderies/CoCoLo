@@ -1,65 +1,31 @@
 """Learning CLI tests, part records (CI round 6 split of test_learning_cli, test alignment 126; tests moved verbatim)."""
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import base64
-import os
-import sqlite3
 import subprocess
-import sys
-import tempfile
-import threading
-import time
 import unittest
 from pathlib import Path
-from unittest import mock
 
-from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 
-from codex_agents import learning_store
-from codex_agents.contracts import ContractError
 from codex_agents.learning_contracts import (
     candidate_base_digest,
-    canonical_json,
     content_digest,
 )
-from codex_agents.learning_adapters import load_client_capabilities
 from codex_agents.learning_store import (
-    CollectorClient,
-    CollectorServer,
-    CollectorError,
-    CollectorMaintenance,
-    CollectorRestartError,
     LearningLedger,
     LearningState,
-    authorize_collector_runtime,
-    authorized_collector_runtime,
 )
-from cli import _RestartingLedger, _close_ledger
-from cli import main as cli_main
-from codex_agents.learning_engine import generate_candidate, runtime_fixture_digest
-from codex_agents.providers import AdmissionDenied
-from codex_agents.bridge import BridgeRefused
+from codex_agents.learning_engine import generate_candidate
 from tests.learning_support import (
     DIGEST_A,
     DIGEST_B,
     DIGEST_C,
     GRADER_CONFIG,
     assignment,
-    champion_configuration,
-    event_record,
-    full_usage,
-    admit_provider,
-    fake_provider_tools,
-    generate_test_owner_key,
-    OWNER_SIGNATURE_NAMESPACE,
-    trusted_tools,
     sign_owner_payload,
     result,
     routing_fields,
-    verification_outcome,
 )
 from tests.learning_cli_support import LearningCliBase  # noqa: F401
 

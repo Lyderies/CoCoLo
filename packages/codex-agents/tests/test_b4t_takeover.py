@@ -9,16 +9,14 @@ import copy
 import json
 import os
 from pathlib import Path
-import re
 import sqlite3
 import tempfile
 import unittest
 from unittest import mock
-from dataclasses import replace
 import subprocess
 import sys
 import shutil
-from contextlib import closing, ExitStack, contextmanager
+from contextlib import closing, ExitStack
 
 import tests.support  # noqa: F401
 from test_framework import requirements

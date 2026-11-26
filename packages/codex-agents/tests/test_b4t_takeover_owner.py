@@ -1,6 +1,5 @@
 """B4t takeover tests, part owner (CI round 6 split of test_b4t_takeover, test alignment 126; classes moved verbatim; the shared journal harness stays in test_b4t_takeover)."""
 import ast
-import copy
 import json
 import os
 from pathlib import Path
@@ -9,15 +8,13 @@ import sqlite3
 import tempfile
 import unittest
 from unittest import mock
-from dataclasses import replace
 import subprocess
 import sys
-import shutil
 from contextlib import closing, ExitStack, contextmanager
 
 import tests.support  # noqa: F401
 from test_framework import requirements
-from tests.test_b4t_takeover import PHASES, A, B, C, run_entry, Operations
+from tests.test_b4t_takeover import PHASES, A, C, run_entry, Operations
 
 
 class OwnerIntegrationTests(unittest.TestCase):
