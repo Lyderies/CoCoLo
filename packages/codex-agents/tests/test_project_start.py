@@ -481,20 +481,15 @@ class StartTests(StarterBase):
             begun = wait_for(self, lambda: self.events('begin', name), max(0.0, deadline - time.monotonic()),
                              f'{name}: no start began within one interval')
             self.assertLessEqual(begun[0]['t'], deadline)
-        # Review round 2 (decision 243, MED 2): serving, not only begun. The requirement gives a start its own deadline
-        # (the start timeout, counted from the start's own begin line), not the interval's: a host process start on a
-        # slow machine must not turn the interval's check into a race. The wait ends the moment both answer serving.
-        timeout = self.constant('START_TIMEOUT_SECONDS')
-        timeout = project_start.start_timeout() if timeout is None else timeout
-        serve_by = max(self.events('begin', name)[0]['t'] for name in ('never', 'stopped')) + timeout
+        # Review round 2 (decision 243, MED 2): serving, not only begun, by that same deadline.
         served = None
-        while served is None and time.monotonic() <= serve_by:
+        while served is None and time.monotonic() <= deadline:
             if self.serving('never') and self.serving('stopped'):
                 served = time.monotonic()  # both checks answered serving by this time
             else:
                 time.sleep(0.05)
-        self.assertIsNotNone(served, 'the due projects were not serving within their start deadline')
-        self.assertLessEqual(served, serve_by)
+        self.assertIsNotNone(served, 'the due projects were not serving within one interval')
+        self.assertLessEqual(served, deadline)
         time.sleep(0.6)
         self.assertFalse(self.serving('idle'))
         self.assertEqual([], self.events('begin', 'idle'))
