@@ -5429,6 +5429,7 @@
    "root:test_test_framework_r2.RequirementGateProfiles.test_ci_gate_still_fails_on_any_unrun_or_failed_ci_check",
    "root:test_test_framework_r2.RequirementGateProfiles.test_gate_cli_reports_planned_and_release_mode_fails_on_them",
    "root:test_test_framework_r2.RequirementGateProfiles.test_planned_status_is_validated_and_cannot_hide_checks",
+   "root:test_test_framework_r2.RequirementGateProfiles.test_skipped_does_not_hide_a_check_that_never_ran",
    "root:test_test_framework_r2.RequirementGateProfiles.test_soak_gate_fails_if_a_soak_check_is_not_run_and_ignores_ci_only_requirements",
    "root:test_test_framework_r2.RoundTwo.test_M4_caller_cannot_accept_failure_bearing_combiner_result",
    "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence",
