@@ -10,6 +10,7 @@ ledger, the starter's decisions and the processes are the product's.
 """
 from __future__ import annotations
 
+import atexit
 import contextlib
 from dataclasses import asdict
 import hashlib
@@ -154,20 +155,32 @@ def wait_for(test, predicate, seconds=20.0, message='condition never held'):
     test.fail(message() if callable(message) else message)
 
 
+_PYCACHE = []
+
+
+def shared_pycache():
+    """S13G-1: one bytecode cache per test process, compiled once. It was compiled again by each of the module's
+    15 classes (0.5 s alone, several seconds under full-run load, ~15 times per full run)."""
+    if not _PYCACHE:
+        path = tempfile.mkdtemp(prefix='start-pyc-', dir=SHORT_TMP)
+        atexit.register(shutil.rmtree, path, ignore_errors=True)
+        # S13C-1: the runtime is compiled into the cache before any test's clock starts, so the
+        # first collector does not compile inside a measured window.
+        subprocess.run([sys.executable, '-I', '-X', 'pycache_prefix=' + path, '-m', 'compileall', '-q',
+                        str(ORCHESTRATION_ROOT)], stdout=subprocess.DEVNULL, check=True)
+        _PYCACHE.append(path)
+    return _PYCACHE[0]
+
+
 class StarterBase(unittest.TestCase):
-    CONSTANTS = {'STARTER_CHECK_SECONDS': 0.2, 'START_RECHECK_SECONDS': 1.0}
+    CONSTANTS = {'STARTER_CHECK_SECONDS': 0.1, 'START_RECHECK_SECONDS': 0.5}
     STORE = {}
-    pycache = None  # the class's shared bytecode cache for its test-only interpreters (S13C-1)
+    pycache = None  # the process's shared bytecode cache for its test-only interpreters (S13C-1, S13G-1)
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.pycache = tempfile.mkdtemp(prefix='start-pyc-', dir=SHORT_TMP)
-        cls.addClassCleanup(shutil.rmtree, cls.pycache, ignore_errors=True)
-        # S13C-1: the runtime is compiled into the class cache before any test's clock starts, so the
-        # first collector of the class does not compile inside a measured window.
-        subprocess.run([sys.executable, '-I', '-X', 'pycache_prefix=' + cls.pycache, '-m', 'compileall', '-q',
-                        str(ORCHESTRATION_ROOT)], stdout=subprocess.DEVNULL, check=True)
+        cls.pycache = shared_pycache()
 
     @classmethod
     def python_flags(cls, *flags):
@@ -572,7 +585,7 @@ class StartTests(StarterBase):
                     f'cd {root} && ./setup.sh {root}\n'
                     'Then choose Configure, then "Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
-        time.sleep(1.5)  # rechecked, still not replaced
+        time.sleep(1.0)  # rechecked, still not replaced
         self.assertEqual([], self.events('spawned'))
         self.assertIsNone(self.collector.poll())
         self.assertEqual(started, CollectorClient(self.state.socket, timeout=2).health()['started_at_ms'])
@@ -1085,7 +1098,7 @@ class OtherVersionTests(StarterBase):
                     f'cd {root} && ./setup.sh {root}\n'
                     'Then choose Configure, then "Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
-        time.sleep(1.5)  # rechecked, still not replaced
+        time.sleep(1.0)  # rechecked, still not replaced
         self.assertIsNone(host.poll())  # the earlier runtime's host still serves
         self.assertIsNotNone(other_version_host(self.state.root, root))
         self.assertEqual([], self.events('spawned'))
@@ -1174,7 +1187,7 @@ class ProbationTests(StarterBase):
         # The project falls due again while its host serves (a hold of its falls due): a serving recheck.
         update_ledger(self, 'UPDATE project_wake SET due_at_ms=? WHERE project_id=?',
                       (self.now_ms() - 1_000, self.projects['alpha'][1]))
-        time.sleep(1.5)
+        time.sleep(1.0)
         self.assertEqual('started', self.starts('alpha')['outcome'])
         self.assertTrue(self.status('alpha').startswith('recovery: started '), self.status('alpha'))
         for pid in self.host_pids('alpha'):
