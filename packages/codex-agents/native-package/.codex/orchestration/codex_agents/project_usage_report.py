@@ -319,19 +319,16 @@ def _coverage(runs):
 STATUS_USAGE_DAYS = 7
 
 
-def status_run_usage(state, project_root):
-    """What learning-status shows beside the hook coverage flags: the last days' child runs, per provider.
+def status_run_usage():
+    """What learning-status shows beside the hook coverage flags: where each child run's usage is.
 
-    None when the project's runs cannot be read (not registered, state unreadable): unknown is never shown as zero.
+    learning-status is a client and opens no database, so it names the report that reads the runs; the counts
+    live there (usage_coverage), never invented here. Plain JSON data only.
     """
-    now = int(time.time() * 1000)
-    try:
-        report = usage_report(state, project_root, now - STATUS_USAGE_DAYS * 24 * 3_600_000, now + 1, MAX_ROWS)
-    except UsageReportError:
-        return None
-    return {"window_days": STATUS_USAGE_DAYS, "truncated": report["truncated"], **report["usage_coverage"],
+    return {"state": "see_report", "report_command": "learning-usage-report", "window_days": STATUS_USAGE_DAYS,
             "note": f"Each child run's tokens are recorded from the child's own output and listed by "
-                    f"learning-usage-report. {PRIMARY_SESSION_NOTE}"}
+                    f"learning-usage-report, which also says per provider whether they were reported. "
+                    f"{PRIMARY_SESSION_NOTE}"}
 
 
 def _iso(milliseconds: int) -> str:

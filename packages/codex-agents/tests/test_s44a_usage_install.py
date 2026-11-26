@@ -243,16 +243,14 @@ class StatusRunUsageTests(InstalledUsageCase):
                             'needs a running collector, which a test does not start.')
 
     @requirements('S44A-2')
-    def test_s44a_2_status_shows_recent_run_usage_per_provider(self) -> None:
-        now = int(time.time() * 1000)
-        self.finished(now - HOUR, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
-        self.finished(now - 2 * HOUR, model=CLAUDE, role="claude_agents_researcher",
-                      usage={"input_tokens": 5, "cached": 1, "creation": 1, "output_tokens": 1})
-        from codex_agents.collector_paths import CollectorPaths
+    def test_s44a_2_status_says_where_run_usage_is_without_opening_any_database(self) -> None:
+        # learning-status is a client: it never opens a database (test_cli_status_client_boundary), so it names the
+        # report that reads the runs instead of reading them.
         from codex_agents.project_usage_report import status_run_usage
-        shown = status_run_usage(CollectorPaths(), self.project.resolve())
-        self.assertEqual(("reported", "reported"), (shown["child_runs"]["codex"]["state"],
-                                                    shown["child_runs"]["claude"]["state"]))
+        with mock.patch("sqlite3.connect", side_effect=AssertionError("status opened a database")):
+            shown = status_run_usage()
+        self.assertEqual("see_report", shown["state"])
+        self.assertIn("learning-usage-report", shown["report_command"])
         self.assertIn("learning-usage-report", shown["note"])
         self.assertIn("hook", shown["note"].lower())
 
@@ -265,12 +263,23 @@ class StatusRunUsageTests(InstalledUsageCase):
         self.assertIn("run_usage", branch)
 
     @requirements('S44A-2')
-    def test_s44a_2_status_run_usage_is_unknown_not_invented_when_the_project_is_not_known(self) -> None:
-        from codex_agents.collector_paths import CollectorPaths
+    def test_s44a_2_every_json_output_here_is_strict_json_with_the_new_fields(self) -> None:
+        # Plain-language lines belong to human output only: each JSON document parses with no extra text and no
+        # NaN or Infinity, and carries run_usage / usage_coverage / window_data.
         from codex_agents.project_usage_report import status_run_usage
-        stranger = Path(self.temporary.name) / "stranger"
-        stranger.mkdir()
-        self.assertIsNone(status_run_usage(CollectorPaths(), stranger.resolve()))
+
+        def strict(text):
+            return json.loads(text, parse_constant=lambda name: self.fail(f"non-JSON constant {name}"))
+
+        self.finished(T0 + HOUR, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
+        done = self.run_installed("--project-root", ".", "--since", iso(T0), "--until", iso(T0 + 24 * HOUR))
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        document = strict(done.stdout)
+        self.assertIn("usage_coverage", document)
+        self.assertIn("window_data", document)
+        run_usage = strict(json.dumps(status_run_usage(), allow_nan=False))
+        self.assertEqual({"state", "report_command", "window_days", "note"}, set(run_usage))
+
 
 
 if __name__ == "__main__":

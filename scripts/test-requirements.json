@@ -4396,8 +4396,8 @@
    "codex:tests.test_s44a_usage_install.RecordedChildRunsReachTheReportTests.test_s44a_2_a_codex_child_run_shows_its_tokens",
    "codex:tests.test_s44a_usage_install.RecordedChildRunsReachTheReportTests.test_s44a_2_the_primary_session_is_plainly_not_reported",
    "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_learning_status_carries_the_run_usage_and_stays_read_only",
-   "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_status_run_usage_is_unknown_not_invented_when_the_project_is_not_known",
-   "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_status_shows_recent_run_usage_per_provider"
+   "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_every_json_output_here_is_strict_json_with_the_new_fields",
+   "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_status_says_where_run_usage_is_without_opening_any_database"
   ],
   "source": "tests/requirements/s44a.json#S44A-2",
   "statement": "Each child run's own token counts, for both providers (Claude and Codex), are recorded and appear in the usage report with their provider and completeness; a provider that gave no counts is shown `not_reported` and never as zero; the report and learning-status say which providers reported (`usage_coverage`, `run_usage`) and that the primary session's own tokens are not reported, instead of leaving the hook flags root_usage and child_usage to be read as run coverage."

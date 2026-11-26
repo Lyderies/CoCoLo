@@ -2919,11 +2919,8 @@ def main() -> int:
             holds = holds_report_client(args.state_root, args.project_root, host_client=label)
             for name in ('project_holds', 'result_custody', 'result_retirement_repairs', 'recovery_pending'):
                 report[name] = None if holds is None else holds[name]
-            # S44a: where each provider's per-run usage is (read only; None when it cannot be read).
-            try:
-                report['run_usage'] = status_run_usage(CollectorPaths(args.state_root), args.project_root)
-            except (StateError, OSError):
-                report['run_usage'] = None
+            # S44a: where each provider's per-run usage is.
+            report['run_usage'] = status_run_usage()  # names the report; the client opens no database
             if holds is not None and holds['recovery_pending']['stale']:
                 report['recovery_pending_notice'] = 'Recovery was not checked recently.'
             # T7 S2 (L14.1): orchestrations live in the project's own store, so its service's count replaces the
