@@ -2848,6 +2848,22 @@ class AmendmentA1Tests(unittest.TestCase):
             yield preflight, state, project
 
     @requirements('RS-B-B4t-0', 'RS-B-B4t-3')
+    def test_one_peer_identity_is_captured_per_planning_pass(self):
+        # Review 0.8.69 LOW: an endpoint owner changing between tree attempts must not get a second pid inspected.
+        from codex_agents.update_takeover import TakeoverError
+        with self.plan_case() as (preflight, state, project):
+            second = project.parent / 'copy'
+            second.mkdir()
+            row = dict(project_id='prj_' + '1'*32, canonical_root=str(project), launch_copy=str(second), launch_digest=A)
+            with mock.patch.object(preflight, '_registry', return_value=(row, 17, {})), \
+                    mock.patch.object(preflight, '_peer', side_effect=[42, 43]) as peer:
+                try:
+                    preflight.read_plan(state, project)
+                except TakeoverError:
+                    pass
+            self.assertEqual(1, peer.call_count)
+
+    @requirements('RS-B-B4t-0', 'RS-B-B4t-3')
     def test_B4t_A1_idle_predecessor_updates_without_process_proof(self):
         # Reproduces 146955fc's unconditional idle refusal with the same EPERM result.
         from codex_agents.takeover_owner import OwnerOperations
