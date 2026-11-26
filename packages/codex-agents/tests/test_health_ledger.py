@@ -70,7 +70,12 @@ class LedgerHealthTests(unittest.TestCase):
         with mock.patch.object(hm, 'open_reader', side_effect=reader):
             self.check.visit(self.database, None, self.context())
             self.check.visit(self.database, None, self.context())
-        self.assertEqual(2, sum('quick_check' in sql for sql in calls))
+        self.assertEqual(0, sum('quick_check' in sql for sql in calls))
+        task = self.check._scan
+        self.assertIsNotNone(task)
+        task.advance(time.monotonic() + 1)
+        self.assertTrue(task.done.wait(2))
+        self.assertEqual('ok', task.result)
 
     @requirements('S9-HM4-2')
     def test_size_boundary_report_only(self):
@@ -116,13 +121,13 @@ class LedgerHealthTests(unittest.TestCase):
         self.assertEqual({'store_size_bytes': 8 * hm.GIB, 'store_growth_bytes_per_day': hm.GIB}, self.check.limits)
         monitor.run_pass(now_ms=1000)
         self.assertIn('8 GiB', monitor.view(PROJECT)['summary'])
-        self.settings.write_text(json.dumps({'store_size_bytes': 17, 'store_growth_bytes_per_day': 11}))
+        self.settings.write_text(json.dumps({'store_size_bytes': 17 * 1024 ** 2, 'store_growth_bytes_per_day': 11 * 1024 ** 2}))
         monitor.run_pass(now_ms=2000)
-        self.assertEqual(17, self.check.limits['store_size_bytes'])
-        self.assertIn('17 bytes', monitor.view(PROJECT)['summary'])
-        self.assertTrue(any(f.reason_code == 'store_size' for f in self.check.measure(None, 18, 2000)))
+        self.assertEqual(17 * 1024 ** 2, self.check.limits['store_size_bytes'])
+        self.assertIn('17825792 bytes', monitor.view(PROJECT)['summary'])
+        self.assertTrue(any(f.reason_code == 'store_size' for f in self.check.measure(None, 18 * 1024 ** 2, 2000)))
         self.check.measure(PROJECT, 1, 2000)
-        self.assertIn('store_growth', [f.reason_code for f in self.check.measure(PROJECT, 13, 2000 + hm.DAY_MS)])
+        self.assertIn('store_growth', [f.reason_code for f in self.check.measure(PROJECT, 13 * 1024 ** 2, 2000 + hm.DAY_MS)])
 
     @requirements('S9-HM4-4')
     def test_invalid_settings_visible(self):
@@ -142,13 +147,16 @@ class LedgerHealthTests(unittest.TestCase):
         check = hm.LedgerCheck(fixture.state, settings_path=self.settings)
         self.addCleanup(check.close)
         observed = []
+        snapshot_threads = set()
         original = hm.open_reader
         def reader(path):
-            self.assertIs(threading.current_thread(), fixture.thread)
+            if threading.current_thread() is not fixture.thread:
+                self.assertIn(threading.current_thread(), snapshot_threads)
             return original(path)
         original_step = hm.Snapshot.step
         def step(snapshot, deadline):
             self.assertIs(threading.current_thread(), fixture.thread)
+            snapshot_threads.add(snapshot.thread)
             start = time.monotonic()
             result = original_step(snapshot, deadline)
             observed.append(time.monotonic() - start)
@@ -323,12 +331,12 @@ class LedgerHealthTests(unittest.TestCase):
 
     @requirements('S9-HM4-4')
     def test_default_settings_are_editable_outside_protected_runtime(self):
-        self.settings.write_text(json.dumps({'store_size_bytes': 1234}))
+        (self.root / 'user-settings.json').write_text(json.dumps({'store_size_bytes': 1234 * 1024 ** 2}))
         check = hm.LedgerCheck(self.state)
         self.addCleanup(check.close)
         check.reload_settings()
-        self.assertEqual(1234, check.limits['store_size_bytes'])
-        self.assertEqual(self.state.root / 'health-limits.json', check.settings_path)
+        self.assertEqual(1234 * 1024 ** 2, check.limits['store_size_bytes'])
+        self.assertEqual(self.state.root / 'user-settings.json', check.settings_path)
 
     @requirements('S9-HM4-5')
     def test_saved_state_past_byte_limit_is_reported_and_rechecked(self):
@@ -366,7 +374,11 @@ class LedgerHealthTests(unittest.TestCase):
 
     @requirements('S9-HM4-2', 'S9-HM4-6')
     def test_warning_reaches_owner_attention(self):
-        self.settings.write_text(json.dumps({'store_size_bytes': 1}))
+        self.settings.write_text(json.dumps({'store_size_bytes': 1024 ** 2}))
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute('CREATE TABLE attention_payload(value BLOB)')
+            db.execute('INSERT INTO attention_payload VALUES(zeroblob(?))', (2 * 1024 ** 2,))
+            db.commit()
         monitor = HealthMonitor((self.check,))
         monitor.run_pass()
         from codex_agents.client_runtime import _health_attention, _status_health_monitor
@@ -405,7 +417,8 @@ class LedgerHealthTests(unittest.TestCase):
                 self.fail('WAL snapshot did not finish')
             with closing(sqlite3.connect(snapshot.path)) as copied:
                 self.assertEqual(('ok',), copied.execute('PRAGMA integrity_check').fetchone())
-                self.assertEqual(2, copied.execute('SELECT count(*) FROM projects').fetchone()[0])
+                self.assertEqual(1, copied.execute('SELECT count(*) FROM projects').fetchone()[0])
+                self.assertEqual(2, db.execute('SELECT count(*) FROM projects').fetchone()[0])
 
 
     @requirements('S9-HM4-5')

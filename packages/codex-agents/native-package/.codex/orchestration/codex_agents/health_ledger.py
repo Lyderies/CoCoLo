@@ -1,17 +1,14 @@
-"""HM-4: report-only integrity, size and growth checks.
+"""HM-4: report-only checks using Python's existing sqlite3 library.
 
-Live ledger access, including the independent read-only backup handle, belongs to
-LedgerOwner. sqlite3_backup_step retains its position between passes and releases
-the source read lock after each step. A full integrity VM runs only on the private
-copy and pauses in its progress handler between health passes. No live connection,
-cursor or transaction crosses the owner handoff.
+The mutable ledger connection remains on LedgerOwner. An independent read-only
+snapshot connection belongs exclusively to one worker: its pinned transaction
+and backup VM persist across passes without occupying the mutable ledger owner.
+Quick/full check VMs run only on the finished private copy.
 """
 from __future__ import annotations
 
 from contextlib import closing
 from collections import OrderedDict
-import ctypes
-import ctypes.util
 import json
 import os
 from pathlib import Path
@@ -22,19 +19,21 @@ import threading
 import time
 
 from .health_monitor import Check, Finding
+from . import user_settings
 
 GIB = 1024 ** 3
 DAY_MS = 86_400_000
-OWNER_SECONDS = .5  # total deadline shared by enumeration, quick check and copy
-QUICK_SECONDS = .15
+OWNER_SECONDS = .5  # total deadline shared by enumeration and copy waits
+GROWTH_WINDOW_MS = 6 * 60 * 60 * 1000
 COPY_PAGES = 8
 SQL_PROGRESS_OPS = 256
 BUSY_COPY_SECONDS = .15
-SETTINGS_BYTES = 4096
+SETTINGS_BYTES = user_settings.SETTINGS_BYTES
 STATE_BYTES = 1024
-MAX_SETTING_INTEGER = 2 ** 63 - 1
+MAX_SETTING_INTEGER = user_settings.MAX_SETTING_INTEGER
 MAX_TRACKED_STORES = 32
-DEFAULT_LIMITS = {'store_size_bytes': 8 * GIB, 'store_growth_bytes_per_day': GIB}
+DEFAULT_LIMITS = {key: getattr(user_settings.UserSettings(), key)
+                  for key in ('store_size_bytes', 'store_growth_bytes_per_day')}
 _SAVED_REASONS = {
     'store_corrupt': 'The store integrity check found damaged data; please review its backup.',
     'store_unreadable': 'The store could not be read; the health check will try again.',
@@ -61,94 +60,81 @@ def _amount(value):
     return f'{value // GIB} GiB' if value % GIB == 0 else f'{value} bytes'
 
 
-_SQLITE_API = None
-
-
-def _sqlite_api():
-    # Resolve/load the library before entering the runtime owner request. On
-    # Linux find_library may invoke the system linker cache helper.
-    global _SQLITE_API
-    if _SQLITE_API is None:
-        library = ctypes.util.find_library('sqlite3')
-        if library is None:
-            raise OSError('SQLite backup unavailable')
-        library_api = ctypes.CDLL(library)
-        pointer = ctypes.c_void_p
-        signatures = {
-            'sqlite3_open_v2': ([ctypes.c_char_p, ctypes.POINTER(pointer), ctypes.c_int, ctypes.c_char_p], ctypes.c_int),
-            'sqlite3_close': ([pointer], ctypes.c_int),
-            'sqlite3_backup_init': ([pointer, ctypes.c_char_p, pointer, ctypes.c_char_p], pointer),
-            'sqlite3_backup_step': ([pointer, ctypes.c_int], ctypes.c_int),
-            'sqlite3_backup_finish': ([pointer], ctypes.c_int),
-        }
-        for name, (args, result) in signatures.items():
-            function = getattr(library_api, name)
-            function.argtypes, function.restype = args, result
-        _SQLITE_API = library_api
-    return _SQLITE_API
-
-
 class Snapshot:
-    """Incremental SQLite online backup; every method is called on the owner.
+    """Resumable backup on one worker, using only sqlite3.Connection.backup.
 
-    Python's Connection.backup loops to completion, even with pages=N. Use the
-    public C backup API with independent handles instead of Python object pointers
-    so a pass really returns after one bounded page slice. No extension is needed.
+    A BEGIN plus a read pins the WAL snapshot before the first backup step.
+    Python's backup loops internally; its progress callback waits between grants
+    instead of throwing away the backup VM. Only the worker uses its connections.
+    step() grants eight pages and waits at most until the shared owner deadline.
     """
     def __init__(self, source, path):
         self.path = Path(path)
-        self._thread = threading.current_thread()
-        self.source = ctypes.c_void_p()
-        self.target = ctypes.c_void_p()
-        self.backup = None
+        self.source_path = Path(source)
+        self.condition = threading.Condition()
+        self.done = threading.Event()
+        self.stopped = False
+        self.granted = 0
+        self.completed = 0
         self.blocked = False
-        self.lib = _sqlite_api()
+        self.error = None
+        self.thread = threading.Thread(target=self._run, name='health-ledger-snapshot', daemon=True)
+        self.thread.start()
+
+    def _wait(self):
+        with self.condition:
+            while not self.stopped and self.granted <= self.completed:
+                self.condition.wait()
+            if self.stopped:
+                raise InterruptedError('snapshot stopped')
+
+    def _progress(self, status, remaining, total):
+        with self.condition:
+            self.completed += 1
+            self.blocked = status in (5, 6)
+            self.condition.notify_all()
+        if status != sqlite3.SQLITE_DONE:
+            self._wait()
+
+    def _run(self):
         try:
-            # READONLY | NOFOLLOW; no busy timeout and no source transaction
-            # persists between backup_step calls.
-            self._check(self.lib.sqlite3_open_v2(os.fsencode(source), ctypes.byref(self.source), 1 | 0x01000000, None))
-            self._check(self.lib.sqlite3_open_v2(os.fsencode(path), ctypes.byref(self.target), 2 | 4, None))
-            self.backup = self.lib.sqlite3_backup_init(self.target, b'main', self.source, b'main')
-            if not self.backup:
-                raise sqlite3.DatabaseError('snapshot unavailable')
-        except BaseException:
-            self.close()
-            raise
-
-    @staticmethod
-    def _check(code):
-        if code in (11, 26):
-            raise sqlite3.DatabaseError('store corrupt')
-        if code:
-            raise OSError('snapshot unavailable')
-
-    def _guard(self):
-        if threading.current_thread() is not self._thread:
-            raise RuntimeError('snapshot wrong owner')
+            self._wait()
+            with closing(open_reader(self.source_path)) as source:
+                source.execute('BEGIN')
+                source.execute('SELECT rootpage FROM sqlite_schema LIMIT 1').fetchone()
+                with closing(sqlite3.connect(self.path)) as target:
+                    source.backup(target, pages=COPY_PAGES, progress=self._progress, sleep=0)
+                source.rollback()
+        except InterruptedError:
+            pass
+        except Exception as error:
+            self.error = error
+        finally:
+            with self.condition:
+                self.done.set()
+                self.condition.notify_all()
 
     def step(self, deadline):
-        self._guard()
-        if time.monotonic() >= deadline:
-            return False
-        code = self.lib.sqlite3_backup_step(self.backup, COPY_PAGES)
-        self.blocked = code in (5, 6)
-        if code == 101:  # SQLITE_DONE
-            self.close()
-            return True
-        if code in (0, 5, 6):  # OK / BUSY / LOCKED: retry next pass, never sleep
-            return False
-        self._check(code)
-        return False
+        with self.condition:
+            if not self.done.is_set() and time.monotonic() < deadline:
+                goal = self.completed + 1
+                self.granted = goal
+                self.condition.notify_all()
+                while self.completed < goal and not self.done.is_set():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self.condition.wait(remaining)
+            if self.error is not None:
+                raise self.error
+            return self.done.is_set()
 
     def close(self):
-        self._guard()
-        if self.backup:
-            self.lib.sqlite3_backup_finish(self.backup)
-            self.backup = None
-        for handle in (self.target, self.source):
-            if handle.value:
-                self.lib.sqlite3_close(handle)
-                handle.value = None
+        """Only cleanup callers join; the ledger owner detaches jobs instead."""
+        with self.condition:
+            self.stopped = True
+            self.condition.notify_all()
+        self.thread.join()
 
 
 class CopyScan:
@@ -186,8 +172,13 @@ class CopyScan:
             # This is a private completed copy, so no live owner is involved.
             with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True, timeout=0)) as db:
                 db.set_progress_handler(self._progress, SQL_PROGRESS_OPS)
-                rows = db.execute('PRAGMA integrity_check(1)').fetchone()
-                self.result = 'ok' if rows == ('ok',) else 'corrupt'
+                for pragma in ('quick_check(1)', 'integrity_check(1)'):
+                    rows = db.execute('PRAGMA ' + pragma).fetchone()
+                    if rows != ('ok',):
+                        self.result = 'corrupt'
+                        break
+                else:
+                    self.result = 'ok'
         except sqlite3.DatabaseError as error:
             self.result = 'corrupt' if getattr(error, 'sqlite_errorcode', 0) in (11, 26) else 'unavailable'
         finally:
@@ -197,7 +188,7 @@ class CopyScan:
         with self.condition:
             self.stopped = True
             self.condition.notify_all()
-        self.thread.join(.1)
+        self.thread.join()
 
 
 class LedgerCheck(Check):
@@ -205,7 +196,7 @@ class LedgerCheck(Check):
 
     def __init__(self, state, *, settings_path=None):
         self.state = state
-        self.settings_path = Path(settings_path) if settings_path is not None else state.root / 'health-limits.json'
+        self.settings_path = Path(settings_path) if settings_path is not None else state.root / user_settings.FILENAME
         self.limits = dict(DEFAULT_LIMITS)
         self._settings_invalid = False
         self._baseline = {}
@@ -226,6 +217,8 @@ class LedgerCheck(Check):
         self._state_invalid = False
         self._order = OrderedDict()
         self._now_ms = 0
+        self._cleanup_thread = None
+        self.reload_settings()
 
     def _retain(self, project):
         if project in self._order:
@@ -314,37 +307,9 @@ class LedgerCheck(Check):
                 temporary.unlink(missing_ok=True)
 
     def reload_settings(self):
-        limits = dict(DEFAULT_LIMITS)
-        invalid = False
-        try:
-            fd = os.open(self.settings_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, 'rb') as stream:
-                info = os.fstat(stream.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-                    raise ValueError()
-                raw = stream.read(SETTINGS_BYTES + 1)
-            if len(raw) > SETTINGS_BYTES:
-                raise ValueError()
-            def unique(pairs):
-                result = {}
-                for key, value in pairs:
-                    if key in result:
-                        raise ValueError()
-                    result[key] = value
-                return result
-            data = json.loads(raw, object_pairs_hook=unique)
-            if type(data) is not dict or set(data) - set(limits):
-                raise ValueError()
-            for key, value in data.items():
-                if type(value) is not int or not 0 < value <= MAX_SETTING_INTEGER:
-                    raise ValueError()
-            limits.update(data)
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError):
-            invalid = True
-        self.limits = limits
-        self._settings_invalid = invalid
+        settings = user_settings.load(self.state.root, path=self.settings_path)
+        self.limits = {key: getattr(settings, key) for key in DEFAULT_LIMITS}
+        self._settings_invalid = settings.warning is not None
 
     def status_summary(self):
         return ('Ledger warnings: size at ' + _amount(self.limits['store_size_bytes'])
@@ -376,12 +341,12 @@ class LedgerCheck(Check):
         if before is not None:
             timestamp, previous = before
             elapsed = now - timestamp
-            if elapsed > 0 and (size - previous) * DAY_MS > rate * elapsed:
+            if elapsed >= GROWTH_WINDOW_MS and (size - previous) * DAY_MS > rate * elapsed:
                 found.append(_finding(project, 'store_growth',
                                       f'{label} is growing faster than {_amount(rate)} per day. New runs are still allowed.'))
             # A full-day comparison window, rather than a single noisy sweep.
-            if elapsed >= DAY_MS or size < previous:
-                self._baseline[project] = (max(now, timestamp), size)
+            if elapsed < 0 or elapsed >= DAY_MS or size < previous:
+                self._baseline[project] = (now, size)
         else:
             self._baseline[project] = (now, size)
         self._save(project)
@@ -414,20 +379,20 @@ class LedgerCheck(Check):
         return []
 
     def _clear_job(self):
-        if self._job is not None:
-            self._job.close()
-            self._job = None
-        if self._scan is not None:
-            self._scan.close()
-            # Do not unlink a copy while its VM still runs.
-            if self._scan.thread.is_alive():
-                return
-            self._scan = None
-        if self._temporary is not None:
-            self._temporary.cleanup()
-            self._temporary = None
-        self._job_path = None
-        self._job_project = None
+        job, scan, temporary = self._job, self._scan, self._temporary
+        self._job = self._scan = self._temporary = None
+        self._job_path = self._job_project = None
+        if job is None and scan is None and temporary is None:
+            return
+        def cleanup():
+            if job is not None:
+                job.close()
+            if scan is not None:
+                scan.close()
+            if temporary is not None:
+                temporary.cleanup()
+        self._cleanup_thread = threading.Thread(target=cleanup, name='health-ledger-cleanup', daemon=True)
+        self._cleanup_thread.start()
 
     def visit(self, path, project, context):
         """Owner-only live store slice; total deadline was set before queuing."""
@@ -436,7 +401,7 @@ class LedgerCheck(Check):
         self._first_seen.setdefault(project, now)
         if project is not None:
             self._seen.add(project)
-        found = self._quick(path, project, min(context.deadline, time.monotonic() + QUICK_SECONDS))
+        found = []  # quick/full VMs resume on the finished copy, never on the live store
         try:
             # Include retained WAL bytes: growth must not hide in an uncheckpointed WAL.
             size = Path(path).stat().st_size
@@ -449,7 +414,8 @@ class LedgerCheck(Check):
             # Begin before the daily deadline; a continuously busy queue still
             # gets a shorter copy quantum on every pass.
             due = project not in self._last_full or now - last >= DAY_MS // 2
-            if self._job_path is None and due and time.monotonic() < context.deadline:
+            if (self._job_path is None and due and time.monotonic() < context.deadline
+                    and (self._cleanup_thread is None or not self._cleanup_thread.is_alive())):
                 scratch = self.state.root / 'scratch'
                 scratch.mkdir(mode=0o700, exist_ok=True)
                 self._temporary = tempfile.TemporaryDirectory(prefix='health-ledger-', dir=scratch)
@@ -523,11 +489,7 @@ class LedgerCheck(Check):
             return []
         self._now_ms = context.now_ms
         self.reload_settings()
-        try:
-            _sqlite_api()
-        except OSError:
-            return [_finding(None, 'store_unreadable', 'The SQLite copy check is unavailable; the health check will try again.')]
-        # Shared absolute budget: queue wait, enumeration, quick check and backup
+        # Shared absolute budget: queue wait, enumeration and backup
         # never each receive their own 750 ms allowance.
         bounded = replace(context, deadline=min(context.deadline, time.monotonic() + OWNER_SECONDS))
         try:
@@ -583,6 +545,8 @@ class LedgerCheck(Check):
             self._owner(self._clear_job, time.monotonic() + OWNER_SECONDS)
         else:
             self._clear_job()
+        if self._cleanup_thread is not None:
+            self._cleanup_thread.join()
 
 
 def register(monitor, state, **options):

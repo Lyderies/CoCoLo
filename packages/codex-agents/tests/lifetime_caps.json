@@ -2163,15 +2163,10 @@
    "ends": "Per-store health metadata reads at most 1024 bytes plus the excess-byte probe; invalid metadata is reported and a new full check is scheduled. Observations and saved state for removed projects are pruned after a bounded registry scan.",
    "test": "test_saved_state_past_byte_limit_is_reported_and_rechecked"
   },
-  "health_ledger.py::reload_settings": {
-   "checks": 2,
-   "ends": "The user settings read ends at 4096 bytes plus one probe. Positive signed-64-bit values are report-only thresholds, never admission or lifetime caps; changes replace the active values on the next pass.",
-   "test": "test_settings_past_byte_and_integer_limits"
-  },
   "health_ledger.py::measure": {
-   "checks": 1,
-   "ends": "Size and rate thresholds only report; no hold, record or admission is refused. Growth comparisons renew their sample window; current values replace observations.",
-   "test": "test_size_boundary_report_only"
+   "checks": 2,
+   "ends": "Report-only size/rate limits. Growth requires six hours, renews daily, and resets on truncation or backward clock correction; no admission or record is refused.",
+   "test": "test_short_bursts_after_renewal_and_truncate_are_quiet"
   },
   "health_ledger.py::completion_findings": {
    "checks": 1,
@@ -2185,12 +2180,12 @@
   },
   "health_ledger.py::step": {
    "checks": 1,
-   "ends": "Each native backup step reads at most 8 pages, retaining progress for the next step/pass; SQLite releases source locks between steps. A writer can commit between slices, including in WAL mode.",
+   "ends": "Each grant advances eight pages of the same Python backup VM, on one exclusive snapshot worker. Its read transaction pins the WAL snapshot across passes; WAL writers keep committing.",
    "test": "test_copy_past_page_limit"
   },
   "health_ledger.py::_progress": {
    "checks": 1,
-   "ends": "The full integrity VM pauses after its current pass quantum and resumes on the next grant; one worker and one private copy are retained until completion or shutdown.",
+   "ends": "Backup and quick/full copy VMs pause between grants. One copy worker and one scan worker per check; cleanup joins before deletion and gates the next job.",
    "test": "test_full_scan_resumes_after_quantum"
   },
   "health_ledger.py::_copy_slice": {
@@ -2207,6 +2202,11 @@
    "checks": 1,
    "ends": "One indexed project identity per pass, using a keyset cursor; registry exhaustion restarts the scan. Projects beyond the page are checked on later passes.",
    "test": "test_project_enumeration_past_page"
+  },
+  "user_settings.py::load": {
+   "checks": 1,
+   "ends": "Read at most 4096 bytes plus one probe. Validate typed bounds with whole-file default fallback and plain warnings; no persisted records or users are capped. S9/S10/S35 share this loader.",
+   "test": "test_shared_settings_typed_bounds_and_no_import_io"
   }
  }
 }

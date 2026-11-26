@@ -228,6 +228,7 @@ RUNTIME_FILES = (
     "codex_agents/store_fence.py",
     "codex_agents/supervision.py",
     "codex_agents/terminal_delivery.py",
+    "codex_agents/user_settings.py",
     "codex_agents/validation.py",
     "codex_agents/wake_contracts.py",
     "codex_agents/write_merge.py",

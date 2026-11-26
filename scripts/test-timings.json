@@ -3172,5 +3172,6 @@
  "root:test_wizard_clock": 0.27,
  "codex:tests.test_health_holds": 1.1,
  "codex:tests.test_s12_account_lanes": 15.0,
- "codex:tests.test_health_ledger": 2.5
+ "codex:tests.test_health_ledger": 2.5,
+ "codex:tests.test_health_ledger_fix": 30
 }

@@ -417,5 +417,6 @@
  "codex:tests.test_s12_account_lanes": "integration",
  "codex:tests.test_s13d_regressions": "integration",
  "codex:tests.test_idle_cpu_budget": "integration",
- "codex:tests.test_health_ledger": "integration"
+ "codex:tests.test_health_ledger": "integration",
+ "codex:tests.test_health_ledger_fix": "integration"
 }
