@@ -270,7 +270,7 @@ class RunNetworks:
     def _json(self, result: PodmanResult, what: str):
         try:
             return json.loads(result.stdout or "null")
-        except ValueError:
+        except (ValueError, RecursionError):
             raise _Refused(Refusal("podman_failed", f"podman's answer about {what} was not readable")) from None
 
     def _inspect_network(self, name: str) -> dict | None:

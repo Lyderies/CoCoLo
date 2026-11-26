@@ -568,7 +568,7 @@ def read_default_seccomp_profile(host_files: HostFiles) -> dict | Refusal:
         return Refusal("seccomp_unreadable", f"the podman host has no {DEFAULT_SECCOMP_PATH}")
     try:
         return json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return Refusal("seccomp_unreadable", f"{DEFAULT_SECCOMP_PATH} on the podman host is not JSON")
 
 
@@ -636,7 +636,7 @@ def _listing(runner: PodmanRunner, label: str, timeout: float) -> list[dict] | R
         return Refusal("podman_failed", "podman could not list containers: " + _first_line(listing.stderr))
     try:
         rows = json.loads(listing.stdout or "[]")
-    except ValueError:
+    except (ValueError, RecursionError):
         rows = None
     if not isinstance(rows, list):
         return Refusal("podman_failed", "podman's container list was not readable")
@@ -718,7 +718,7 @@ class ContainerRuntime:
         try:
             rows = json.loads(result.stdout)
             return rows[0] if rows else None
-        except (ValueError, IndexError, TypeError):
+        except (ValueError, IndexError, TypeError, RecursionError):
             raise _Refused(Refusal("podman_failed", "podman's inspect answer was not readable")) from None
 
     # -- validation and arguments (CS-1)
@@ -840,7 +840,7 @@ class ContainerRuntime:
             document = json.loads(result.stdout) if result.returncode == 0 else None
             found = {side: str(document[side]["Version"]) for side in ("Client", "Server")}
             numbers = {side: _stable_version(text) for side, text in found.items()}
-        except (ValueError, TypeError, KeyError, AttributeError):
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
             return False, ("skipped: podman's client and server versions could not both be read, so its --timeout "
                            "cannot be relied on ("
                            + _first_line(result.stderr if result.returncode else "unreadable answer") + ")")
@@ -859,7 +859,7 @@ class ContainerRuntime:
             rows = json.loads(result.stdout)
             internal = rows[0].get("internal") is True and len(rows) == 1
             labels = rows[0].get("labels") or {}
-        except (ValueError, IndexError, AttributeError, TypeError):
+        except (ValueError, IndexError, AttributeError, TypeError, RecursionError):
             internal, labels = False, {}
         if not internal:
             return Refusal("network_not_internal", f"the network {network} is not an internal (per-run) network; "

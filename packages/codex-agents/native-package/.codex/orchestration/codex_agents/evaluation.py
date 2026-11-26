@@ -18,7 +18,7 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
             continue
         try:
             data = json.loads(raw)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:
             raise ContractError(f"{path}:{line_number}: invalid JSON: {exc}") from exc
         try:
             records.append(validate_evaluation_record(data))

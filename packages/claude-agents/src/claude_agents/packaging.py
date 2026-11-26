@@ -408,7 +408,7 @@ def released_bundles(source_root: Path) -> tuple[Bundle, ...]:
             metadata["bundle_sha256"] = record["bundle_sha256"]
             bundles.append(Bundle(tuple(sorted(files.items())), _canonical(metadata)))
         return tuple(bundles)
-    except (OSError, UnicodeError, KeyError, TypeError, AttributeError, ValueError) as exc:
+    except (OSError, UnicodeError, KeyError, TypeError, AttributeError, ValueError, RecursionError) as exc:
         if isinstance(exc, PackageError):
             raise
         raise PackageError("invalid_previous_release") from None

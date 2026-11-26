@@ -470,7 +470,7 @@ def load_retention_policy(path: Path = INSTALLED_RETENTION_POLICY) -> RetentionP
 
     try:
         value = json.loads(Path(path).read_bytes())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         raise LedgerError("retention policy is unavailable") from None
 
     def days(item, maximum):
@@ -1110,7 +1110,7 @@ def _verify_project_backup_body(
                 if table == "records":
                     try:
                         content = validate_learning_record(json.loads(bytes(decoded["content"])), stored=True)
-                    except (ContractError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                    except (ContractError, json.JSONDecodeError, TypeError, ValueError, RecursionError) as exc:
                         raise LedgerError("project backup contains a corrupt learning record") from exc
                     if content_digest(content) != decoded["content_digest"]:
                         raise LedgerError("project backup contains a corrupt learning record")
@@ -1162,7 +1162,7 @@ def _verify_backup_envelope(
 ) -> tuple[dict[str, Any], dict[str, int], str]:
     try:
         envelope = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise LedgerError("project backup is invalid") from exc
     if not isinstance(envelope, dict) or set(envelope) != {"backup_sha256", "body"}:
         raise LedgerError("project backup envelope is invalid")
@@ -2769,7 +2769,7 @@ class LearningLedger:
                     try:
                         record = json.loads(bytes(row["content"]))
                         readable.append((row, str(record["run_id"]), str(record["event_code"])))
-                    except (ValueError, KeyError, TypeError):
+                    except (ValueError, KeyError, TypeError, RecursionError):
                         continue  # Left for the owner's learning-expire.
                     if len(readable) == batch:
                         break
@@ -2869,7 +2869,7 @@ class LearningLedger:
             try:
                 record = json.loads(bytes(row["content"]))
                 readable.append((row, str(record["run_id"]), str(record["event_code"])))
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError, RecursionError):
                 continue
         for (group_project, run_id, day), group in self._group_events(readable).items():
             self._write_event_summary(
@@ -7695,7 +7695,7 @@ class LearningLedger:
             raise LedgerError("host run has no stored admission decision")
         try:
             decision = validate_learning_record(json.loads(bytes(rows[0]["content"])))
-        except (ContractError, TypeError, ValueError) as exc:
+        except (ContractError, TypeError, ValueError, RecursionError) as exc:
             raise LedgerError("host run admission is invalid") from exc
         if decision["record_type"] != "admission_decision" or decision["decision"] != "pass":
             raise LedgerError("host run admission is not a pass")

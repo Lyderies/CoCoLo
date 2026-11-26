@@ -471,7 +471,7 @@ def _read_jsonl_file(path):
             continue
         try:
             row = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             bad += 1
             continue
         if isinstance(row, dict):
@@ -489,7 +489,7 @@ def _read_json(path):
         if len(data) > READ_MAX_BYTES:
             return None
         return json.loads(data.decode("utf-8"))
-    except (OSError, ValueError, UnicodeDecodeError):
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
         return None
 
 
@@ -699,7 +699,7 @@ def _rewrite_tokens(records_dir, path, fd, mutate, existed=True):
                                       "next mint creates a new store whose tokens must be handed out again")
     try:
         data = json.loads(raw.decode("utf-8")) if raw.strip() else {"tokens": []}
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         data = None
     if not isinstance(data, dict) or not isinstance(data.get("tokens"), list):
         raise ApiError("unavailable", "the token store is damaged; it was left unchanged")
@@ -1316,7 +1316,7 @@ class CoreService:
     def _handle_line(self, session, line):
         try:
             request = json.loads(line.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             return self._transport_refusal(session, None, ApiError("parse_error", "the line is not valid JSON"))
         valid_id = not isinstance(request, dict) or request.get("id") is None or (
             isinstance(request.get("id"), (str, int)) and not isinstance(request.get("id"), bool))
@@ -2296,7 +2296,7 @@ class CoreService:
                         continue
                     try:
                         row = json.loads(line)
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         continue
                     if isinstance(row, dict):
                         best = max(best, self._id_number(row.get(key), prefix))

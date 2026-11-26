@@ -4784,8 +4784,12 @@
    "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_past_byte_and_integer_limits",
    "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_reload_and_status",
    "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_symlink_is_reported_without_following",
+   "codex:tests.test_health_ledger_fix.JsonLoaderDeepNestingTests.test_claude_settings_reader_refuses_recursion_error_as_unreadable",
+   "codex:tests.test_health_ledger_fix.JsonLoaderDeepNestingTests.test_no_loader_that_handles_malformed_json_lets_recursion_error_escape",
+   "codex:tests.test_health_ledger_fix.JsonLoaderDeepNestingTests.test_shared_bounded_parser_refuses_recursion_error_as_invalid_json",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_one_byte_limits_rejected",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_loader_rejects_malformed_deep_json_with_plain_warning",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_loader_turns_recursion_error_into_plain_warning",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_and_initial_status",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_byte_cap_rejects_valid_json_one_byte_over",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_typed_bounds_and_no_import_io"

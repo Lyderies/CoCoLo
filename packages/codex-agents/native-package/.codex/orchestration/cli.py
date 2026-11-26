@@ -41,7 +41,7 @@ def _copy_holds_only_its_runtime() -> bool:
         expected = {
             name.removeprefix(".codex/orchestration/") for name in listed
         } | {INSTALL_MANIFEST.name, RUNTIME_BINDING.name}
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return False
     directories = {
         "/".join(item.split("/")[:index])
@@ -1653,7 +1653,7 @@ def _recheck_read_record(directory, name):
         raise _RecheckRefused()
     try:
         value = json.loads(data)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     at = value.get("reserved_at_ms") if type(value) is dict else None
     return at if type(at) is int else None
@@ -3475,7 +3475,7 @@ def main() -> int:
             from codex_agents.review_runner import ReviewError, run as run_review
             try:
                 spec = json.loads(args.spec.read_text())
-            except (OSError, ValueError):
+            except (OSError, ValueError, RecursionError):
                 spec = None
             try:
                 summary = run_review(args.stage, spec, args.work_dir, args.project_root, status=args.status,

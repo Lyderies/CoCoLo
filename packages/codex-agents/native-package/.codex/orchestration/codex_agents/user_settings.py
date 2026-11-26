@@ -63,5 +63,5 @@ def load(root, *, path=None):
         return UserSettings(**data)
     except FileNotFoundError:
         return UserSettings()
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return UserSettings(warning=WARNING)

@@ -456,7 +456,7 @@ def _read_journal(state: int, name: str) -> _Journal:
     lines = data.split(b"\n")
     try:
         intent = json.loads(lines[0])
-    except ValueError:
+    except (ValueError, RecursionError):
         return _Journal(name, "unreadable", problem="its first line is damaged")
     if not isinstance(intent, dict) or intent.get("format") != JOURNAL_FORMAT:
         return _Journal(name, "unreadable", problem="it was written by another version of COCOLO")
@@ -467,7 +467,7 @@ def _read_journal(state: int, name: str) -> _Journal:
     for line in lines[1:]:
         try:
             event = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             event = None
         parsed.append(event if isinstance(event, dict) and not _event_problem(event, intent) else None)
     events: list[dict] = []

@@ -169,7 +169,7 @@ def parse_local_manifest(raw: bytes) -> tuple[Path, dict[str, str]]:
         raise HookConfigError("the local install record is too large")
     try:
         record = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise HookConfigError("the local install record is not valid JSON") from exc
     if (
         not isinstance(record, dict)

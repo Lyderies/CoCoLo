@@ -504,7 +504,7 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
         try:
             report = json.loads(out)
-        except ValueError:
+        except (ValueError, RecursionError):
             report = None
         if child.returncode != 0:
             if isinstance(report, dict) and report.get("error"):

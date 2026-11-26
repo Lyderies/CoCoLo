@@ -201,7 +201,7 @@ class ServiceRecordAuthority:
                 and evidence.get('binding_digest') == keyed_digest(history._result_key, canonical_json(binding.as_data()))
                 and evidence.get('context_digest') == row['context_digest']
                 and evidence.get('result_digest') == reservation.result_digest)
-        except (ValueError, TypeError, AttributeError):
+        except (ValueError, TypeError, AttributeError, RecursionError):
             return False
 
     @staticmethod

@@ -376,6 +376,24 @@ class LostRunAfterStopTests(LostRunHarness):
         finally:
             connection.close()
 
+    def cli_until_not_settling(self, command, *arguments, end):
+        """One CLI call whose exit is 0; None while the service answers the transient `run_settling`."""
+        import io
+        from tests.test_bridge import cli as cli_module
+        stdout = io.StringIO()
+        argv = ["cli.py", command, "--state-root", str(self.state.root), "--project-root", str(self.project),
+                *arguments]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(cli_module, "BUNDLE_ROOT", self.bundle), \
+                contextlib.redirect_stdout(stdout):
+            code = cli_module.main()
+        reply = json.loads(stdout.getvalue())
+        if code == 2 and reply.get('reason_code') == 'run_settling':
+            self.assertLess(time.monotonic(), end, 'service still answered run_settling')
+            time.sleep(.05)
+            return None
+        self.assertEqual(0, code, reply)
+        return reply
+
     @__import__('test_framework').requirements('B2-OUTCOME', 'RS-B-5', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
         # 0.3.3 requirement C3 (owner): on 0.8.22, a live project's refused claim could
@@ -390,8 +408,13 @@ class LostRunAfterStopTests(LostRunHarness):
         with mock.patch.object(project_service, 'MAX_ACTIVE_ATTEMPTS', 1):
             self.start_host()
             self.wait_for(lambda: self.bindings() == ['abandoned'], seconds=30)
-            closed = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
-                              '--reason', 'recovery_unavailable')
+            # LRS-1/LRS-6: `run_settling` is the service's documented not-final answer ("ask again
+            # shortly") while it still lists earlier leases or closes an earlier fence (C3d): ask again
+            # until it is final, within the same bound as the binding wait above.
+            end, closed = time.monotonic() + 30, None
+            while closed is None:
+                closed = self.cli_until_not_settling('learning-classify-host-run-abandoned', '--run-handle',
+                                                     run_handle, '--reason', 'recovery_unavailable', end=end)
             self.assertEqual(('already_closed', 'never_claimed'), (closed['classification'], closed['capacity_state']))
             self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
         # C7: the report counts the closed run as abandoned, not pending; B2 (decision 92 A / 119 A): the

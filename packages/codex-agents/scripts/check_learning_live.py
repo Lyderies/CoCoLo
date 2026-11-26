@@ -203,7 +203,7 @@ def check(target: Path, *, timeout: float = 90.0) -> dict[str, Any]:
         if 2 in responses and "error" in responses[2]:
             raise LiveLearningError("turn_start_failed")
         return normalize_messages(messages, b"live-check-digest-key".ljust(32, b"0"))
-    except (json.JSONDecodeError, ContractError) as exc:
+    except (json.JSONDecodeError, ContractError, RecursionError) as exc:
         raise LiveLearningError("normalization_failed") from exc
     finally:
         _cleanup_process(process, selector)

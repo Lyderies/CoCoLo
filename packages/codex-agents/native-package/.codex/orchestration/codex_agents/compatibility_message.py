@@ -68,5 +68,5 @@ def project_service_version(state_root, project_root):
         if type(releases) is not dict:
             return None
         return next((version for version, digest in releases.items() if digest == hinted[0].runtime_digest), None)
-    except (OSError, ValueError, StateError):
+    except (OSError, ValueError, StateError, RecursionError):
         return None

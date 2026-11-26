@@ -76,7 +76,7 @@ def trusted_package(root, *, releases=None):
         if not _accepted(identity, releases):
             raise ValueError()
         return identity
-    except (ContractError, OSError, KeyError, TypeError, ValueError, SyntaxError):
+    except (ContractError, OSError, KeyError, TypeError, ValueError, SyntaxError, RecursionError):
         raise TakeoverError('predecessor_unverified') from None
 
 

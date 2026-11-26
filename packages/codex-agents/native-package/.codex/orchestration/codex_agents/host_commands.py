@@ -371,7 +371,7 @@ def _manifest_files(raw: bytes) -> dict[str, str]:
 
     try:
         manifest = json.loads(raw)
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise HostCommandError("the install manifest is invalid") from exc
     if (
         not isinstance(manifest, dict)
@@ -560,7 +560,7 @@ def _binding_bytes(root: Path, digest: str, version: str, clone: Path) -> bytes:
 def _parse_binding(raw: bytes) -> dict[str, str]:
     try:
         binding = json.loads(raw)
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise HostCommandError("the protected runtime binding is invalid") from exc
     if (
         not isinstance(binding, dict)

@@ -92,7 +92,7 @@ def _settings(path: Path) -> dict[str, Any]:
         with open(path, "rb") as handle:
             raw = handle.read(MAX_SETTINGS_BYTES + 1)
         value = json.loads(raw) if len(raw) <= MAX_SETTINGS_BYTES else None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         value = None
     if not isinstance(value, dict):
         # A settings file that cannot be read cannot be shown to be safe.

@@ -48,7 +48,7 @@ def _package_version() -> str:
     if manifest_path.is_file():
         try:
             manifest = json.loads(manifest_path.read_bytes())
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, json.JSONDecodeError, RecursionError) as exc:
             raise RuntimeError("installed package manifest is invalid") from exc
         value = manifest.get("version") if isinstance(manifest, dict) else None
     else:

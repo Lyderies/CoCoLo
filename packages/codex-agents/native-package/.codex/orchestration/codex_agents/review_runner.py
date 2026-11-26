@@ -57,7 +57,7 @@ def project_cli(project_root: Path):
                               cwd=project_root, capture_output=True, text=True)
         try:
             return json.loads(done.stdout)
-        except ValueError:
+        except (ValueError, RecursionError):
             return {'ready': False, 'reason_code': 'review_step_unreadable'}
     return call
 
