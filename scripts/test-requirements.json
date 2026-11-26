@@ -4932,6 +4932,8 @@
   "checks": [
    "codex:tests.test_health_workspaces.CollectorWiringTests.test_HM2A_11_the_collector_registers_the_check_and_a_pass_removes_an_orphan_and_keeps_a_live_folder",
    "codex:tests.test_health_workspaces.CollectorWiringTests.test_HM2A_11_registering_does_no_io_and_the_pending_reader_goes_through_the_projects_histories",
+   "codex:tests.test_health_workspaces.CollectorWiringTests.test_HM2A_11_the_pending_read_is_index_backed_and_finds_one_row_among_many_tombstones",
+   "codex:tests.test_health_workspaces.CollectorWiringTests.test_HM2A_11_the_pending_read_stops_at_its_deadline_and_says_unknown",
    "codex:tests.test_health_workspaces.CollectorWiringTests.test_HM2A_11_the_pending_reader_goes_past_its_bounds_and_says_unknown"
   ],
   "source": "tests/requirements/s11.json#HM2A-11",

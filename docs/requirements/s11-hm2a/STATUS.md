@@ -84,3 +84,7 @@ codex:tests.test_health_workspaces --module codex:tests.test_codex_preparation -
 `--affected` run and `tests.test_project_driver`.
 
 IP-B 0.8.68: wired (HM2A-11), see docs/batch-0868-merge.md "S8/S11 wiring".
+
+## IP-B review r1 fix (HM2A-11 bound)
+
+`memory_holds.pending_workspaces` now reads the project's preparation rows through the primary key (no SCAN, no temp sort), under one 2 s monotonic deadline (SQLite progress handler cleared in finally, checks in each Python loop); expiry or any incomplete read returns None. Tests first (red on 5cd6edd8: no deadline/plan hook), green now. No schema change. Runtime digest stays stale for the primary at merge.
