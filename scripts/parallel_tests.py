@@ -73,6 +73,8 @@ WORKER_ENVIRONMENT = frozenset({
     'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LANGUAGE', 'TZ',
     'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME',
     'PYTHONIOENCODING', 'PYTHONUTF8', 'PYTHONHASHSEED', 'PYTHONDONTWRITEBYTECODE',
+    # A login session sets this; the product refuses to work without it on Linux (private folder).
+    'XDG_RUNTIME_DIR',
     'COCOLO_WORKER_TIMEOUT', 'HYPOTHESIS_STORAGE_DIRECTORY', 'COCOLO_E2E_REGISTRY',
     # Keep coverage.py's subprocess patch active through nested test runners.
     'COVERAGE_PROCESS_CONFIG',

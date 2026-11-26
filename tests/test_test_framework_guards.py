@@ -630,9 +630,9 @@ class RunnerIntegrationTests(unittest.TestCase):
     def test_decision_100_allowlist_applies_to_local_and_CI_workers(self):
         from unittest.mock import patch
         names=('GITHUB_TOKEN','AWS_SESSION_TOKEN','DATABASE_PASSWORD','UNLISTED_PLAIN_VALUE')
-        code_text = "import os\nfor key in " + repr(names) + ":\n    assert key not in os.environ, 'D100 leaked ' + key\nassert os.environ['COCOLO_TEST_ALLOWED'] == 'yes'\nassert os.environ.get('PATH')\nassert os.environ.get('HOME')\n"
+        code_text = "import os\nfor key in " + repr(names) + ":\n    assert key not in os.environ, 'D100 leaked ' + key\nassert os.environ['COCOLO_TEST_ALLOWED'] == 'yes'\nassert os.environ.get('PATH')\nassert os.environ.get('HOME')\nassert os.environ.get('XDG_RUNTIME_DIR') == '/run/user/1000', 'login-session folder dropped'\n"
         for ci in ('','true'):
-            with patch.dict(os.environ,{**dict.fromkeys(names,'synthetic'), 'COCOLO_TEST_ALLOWED':'yes', 'CI':ci}):
+            with patch.dict(os.environ,{**dict.fromkeys(names,'synthetic'), 'COCOLO_TEST_ALLOWED':'yes', 'XDG_RUNTIME_DIR':'/run/user/1000', 'CI':ci}):
                 code, output, report=self.run_fixture(module_import=code_text,body=code_text+'self.assertTrue(True)')
             self.assertEqual(0,code,output)
             self.assertEqual(1,report['workers'][0]['tests'])

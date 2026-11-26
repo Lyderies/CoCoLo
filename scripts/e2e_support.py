@@ -346,6 +346,8 @@ class World:
                 with contextlib.suppress(FileNotFoundError):
                     e2e_processes.remove_world(self.base)
         finally:
+            if getattr(self, "_runtime_folder", None) is not None:
+                shutil.rmtree(self._runtime_folder, ignore_errors=True)
             active_error = sys.exc_info()[0] is not None or bool(exc and exc[0])
             try:
                 guardian = getattr(self, "_guardian", None)
@@ -444,7 +446,25 @@ class World:
             GIT_AUTHOR_NAME="e2e", GIT_AUTHOR_EMAIL="e2e@example.invalid",
             GIT_COMMITTER_NAME="e2e", GIT_COMMITTER_EMAIL="e2e@example.invalid")
         env.pop("XDG_RUNTIME_DIR", None)
+        runtime = self._private_runtime_folder()
+        if runtime is not None:
+            env["XDG_RUNTIME_DIR"] = str(runtime)
         return env
+
+    def _private_runtime_folder(self) -> Path | None:
+        """This world's own owner-only folder inside the login session's runtime folder (Linux).
+
+        The product keeps private working files only in the user cache folder (macOS) or $XDG_RUNTIME_DIR
+        (elsewhere), never under the home folder or a temporary folder, and the world lives under both. A
+        real user's session provides that variable; the world gets a private sub-folder of it, removed with the world.
+        """
+        real = os.environ.get("XDG_RUNTIME_DIR")
+        if sys.platform == "darwin" or not real or not os.path.isabs(real) or not os.path.isdir(real):
+            return None
+        folder = Path(real) / ("cocolo-" + self.base.name)
+        folder.mkdir(mode=0o700, exist_ok=True)
+        self._runtime_folder = folder
+        return folder
 
     def git(self, *args: str, project: Path | None = None) -> subprocess.CompletedProcess:
         git = subprocess.run(["/bin/bash", str(SETUP), "--print-git"], capture_output=True, text=True,
