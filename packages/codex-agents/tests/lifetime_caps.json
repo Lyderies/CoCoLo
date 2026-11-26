@@ -3221,6 +3221,12 @@
    "kind": "count",
    "ends": "S14F-5: the same per-pass budget also covers the protected-path walk (consuming the custody set itself, one visited set, linear) and the paged deletions (rechecked under the write lock, S14F-8), so one owner pass does at most CUSTODY_PASS_ROWS units in total; the walk queue, visited set and deletion index end with the cycle (reset on completion or invalidation). A 2,000-edge overlapping chain past the budget completes over many passes, each within the budget, and equals the whole-scan prune.",
    "test": "test_S14F_5_every_pass_bounds_its_total_work_on_a_long_overlapping_chain"
+  },
+  "project_learning_corpus.py::_checked_content": {
+   "checks": 1,
+   "ends": "A process-local memo of the last 256 parsed and validated staged record contents (pure function of the bytes, read-only to callers), so one chunk is not re-checked by each of its readers. At the limit the oldest entry is evicted; it holds no history, counts nothing across runs and ends with the process.",
+   "test": "test_the_checked_content_keep_holds_the_limit_and_one_past_it_evicts_the_oldest",
+   "kind": "count"
   }
  }
 }

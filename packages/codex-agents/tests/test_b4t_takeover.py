@@ -9,6 +9,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -1886,7 +1887,10 @@ class AccountLineageTests(unittest.TestCase):
         from tests.support import ORCHESTRATION_ROOT
         sites = set()
         for path in (ORCHESTRATION_ROOT / 'codex_agents').glob('*.py'):
-            tree = ast.parse(path.read_text())
+            source = path.read_text()
+            if 'earlier_runtime' not in source:  # a keyword of that name must appear in the source to be passed
+                continue
+            tree = ast.parse(source)
             for function in ast.walk(tree):
                 if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
@@ -3534,7 +3538,11 @@ class NativeExecA1Tests(unittest.TestCase):
                 runtime=root/'packages/codex-agents/native-package/.codex/orchestration'
                 sites=set()
                 for path in runtime.rglob('*.py'):
-                    tree=ast.parse(path.read_bytes())
+                    source=path.read_bytes()
+                    # Every site this checks names one of these words in the source, so a file without them has none.
+                    if not re.search(rb'signature_process|\.\s*exec|_verify',source):
+                        continue
+                    tree=ast.parse(source)
                     parents={child:parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
                     for node in ast.walk(tree):
                         if isinstance(node,ast.ImportFrom) and (node.module or '').endswith('signature_process'):

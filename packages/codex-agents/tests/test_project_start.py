@@ -481,15 +481,18 @@ class StartTests(StarterBase):
             begun = wait_for(self, lambda: self.events('begin', name), max(0.0, deadline - time.monotonic()),
                              f'{name}: no start began within one interval')
             self.assertLessEqual(begun[0]['t'], deadline)
-        # Review round 2 (decision 243, MED 2): serving, not only begun, by that same deadline.
+        # Review round 2 (decision 243, MED 2), decision 412: serving within one PRODUCTION interval
+        # (project_start.STARTER_CHECK_SECONDS as the module defines it) of the collector being ready. The 0.1 s
+        # interval above is a compression for the begin check and is below any real process start.
+        serve_by = ready + project_start.STARTER_CHECK_SECONDS
         served = None
-        while served is None and time.monotonic() <= deadline:
+        while served is None and time.monotonic() <= serve_by:
             if self.serving('never') and self.serving('stopped'):
                 served = time.monotonic()  # both checks answered serving by this time
             else:
                 time.sleep(0.05)
         self.assertIsNotNone(served, 'the due projects were not serving within one interval')
-        self.assertLessEqual(served, deadline)
+        self.assertLessEqual(served, serve_by)
         time.sleep(0.6)
         self.assertFalse(self.serving('idle'))
         self.assertEqual([], self.events('begin', 'idle'))

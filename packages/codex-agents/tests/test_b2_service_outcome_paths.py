@@ -7,8 +7,13 @@ command and the service host's own authorization, both receipt versions, and the
 refusal reasons. It ends with the production findings MED-1 (one candidate's failure never stops the pass) and MED-2 (a
 missing or unverifiable orchestration refuses). Time budget: scenario (60 s); the first B2 module is kept separate.
 """
+import copy
 import json
+import shutil
+import tempfile
 import threading
+from pathlib import Path
+import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
@@ -26,8 +31,49 @@ TERMINAL = ('completed', 'failed', 'interrupted', 'cancelled')
 ORCHESTRATION_TABLES = ('project_orchestration_requests', 'project_orchestration_checkpoints', 'project_orchestrations')
 
 
+_TEMPLATE = []
+
+
+def _template():
+    """The B2 run (opened, consumed, published, nothing recorded) built once per process, its store closed.
+
+    Building one costs about 0.45 s (fake provider clients, a git project, the account fixtures); this module
+    needs about ninety of them. Each test gets its own copy of the template's store folder, opened on its own
+    (`RealFixture.setUp`), so no test can see another's changes."""
+    if not _TEMPLATE:
+        built = _Template()
+        B2Fixture.setUp(built)
+        unittest.addModuleCleanup(built.doCleanups)
+        built.store.close()
+        _TEMPLATE.append(built)
+    return _TEMPLATE[0]
+
+
 class RealFixture(B2Fixture):
     """The B2 run with its orchestration journal real: it is ended only through the store's own operations."""
+
+    def setUp(self):
+        if type(self).publish is not rc.RecordedContextFixture.publish:  # another publication: built for itself
+            return super().setUp()
+        template = _template()
+        # Values (bindings, keys, bodies, references) are shared: they are immutable. Everything a test can change
+        # is its own: the store folder, its open store, the clock the store reads, the fixture objects holding them.
+        self.__dict__.update({name: value for name, value in template.__dict__.items() if not name.startswith('_')})
+        fixture = copy.copy(template.fixture)
+        fixture.base = copy.copy(template.fixture.base)
+        folder = tempfile.mkdtemp(dir=template.directory.parent)
+        self.addCleanup(shutil.rmtree, folder, True)
+        fixture.directory = Path(folder) / 'project-history'
+        shutil.copytree(template.directory, fixture.directory)
+        fixture.store = rc.seven_day_store(fixture)
+        # What the account fixtures set on the template's store after opening it (which orchestration reference it
+        # allows, its limits, what it has already verified) is that store's own state, not the folder's.
+        for name in ('_allow_legacy_orchestration_reference', '_orchestration_limits'):
+            setattr(fixture.store, name, getattr(template.store, name))
+        for name in ('_verified_cleanups', '_verified_leases'):
+            setattr(fixture.store, name, copy.copy(getattr(template.store, name)))
+        self.addCleanup(lambda: fixture.store.close())
+        self.fixture, self.directory = fixture, fixture.directory
 
     def scope(self):
         return OrchestrationScope(**{name: getattr(self.binding, name) for name in SCOPE_FIELDS})
@@ -103,12 +149,54 @@ class RealFixture(B2Fixture):
                 self.store._connection.execute(f'INSERT INTO {table} VALUES({",".join("?" * len(row))})', row)
 
 
+class _Template(RealFixture):
+    def runTest(self):
+        pass
+
+
 @requirement
 class Spare(RealFixture):
     """One more run of the same fixture, for a case that needs its own store."""
 
     def runTest(self):
         self.assertEqual('committed', rc.context_row(self.store, *self.attempt)[0])
+
+
+class RunCopyIsolationTests(RealFixture):
+    """The run each test gets is its own copy of one built template: a change in one is never seen in another. Both
+    tests start by asserting the original state and then change their own copy, so whichever runs second proves
+    that the first one's changes did not reach it."""
+
+    def pristine(self):
+        self.assertEqual('active', self.status_of_orchestration())
+        self.assertEqual('committed', rc.context_row(self.store, *self.attempt)[0])
+        self.assertEqual(0, self.counts()[1])
+        self.assertEqual(1, self.store._connection.execute('SELECT COUNT(*) FROM terminal_outbox').fetchone()[0])
+        self.assertEqual(1, len(list(self.directory.glob('.result-*.json'))))
+
+    def test_a_test_that_changes_its_copy_leaves_the_original_for_the_next(self):
+        self.pristine()
+        self.service_record()
+        self.end_orchestration('completed')
+        self.store._connection.execute('DELETE FROM terminal_outbox')
+        for path in self.directory.glob('.result-*.json'):
+            path.unlink()
+        self.fixture.base.stamp += ORCHESTRATION_IDLE_MS
+        self.assertEqual(1, self.counts()[1])
+
+    def test_a_sibling_sees_the_original_whatever_another_copy_changed(self):
+        self.pristine()
+        other = Spare()
+        other.setUp()
+        self.addCleanup(other.doCleanups)
+        other.service_record()
+        other.store._connection.execute('DELETE FROM terminal_outbox')
+        self.assertNotEqual(other.directory, self.directory)
+        self.pristine()  # the other copy's recording and deletion did not reach this one
+        self.assertIsNot(self.fixture.base, other.fixture.base)
+        stamp = self.fixture.base.stamp
+        other.fixture.base.stamp += ORCHESTRATION_IDLE_MS
+        self.assertEqual(stamp, self.fixture.base.stamp)
 
 
 @requirement
@@ -369,11 +457,20 @@ from codex_agents.learning_contracts import canonical_json  # noqa: E402
 from codex_agents.result_contracts import CodexUsageObservation, ResultObservation  # noqa: E402
 
 
-StatedFixture = RealFixture
+class StatedFixture(RealFixture):
+    """The B2 run (RealFixture) for tests that use it directly."""
+
+
+class SparesOnly(RealFixture):
+    """For tests that build every run they use themselves (`Spare`): the class's own run would be built and unused,
+    and a run costs about 0.45 s, so it is not built."""
+
+    def setUp(self):
+        pass
 
 
 @requirement
-class StatedRunTests(StatedFixture):
+class StatedRunTests(SparesOnly):
     """B2-4, B2-16: the first admission (K1), the retrieval (K2) and the association repair (K3) of a run that is
     open, closed, expired or retired, by exact reason, and what each writes."""
 
@@ -447,7 +544,7 @@ class StatedRunTests(StatedFixture):
 
 
 @requirement
-class AlteredRowsTests(StatedFixture):
+class AlteredRowsTests(SparesOnly):
     """B2-3, B2-7: an altered terminal, grant, context or body is refused with its exact reason, writes nothing and is
     counted by the sweep as an integrity refusal."""
 
