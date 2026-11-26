@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import time
 from pathlib import Path
 
 from .history_contracts import HistoryError
@@ -401,20 +402,68 @@ def retire_instance(history, instance, pending=None):
                          'retired', now_ms=history._hold_now(), evidence=evidence)
 
 
+PENDING_DEADLINE_SECONDS = 2.0  # one health pass's whole pending read; the check treats an overrun as unknown
+PENDING_PROGRESS = 1_000  # SQLite VM steps between deadline checks
+_monotonic = time.monotonic  # this reader's clock; tests replace it
+# The project's own preparation rows through the table's primary key (project_id, kind, identity): a range of
+# preparation rows only, in identity order, no full-table scan and no temporary sort. Rows are filtered by evidence
+# while read, and the reader stops at its row bound (HM2A-11, S44a pattern).
+PENDING_SQL = ("SELECT evidence FROM project_holds WHERE project_id=? AND kind='preparation' "
+               "AND evidence LIKE '%\"removal\":\"pending\"%'")
+
+
+class _PendingExpired(Exception):
+    """The pending read's single deadline passed."""
+
+
+def _read_pending(history, deadline):
+    """The pending evidence rows of the one project this history holds, or raise _PendingExpired / sqlite3.Error."""
+    import sqlite3
+    history.set_progress_handler(lambda: 1 if _monotonic() > deadline else 0, PENDING_PROGRESS)
+    try:
+        try:
+            identity = history.execute('SELECT project_id FROM history_identity').fetchall()
+        except sqlite3.OperationalError as error:
+            if 'no such table' not in str(error):
+                raise
+            identity = None  # a store without the identity table: the whole (bounded) table is this project's
+        if identity is None:
+            query, arguments = ("SELECT evidence FROM project_holds WHERE kind='preparation' "
+                                "AND evidence LIKE '%\"removal\":\"pending\"%'"), ()
+        elif len(identity) == 1:
+            query, arguments = PENDING_SQL, (identity[0][0],)
+        else:
+            raise sqlite3.DatabaseError('history identity is not a single project')
+        rows = []
+        for (evidence,) in history.execute(query, arguments):
+            if _monotonic() > deadline:
+                raise _PendingExpired
+            rows.append(evidence)
+            if len(rows) > MAX_PENDING_REMOVALS:
+                break
+        return rows
+    finally:
+        history.set_progress_handler(None, 0)
+
+
 def pending_workspaces(state_root):
     """HM-2a (S11): the preparation folders any project of `state_root` still owes a removal for, as a set of paths.
 
     Read-only: every project history is opened as its own read-only snapshot (as the holds check does), nothing is
     created, written or migrated. None means the records could not be read completely (a history that does not
-    open, more projects or pending rows than the bounds), so the workspaces check removes nothing that pass."""
+    open, more projects or pending rows than the bounds, or the one deadline of this read passing while SQLite or
+    the Python loop was still working), so the workspaces check removes nothing that pass. Never a partial set."""
     import sqlite3
     from contextlib import closing
     from .health_holds import open_reader
+    deadline = _monotonic() + PENDING_DEADLINE_SECONDS
     projects = Path(state_root) / 'projects'
     try:
         names = []
         with os.scandir(projects) as listing:
             for entry in listing:
+                if _monotonic() > deadline:
+                    return None
                 names.append(entry.name)
                 if len(names) > MAX_PENDING_READ_PROJECTS:
                     return None
@@ -424,19 +473,19 @@ def pending_workspaces(state_root):
         return None
     found = set()
     for name in sorted(names):
+        if _monotonic() > deadline:
+            return None
         database = projects / name / 'history.sqlite3'
         if not database.is_file():
             continue
         try:
             with closing(open_reader(database)) as history:
-                rows = history.execute("SELECT evidence FROM project_holds WHERE kind='preparation' "
-                    "AND evidence LIKE '%\"removal\":\"pending\"%' ORDER BY taken_at_ms,identity LIMIT ?",
-                    (MAX_PENDING_REMOVALS + 1,)).fetchall()
-        except (OSError, sqlite3.Error):
+                rows = _read_pending(history, deadline)
+        except (OSError, sqlite3.Error, _PendingExpired):
             return None
         if len(rows) > MAX_PENDING_REMOVALS:
             return None
-        for (evidence,) in rows:
+        for evidence in rows:
             try:
                 facts = json.loads(evidence or '{}')
             except ValueError:

@@ -578,6 +578,54 @@ class CollectorWiringTests(Case):
         self.assertEqual({'/x/prepare-0', '/x/prepare-1', '/x/prepare-2'}, memory_holds.pending_workspaces(root))
         self.assertIsNone(self.read_with(memory_holds, 'MAX_PENDING_REMOVALS', 2, root))  # more owed than the bound
 
+    def _real_history(self, root, tombstones):
+        """A project history with the real project_holds schema: many released preparation rows and one pending."""
+        import sqlite3
+        from codex_agents.project_holds_schema import PROJECT_HOLDS_SCHEMA
+        (root / 'projects' / 'prj_a').mkdir(parents=True)
+        connection = sqlite3.connect(root / 'projects' / 'prj_a' / 'history.sqlite3')
+        connection.execute('CREATE TABLE history_identity(project_id TEXT PRIMARY KEY, next_source_sequence INTEGER, '
+                           'next_delivery_sequence INTEGER)')
+        connection.execute("INSERT INTO history_identity VALUES('prj_a',1,1)")
+        connection.executescript(PROJECT_HOLDS_SCHEMA)
+        done = json.dumps({'removal': 'done'}, separators=(',', ':'))
+        connection.executemany(
+            "INSERT INTO project_holds(project_id,kind,identity,state,instance,taken_at_ms,released_at_ms,release_kind,"
+            "evidence) VALUES('prj_a','preparation',?,'released','i',?,?,'retired',?)",
+            ((f't{n}', n, n, done) for n in range(tombstones)))
+        connection.execute(
+            "INSERT INTO project_holds(project_id,kind,identity,state,instance,taken_at_ms,released_at_ms,release_kind,"
+            "evidence) VALUES('prj_a','preparation','pending','released','i',9,9,'retired',?)",
+            (json.dumps({'removal': 'pending', 'workspace': '/x/prepare-p'}, separators=(',', ':')),))
+        connection.commit()
+        connection.close()
+
+    @requirements('HM2A-11')
+    def test_HM2A_11_the_pending_read_is_index_backed_and_finds_one_row_among_many_tombstones(self):
+        import sqlite3
+        from codex_agents import memory_holds
+        root = self.base / 'state3'
+        self._real_history(root, 50_000)
+        self.assertEqual({'/x/prepare-p'}, memory_holds.pending_workspaces(root))
+        connection = sqlite3.connect(root / 'projects' / 'prj_a' / 'history.sqlite3')
+        self.addCleanup(connection.close)
+        plan = ' '.join(row[3] for row in connection.execute('EXPLAIN QUERY PLAN ' + memory_holds.PENDING_SQL,
+                                                              ('prj_a',)))
+        self.assertIn('USING INDEX', plan)
+        self.assertNotRegex(plan, r'\bSCAN\b')
+        self.assertNotIn('TEMP B-TREE', plan)
+
+    @requirements('HM2A-11')
+    def test_HM2A_11_the_pending_read_stops_at_its_deadline_and_says_unknown(self):
+        from codex_agents import memory_holds
+        root = self.base / 'state4'
+        self._real_history(root, 20_000)
+        ticks = itertools.count()
+        # The injected clock passes the one deadline after a few reads: SQL steps and Python rows both consult it.
+        with mock.patch.object(memory_holds, '_monotonic', lambda: next(ticks) * 0.5):
+            self.assertIsNone(memory_holds.pending_workspaces(root))
+        self.assertEqual({'/x/prepare-p'}, memory_holds.pending_workspaces(root))  # a fresh clock: the full answer
+
     @staticmethod
     def read_with(module, name, value, root):
         with mock.patch.object(module, name, value):
