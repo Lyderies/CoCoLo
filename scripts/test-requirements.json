@@ -5063,5 +5063,78 @@
    "codex:tests.test_s13b_due_drain.DueDrainTests.test_non_full_backed_off_pass_continues_then_empty_pass_stops_busy_loop",
    "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff"
   ]
+ },
+ "S10-HM6-1": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_workspace_threshold_below_equal_above"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-1",
+  "statement": "Refuse a new run when free space on the workspace root is below the larger of 2 GiB and 5%; equal and above allow."
+ },
+ "S10-HM6-2": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_both_low_names_both",
+   "codex:tests.test_health_resources.ResourceTests.test_state_folder_threshold_below_equal_above"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-2",
+  "statement": "Apply the same rule to the state folder separately from the workspace root."
+ },
+ "S10-HM6-3": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_larger_of_two_gib_or_five_percent"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-3",
+  "statement": "The needed free space is the larger of the byte limit and the percentage of the disk, exact at the switch-over."
+ },
+ "S10-HM6-4": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_driver_refuses_before_any_state_exists",
+   "codex:tests.test_health_resources.ResourceTests.test_driver_retry_of_registered_run_is_not_rechecked",
+   "codex:tests.test_health_resources.ResourceTests.test_just_below_amounts_are_distinguishable",
+   "codex:tests.test_health_resources.ResourceTests.test_long_and_unprintable_paths_never_lose_the_reason",
+   "codex:tests.test_health_resources.ResourceTests.test_reason_code_is_registered_and_the_client_reply_carries_the_text",
+   "codex:tests.test_health_resources.ResourceTests.test_refusal_is_plain_and_complete",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_disk_filling_between_admission_and_registration_never_reports_success",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_identical_retry_of_a_registered_open_is_not_probed_again",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_low_disk_open_is_refused_before_any_account_or_run_write",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_new_orchestration_reusing_registered_inputs_is_probed_and_refused",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_run_driver_that_cannot_answer_the_check_refuses_before_admission"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-4",
+  "statement": "A refused run gives a plain reason naming the folder, free and needed amounts and how to change the limit, before any account or run write, and is never reported as started."
+ },
+ "S10-HM6-5": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_invalid_settings_file_is_reported_to_status",
+   "codex:tests.test_health_resources.ResourceTests.test_out_of_range_values_are_refused",
+   "codex:tests.test_health_resources.ResourceTests.test_settings_file_overrides_limits",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_out_of_range_settings_use_defaults_and_the_open_says_so"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-5",
+  "statement": "Limits come from the shared user-settings file; overrides work and out-of-range values are refused with a visible warning."
+ },
+ "S10-HM6-6": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_memory_pressure_is_reported_but_never_refuses"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-6",
+  "statement": "Memory pressure is reported only and never refuses a run."
+ },
+ "S10-HM6-7": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_probe_errors_fail_safe_with_plain_reason"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-7",
+  "statement": "A failing disk probe fails safe: new runs are refused with a plain reason."
+ },
+ "S10-HM6-8": {
+  "checks": [
+   "codex:tests.test_health_resources.CollectorWiringTests.test_collector_health_pass_is_quiet_on_a_healthy_disk",
+   "codex:tests.test_health_resources.CollectorWiringTests.test_collector_health_pass_reports_a_low_disk",
+   "codex:tests.test_health_resources.ResourceTests.test_check_reports_low_and_unreadable_folders_only",
+   "codex:tests.test_health_resources.ResourceTests.test_import_does_no_io"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-8",
+  "statement": "Low or unreadable disks are reported to the user as plain health findings; no import-time I/O."
  }
 }

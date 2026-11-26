@@ -23,6 +23,7 @@ class UserSettings:
     disk_free_bytes: int = 2 * 1024 ** 3
     disk_free_percent: int = 5
     no_merge_warning_ms: int = 90 * 60 * 1000
+    memory_available_percent: int = 10
     warning: str | None = None
 
 
@@ -53,7 +54,7 @@ def load(root, *, path=None):
             raise ValueError('unknown settings')
         for key, value in data.items():
             minimum, maximum = MIN_BYTES, MAX_SETTING_INTEGER
-            if key == 'disk_free_percent':
+            if key in ('disk_free_percent', 'memory_available_percent'):
                 minimum, maximum = 1, 99
             elif key == 'no_merge_warning_ms':
                 minimum = 60_000

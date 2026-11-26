@@ -87,7 +87,7 @@ from .codex_preparation import (
     preparation_payload,
 )
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
-from . import codex_preparation, container_launch
+from . import codex_preparation, container_launch, health_resources, user_settings
 from .container_recovery import ContainerRecovery
 from .recovery_report import EXPIRY_SECONDS, RECOVERY_REASONS
 from .control_api import ControlScope
@@ -363,6 +363,10 @@ class _RateLimitRecorder:
         return None  # The account already recorded it when it refused the event.
 
 
+# run.check (S10): may a new run open, asked before the account admits it.
+_OPERATIONS = frozenset({'run.check', 'run.register', 'run.prepare', 'run.recorded', 'run.describe', 'run.abandon'})
+
+
 class RunDriver:
     _memory = None
     # PREPCLEAN-4: read-only until __init__ gives each driver its own table of inherited folder removals.
@@ -537,7 +541,7 @@ class RunDriver:
                 raise ValueError()
             request = json.loads(line)
             if (type(request) is not dict or request.keys() != {'protocol', 'operation', 'run_handle', 'attempt', 'inputs_digest'}
-                    or request['protocol'] != 1 or request['operation'] not in {'run.register', 'run.prepare', 'run.recorded', 'run.describe', 'run.abandon'}
+                    or request['protocol'] != 1 or request['operation'] not in _OPERATIONS
                     or not matches(request['run_handle'], _ID) or type(request['attempt']) is not int
                     or not matches(request['inputs_digest'], _DIGEST)):
                 raise ValueError()
@@ -559,6 +563,12 @@ class RunDriver:
 
     def _answer(self, connection, enrolled, request, context):
         key = (request['run_handle'], request['attempt'])
+        if request['operation'] == 'run.check':
+            # S10 review r1: asked by the opening CLI before the account admits anything (no binding, provenance,
+            # receipt or run state yet). Its run handle names the orchestration; the account gives the run's later.
+            self._reply(connection, self._check_new_run(request['run_handle'], request['attempt'], request['inputs_digest'],
+                                                        enrolled.host_client))
+            return
         if request['operation'] == 'run.prepare':
             failed = self._late_failure(key, request['inputs_digest'], enrolled.host_client)
             if failed is not None:
@@ -600,13 +610,16 @@ class RunDriver:
             return
         try:
             if request['operation'] == 'run.register':
+                self._resource_preflight(key)
                 self._register(key, request['inputs_digest'], context, enrolled.host_client)
             elif request['operation'] == 'run.prepare':
                 self._prepare(key, request['inputs_digest'], context, enrolled.host_client)
             else:
                 self._recorded(key, request['inputs_digest'], context, enrolled.host_client)
         except HistoryError as error:
-            self._reply(connection, {'state': 'refused', 'reason_code': error.reason_code})
+            # S10: the one refusal that carries its plain reason (folder, free, needed, how to change the limit).
+            extra = {'message': str(error)} if error.reason_code == 'resource_low' else {}
+            self._reply(connection, {'state': 'refused', 'reason_code': error.reason_code, **extra})
             return
         run = self._runs[key]
         if request['operation'] != 'run.prepare' or run.state in _AFTER or run.state == 'failed':
@@ -652,6 +665,30 @@ class RunDriver:
                       or not matches(value['host_outcome_digest'], _DIGEST)):
             raise HistoryError('history_invalid_input')
         run.result_admitted = True
+
+    def _check_new_run(self, orchestration_handle, attempt, inputs_digest, host_client):
+        """S10 HM-6: may a new run be opened? An identical retry of a run this host registered is not probed again
+        (the account replays its open); anything else is a new run and is refused on a low or unreadable disk.
+        Identical means the identity admission uses (review r2c): orchestration, attempt, inputs and host class."""
+        if any(run.inputs_digest == inputs_digest and run.host_client == host_client
+               and run.prospective.orchestration_handle == orchestration_handle and run.key[1] == attempt
+               for run in self._runs.values()):
+            return {'state': 'ready', 'reason_code': None}
+        stop = health_resources.refusal(self._root, self._state.root, user_settings.load(self._state.root))
+        if stop is not None:
+            return {'state': 'refused', 'reason_code': 'resource_low', 'message': stop.text}
+        return {'state': 'ready', 'reason_code': None}
+
+    def _resource_preflight(self, key):
+        """S10 HM-6, the backstop to `run.check` (the disk can fill between the account's admission and this
+        registration): a NEW run is refused, before any run state exists, when the workspace or state folder disk is low or
+        unreadable. A retry of a known registration is not checked again. Its own code, `resource_low`; the plain
+        reason (folder, free, needed, how to change it) is the message, and the health check shows it in status."""
+        if key in self._runs:
+            return
+        stop = health_resources.refusal(self._root, self._state.root, user_settings.load(self._state.root))
+        if stop is not None:
+            raise HistoryError('resource_low', message=stop.text)
 
     def _register(self, key, inputs_digest, value, host_client):
         # The host class is the enrolled one; the context may only repeat it.

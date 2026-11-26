@@ -410,7 +410,7 @@ class SweepTests(unittest.TestCase):
         server._run_health_pass()
         view = server.health_monitor.view(self.store.project_a_id)
         self.assertEqual([], view['findings'])
-        self.assertEqual(['self_check', 'containers', 'workspaces'], [c['check'] for c in view['checks']])
+        self.assertEqual(['self_check', 'containers', 'workspaces', 'resources'], [c['check'] for c in view['checks']])
 
 
 class StatusTests(unittest.TestCase):

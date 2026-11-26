@@ -456,8 +456,9 @@ class CollectorWiringTests(unittest.TestCase):
         self.enterContext(mock.patch.object(hw.WorkspaceCheck, '_container_path', lambda check: None))  # not the real scratch
         server = learning_store.CollectorServer(store.ledger)
         names = [check.name for check in server.health_monitor._checks]
-        # S11 wiring adds the workspaces check; S8's holds check needs a ledger owner, which this collector lacks
-        self.assertEqual(['self_check', 'containers', 'workspaces'], names)
+        # S11 wiring adds the workspaces check and S10 the resources check; S8's holds check needs a ledger owner,
+        # which this collector lacks
+        self.assertEqual(['self_check', 'containers', 'workspaces', 'resources'], names)
         check = server.health_monitor._checks[1]
         self.assertIsInstance(check, hc.ContainerCheck)
         self.assertEqual(store.ledger.state.root / 'projects', check.projects)
@@ -466,7 +467,7 @@ class CollectorWiringTests(unittest.TestCase):
         server._run_health_pass()
         view = server.health_monitor.view(store.project_a_id)
         self.assertEqual([], view['findings'])
-        self.assertEqual({'self_check': 'ok', 'containers': 'ok', 'workspaces': 'ok'},
+        self.assertEqual({'self_check': 'ok', 'containers': 'ok', 'workspaces': 'ok', 'resources': 'ok'},
                          {c['check']: c['state'] for c in view['checks']})
 
 

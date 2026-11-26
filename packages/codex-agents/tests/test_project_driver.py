@@ -1029,7 +1029,8 @@ class StartupRecoverOpenTests(DriverHarness):
         self.recover_fails = True
         context, route_path, opened = self.open_during_recovery()
         self.assertEqual(('admitted', False), (opened['admission'], opened['project_host_registered']))
-        self.assertEqual([('refused', 'history_service_unavailable')],
+        # S10 review r1: the open first asks the driver whether a new run may open (run.check, ready), then registers.
+        self.assertEqual([('ready', None), ('refused', 'history_service_unavailable')],
                          [(entry[2].get('state'), entry[2].get('reason_code')) for entry in self.stopped_runs
                           if entry[0] == 'client' and isinstance(entry[2], dict)], self.stopped_runs)
         self.assertEqual([], self.registered_rows())

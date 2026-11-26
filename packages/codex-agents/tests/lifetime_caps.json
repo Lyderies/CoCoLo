@@ -688,6 +688,11 @@
    "ends": "HM-1: MAX_STOPS_PER_PASS counts orphan stops in one pass only; the count starts again at every pass, the orphans left over are reported waiting and stopped at the next pass",
    "test": "test_HM_1_8_more_orphans_than_one_pass_stops_wait_for_the_next_pass_and_are_all_removed"
   },
+  "health_resources.py::finding_text": {
+   "checks": 1,
+   "ends": "S10 review r1 fix: a per-sentence text bound (the 240-character finding limit), not a count: each health pass builds the sentence anew and keeps nothing; a long path is shortened in the middle until the sentence fits with its guidance whole",
+   "test": "test_long_and_unprintable_paths_never_lose_the_reason"
+  },
   "health_monitor.py::__post_init__": {
    "checks": 1,
    "ends": "a finding's text length: a field of one record that is never stored apart from the record, which the pass replaces at the next pass",
@@ -1361,6 +1366,11 @@
   "project_history.py::_result_binding": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::release_earlier_unarmed_leases": {
+    "checks": 1,
+    "ends": "S13a/S13b (decisions 354, 356): ONE selection per call of at most min(limit,64) due unarmed lease rows (one index range, oldest next_check_ms first); a row leaves the due set when it is released or backed off (1 s doubling to 5 min), and the next owner step reaches the rows behind it; nothing is refused by the bound; BOUNDED",
+    "test": "test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff"
   },
   "project_history.py::runtime_close_status": {
    "checks": 1,

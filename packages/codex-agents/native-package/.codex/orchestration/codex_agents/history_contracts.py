@@ -36,6 +36,8 @@ HISTORY_REASON_CODES = frozenset({
     "history_worker_context_unavailable",
     # D2 (RS-D-5): a verifier is not opened on a worker that will not outlast it by the QA margin.
     "history_worker_result_expiring",
+    # S10 (HM-6, decision 355): a new run refused because the workspace or state folder disk is low or unreadable.
+    "resource_low",
     # B2 (decision 92 A): a finished run that may no longer be recorded, named for the status (`unrecordable:<reason>`).
     "history_unrecordable_orchestration_closed", "history_unrecordable_other_runtime",
     "history_unrecordable_host_class", "history_unrecordable_context_state", "history_unrecordable_legacy_no_context",

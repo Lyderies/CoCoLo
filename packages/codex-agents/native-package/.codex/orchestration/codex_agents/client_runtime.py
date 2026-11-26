@@ -44,6 +44,7 @@ from .service_enrollment import (
 )
 from .service_protocol import ServiceTarget
 from .service_transport import exchange_frame, install_enrollment
+from . import user_settings
 
 
 ACCOUNT_START_SECONDS = 10.0
@@ -904,6 +905,15 @@ class RuntimeOpenError(RuntimeError):
         super().__init__(self.reason_code)
 
 
+class RuntimeResourceRefusal(RuntimeOpenError):
+    """S10 HM-6: no new run was opened because a disk is low or unreadable; `message` is the plain reason (folder,
+    free and needed space, how to change the limit), `settings_warning` the settings loader's warning, if any."""
+
+    def __init__(self, message, settings_warning=None):
+        super().__init__('resource_low')
+        self.message, self.settings_warning = message, settings_warning
+
+
 class RuntimeOrchestrationError(RuntimeError):
     def __init__(self, reason, *, request_id=None, expected_sequence=None):
         allowed = HISTORY_REASON_CODES | {'orchestration_client_unavailable', 'host_client_mismatch'}
@@ -1486,7 +1496,10 @@ def _run_driver(contexts, control, operation, run_handle, attempt, inputs_digest
     raw = exchange_frame(driver, canonical_json({'protocol': 1, 'operation': operation, 'run_handle': run_handle,
         'attempt': attempt, 'inputs_digest': inputs_digest}), timeout=timeout, response_limit=4_096)
     value = parse_bounded_json(raw, max_bytes=4_096)
-    if (value.keys() != {'protocol', 'state', 'reason_code'} or value['protocol'] != 1
+    # S10: a refusal for low disk space (`resource_low`) also carries its plain reason, as one bounded printable line.
+    plain = (value.keys() == {'protocol', 'state', 'reason_code', 'message'} and value['reason_code'] == 'resource_low'
+             and type(value['message']) is str and 1 <= len(value['message']) <= 1_000 and value['message'].isprintable())
+    if ((value.keys() != {'protocol', 'state', 'reason_code'} and not plain) or value['protocol'] != 1
             or value['state'] not in {'preparing', 'ready', 'failed', 'refused'}):
         raise ValueError()
     return value
@@ -1594,6 +1607,24 @@ def abandon_bridged_run(state_root, project_root, run_handle, reason, *, host_cl
             'settled_by': 'project_host', 'capacity_state': 'never_claimed'}
 
 
+def _check_new_run(state, project_root, scope, control, orchestration_handle, attempt, digest, host_client, warning):
+    """S10 HM-6: ask the project host whether a new run may open, before the account admits it.
+
+    Raises RuntimeResourceRefusal on a low or unreadable disk. Fails closed (review r2c): a runtime without a run
+    driver, or one that cannot answer, refuses the open here, before the account writes anything, as an unreachable
+    service (`open_service_unreachable`, whose next step is the usual one)."""
+    driver = Path(control).parent / 'run.sock'
+    if not driver.exists():
+        raise RuntimeOpenError('open_service_unreachable')
+    try:
+        contexts = enroll_clients(state, project_root, scope, (control, driver), host_client=host_client)
+        answer = _run_driver(contexts, control, 'run.check', orchestration_handle, attempt, digest, {}, timeout=10)
+    except Exception:
+        raise RuntimeOpenError('open_service_unreachable') from None
+    if answer['state'] == 'refused' and answer['reason_code'] == 'resource_low':
+        raise RuntimeResourceRefusal(answer['message'], warning)
+
+
 def open_codex_client(state_root, project_root, orchestration_handle, task, route, assignment, parent_grant, *, host_client):
     """Read original project scope, then open once through the account API.
 
@@ -1617,9 +1648,13 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
             raise RuntimeOpenError('open_service_unreachable') from None
         if len(endpoints) != 3:  # a version-1 hint: an earlier version's service, which cannot open
             raise RuntimeOpenError('open_service_other_version')
+        digest = open_inputs_digest(assignment, task, route, parent_grant)
+        # S10 HM-6 (review r1): the disk check comes before anything is written, the account's admission included.
+        warning = user_settings.load(state.root).warning
+        _check_new_run(state, project_root, scope, endpoints[0], orchestration_handle, assignment['attempt'], digest,
+                       host_client, warning)
         contexts = enroll_clients(state, project_root, scope, endpoints[:2], account=endpoints[2], host_client=host_client)
         prospective = OrchestrationScope(**vars(scope))
-        digest = open_inputs_digest(assignment, task, route, parent_grant)
         originals = {'assignment': assignment, 'task': task, 'route': route, 'parent_grant': parent_grant}
         # The trusted CLI hands each owner the originals for exactly this request.
         contexts[endpoints[1]] = canonical_json({'purpose': 'open', 'orchestration_handle': orchestration_handle,
@@ -1654,13 +1689,19 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
         try:
             contexts = enroll_clients(state, project_root, scope, (endpoints[0], Path(endpoints[0]).parent / 'run.sock'),
                                       host_client=host_client)
-            registered = _run_driver(contexts, endpoints[0], 'run.register', reply['run_handle'], assignment['attempt'],
+            answer = _run_driver(contexts, endpoints[0], 'run.register', reply['run_handle'], assignment['attempt'],
                 digest, {'purpose': 'register', 'orchestration_handle': orchestration_handle, 'run_id': reply['run_id'],
-                         'host_client': host_client, **originals}, timeout=10)['state'] != 'refused'
+                         'host_client': host_client, **originals}, timeout=10)
+            registered = answer['state'] != 'refused'
         except Exception:
-            registered = False
+            answer, registered = None, False
+        if answer is not None and answer['reason_code'] == 'resource_low':
+            # S10 backstop: the disk filled after the account admitted the run. It is not reported as started; the
+            # account run, never registered here, is refused at dispatch and expires like any unregistered open.
+            raise RuntimeResourceRefusal(answer['message'], warning)
     # The legacy open report's fields, projected from the account receipt.
-    return {'ready': opened, **reply, 'admission': 'admitted' if opened else 'denied',
+    return {'ready': opened, **reply, **({'settings_warning': warning} if warning else {}),
+            'admission': 'admitted' if opened else 'denied',
             'status': 'started' if opened else 'denied',
             'observation_started_at_ms': reply['recorded_at_ms'] if opened else None,
             # Only a bridged Claude child's reads are contained (its client enforces the tool set).
