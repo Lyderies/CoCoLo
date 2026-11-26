@@ -1,6 +1,7 @@
 """Read-only authority over original custody; never authorizes an old sender."""
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 import re
@@ -218,14 +219,29 @@ class CustodyScan:
         self.visited = 0  # history rows visited over all passes
         self.work = 0  # units of work in the last pass
         self.cycles = 0  # completed prune cycles
+        self.drop = []  # S14F-9: cycle-sized containers a reset let go, emptied a budget at a time
+        self.edges = self.order = self.found = self.protected = None
         self.reset()
 
     def reset(self):
+        """O(1): the old cycle's containers are handed to `drop`, never freed wholesale in this pass."""
+        self.drop.extend(c for c in (self.edges, self.order, self.found, self.protected) if c)
         self.db = self.generation = self.start = None
         self.stage, self.cursor, self.phase = 'edges', '', 0
         self.edges, self.order, self.found = {}, [], set()
-        self.queue = self.at = None
+        self.at = None
         self.protected, self.index = set(), 0
+
+    def _drain(self, budget):
+        while budget > 0 and self.drop:
+            container = self.drop[-1]
+            take = container.popitem if isinstance(container, dict) else container.pop
+            while budget > 0 and container:
+                take()
+                budget -= 1
+            if not container:
+                self.drop.pop()
+        return budget
 
     @staticmethod
     def _generation(db):
@@ -289,18 +305,19 @@ class CustodyScan:
     def step(self, db, now, bound=CUSTODY_PASS_ROWS):
         """Return the custody digests (limited to lineage edge keys) when a scan cycle completes, else None."""
         self._begin(db, now)
-        budget = self._scan(db, bound)
+        budget = self._scan(db, self._drain(bound))
         self.work = bound - budget
         if self.stage != 'walk':
             return None
         found, valid = self.found, self._generation(db) == self.generation
+        self.found = None  # handed to the caller, not to `drop`
         self.reset()
         return found if valid else None
 
     def advance(self, db, now, current_digest, *, transaction=None, bound=CUSTODY_PASS_ROWS):
         """One owner pass of the whole prune cycle; returns the edges it deleted (0 until the cycle prunes)."""
         self._begin(db, now)
-        budget = bound
+        budget = self._drain(bound)
         if self.stage in ('edges', 'rows'):
             budget = self._scan(db, budget)
             if self.stage == 'walk' and self._generation(db) != self.generation:
@@ -308,35 +325,62 @@ class CustodyScan:
                 self.work = bound - budget
                 return 0
         if self.stage == 'walk':
-            if self.queue is None:
-                self.queue = list(self.found)
-            while budget > 0 and (self.queue or self.at is not None):
-                digest = self.queue.pop() if self.at is None else self.at
+            # S14F-9: consume the custody set itself, a budget at a time (no copy of it)
+            while budget > 0 and (self.found or self.at is not None):
+                digest = self.found.pop() if self.at is None else self.at
                 if digest in self.edges and digest not in self.protected and digest != current_digest:
                     self.protected.add(digest)
                     self.at = self.edges[digest]
                 else:
                     self.at = None
                 budget -= 1
-            if not self.queue and self.at is None:
+            if not self.found and self.at is None:
                 self.stage = 'delete'
         removed = 0
         if self.stage == 'delete' and budget > 0:
-            # _begin checked this pass's clock and the watch; nothing has run on this connection since
-            context = db if transaction is None else transaction()
-            with context:
-                while budget > 0 and self.index < len(self.order):
-                    digest = self.order[self.index]
-                    self.index += 1
-                    budget -= 1
-                    if digest not in self.protected:
-                        removed += db.execute('DELETE FROM runtime_lineage WHERE predecessor_digest=?',
-                                              (digest,)).rowcount
-            if self.index >= len(self.order):
+            removed, budget = self._delete(db, budget, transaction)
+            if removed is None:
+                removed = 0
+                self.reset()
+            elif self.index >= len(self.order):
                 self.cycles += 1
                 self.reset()
         self.work = bound - budget
         return removed
+
+    def _delete(self, db, budget, transaction):
+        """Delete a page of unprotected edges under the write lock; (None, budget) when the cycle is abandoned.
+
+        S14F-8 (r2c): another connection can commit custody between this pass's checks and the write lock (TEMP
+        triggers do not see it). With the lock held no other connection can commit, so the watch, data_version
+        and schema_version are rechecked inside the write transaction, before any delete.
+        """
+        own = transaction is None and not db.in_transaction
+        if own:
+            db.execute('BEGIN IMMEDIATE')
+            context = contextlib.nullcontext()
+        else:
+            context = db if transaction is None else transaction()
+        removed = 0
+        try:
+            with context:
+                if self._generation(db) != self.generation:
+                    removed = None
+                else:
+                    while budget > 0 and self.index < len(self.order):
+                        digest = self.order[self.index]
+                        self.index += 1
+                        budget -= 1
+                        if digest not in self.protected:
+                            removed += db.execute('DELETE FROM runtime_lineage WHERE predecessor_digest=?',
+                                                  (digest,)).rowcount
+            if own:
+                db.commit()
+        except BaseException:
+            if own and db.in_transaction:
+                db.rollback()
+            raise
+        return removed, budget
 
 
 def lineage_status(db):

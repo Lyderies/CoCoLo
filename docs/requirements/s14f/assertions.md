@@ -9,3 +9,8 @@
      (which the old max-rowid check fails).
 2. tests/lifetime_caps.json: entry `runtime_lineage.py::step` renamed to `runtime_lineage.py::_scan` (the counted lines moved
    there; same test) and `runtime_lineage.py::advance` added (S14F-5). Registry text, not a test assertion.
+3. (r2c round) tests/test_s14f_owner_bounds.py helper `must_keep` (added in the r1 round, used by every pruning check): the
+   reference was rewritten from a per-path walk (quadratic on 2,000-key chains, ~20 s) to an independent reachability search
+   (frontier + visited set). Same set by definition (every edge key reachable from custody before the current runtime); no
+   assertion changed. `checked_advance` gained an optional `race` hook; `interleave` now runs on a real file with a second
+   connection (ops 10/11). tests/lifetime_caps.json: `runtime_lineage.py::_drain` added, `advance` text updated.

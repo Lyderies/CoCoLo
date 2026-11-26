@@ -33,8 +33,18 @@
   },
   {
    "id": "S14F-7",
-   "statement": "Under fixed-seed random interleavings of inserts, releases, deletes, delete+reinsert, binding/hold changes, new edges, clock moves and VACUUM between passes, every completed paged answer covers the whole answer and no pruning pass deletes an edge the whole computation protects at that moment; once quiet, the paged prune equals the whole prune.",
+   "statement": "Under fixed-seed random interleavings of inserts, releases, deletes, delete+reinsert, binding/hold changes, new edges, clock moves, VACUUM, other-connection commits and the commit-before-write-lock race between passes, every completed paged answer covers the whole answer and no pruning pass deletes an edge the whole computation protects at that moment; once quiet, the paged prune equals the whole prune.",
    "source": "tests/requirements/s14f.json#S14F-7"
+  },
+  {
+   "id": "S14F-8",
+   "statement": "A pruning pass rechecks the change watch, PRAGMA data_version and main.schema_version inside its write transaction (write lock held) before any delete; custody another connection commits after the pass-start checks abandons that prune and restarts the cycle (two real connections on one file, WAL and rollback journal).",
+   "source": "tests/requirements/s14f.json#S14F-8"
+  },
+  {
+   "id": "S14F-9",
+   "statement": "The completion walk consumes the custody set a budget at a time (no copy of it) and a reset is O(1): the old cycle's containers are handed to a drop list emptied within later passes' budgets, so no pass exceeds CUSTODY_PASS_ROWS units at completion or reset with 2,000 keys.",
+   "source": "tests/requirements/s14f.json#S14F-9"
   },
   {
    "id": "S9-WAIT",

@@ -5560,6 +5560,21 @@
    "codex:tests.test_s14f_owner_bounds.CustodyPropertyTests.test_S14F_7_random_interleavings_never_let_the_paged_answer_fall_short_of_the_whole"
   ],
   "source": "tests/requirements/s14f.json#S14F-7",
-  "statement": "Under fixed-seed random interleavings of inserts, releases, deletes, delete+reinsert, binding/hold changes, new edges, clock moves and VACUUM between passes, every completed paged answer covers the whole answer and no pruning pass deletes an edge the whole computation protects at that moment; once quiet, the paged prune equals the whole prune."
+  "statement": "Under fixed-seed random interleavings of inserts, releases, deletes, delete+reinsert, binding/hold changes, new edges, clock moves, VACUUM, other-connection commits and the commit-before-write-lock race between passes, every completed paged answer covers the whole answer and no pruning pass deletes an edge the whole computation protects at that moment; once quiet, the paged prune equals the whole prune."
+ },
+ "S14F-8": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyRaceAndResetTests.test_S14F_8_another_connection_committing_custody_before_the_write_lock_keeps_the_edge"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-8",
+  "statement": "A pruning pass rechecks the change watch, PRAGMA data_version and main.schema_version inside its write transaction (write lock held) before any delete; custody another connection commits after the pass-start checks abandons that prune and restarts the cycle (two real connections on one file, WAL and rollback journal)."
+ },
+ "S14F-9": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyRaceAndResetTests.test_S14F_9_the_completion_walk_never_copies_the_custody_keys",
+   "codex:tests.test_s14f_owner_bounds.CustodyRaceAndResetTests.test_S14F_9_a_reset_never_discards_cycle_sized_containers_in_one_pass"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-9",
+  "statement": "The completion walk consumes the custody set a budget at a time (no copy of it) and a reset is O(1): the old cycle's containers are handed to a drop list emptied within later passes' budgets, so no pass exceeds CUSTODY_PASS_ROWS units at completion or reset with 2,000 keys."
  }
 }

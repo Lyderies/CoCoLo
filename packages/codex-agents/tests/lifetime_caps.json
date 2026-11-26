@@ -3210,10 +3210,16 @@
    "ends": "S14F-1/-5: a per-pass work budget (CUSTODY_PASS_ROWS units: lineage edges read by key page with LIMIT ?, then rowid windows of already-retained history counted with COUNT), not an admission or lifetime cap. The cycle state is in memory on the store and ends when the cycle completes, its clock goes before the cycle start (S14F-4), the change watch, another connection's commit or a schema change/VACUUM invalidates it (S14F-6), or the store closes; the rows it reads are removed by their own retention. Nothing is refused by it; an unfinished pass resumes on the next sweep.",
    "test": "test_S14F_1_each_pass_visits_at_most_the_bound_and_converges_to_the_exact_custody"
   },
+  "runtime_lineage.py::_drain": {
+   "checks": 0,
+   "kind": "count",
+   "ends": "S14F-9: a reset hands the old cycle's containers (edges, order, custody set, protected set) to the drop list in O(1); each later pass empties at most its remaining budget of items from them, so a 2,000-key reset spreads over passes and the list ends empty. Nothing is refused.",
+   "test": "test_S14F_9_a_reset_never_discards_cycle_sized_containers_in_one_pass"
+  },
   "runtime_lineage.py::advance": {
    "checks": 0,
    "kind": "count",
-   "ends": "S14F-5: the same per-pass budget also covers the protected-path walk (one visited set, linear) and the paged deletions, so one owner pass does at most CUSTODY_PASS_ROWS units in total; the walk queue, visited set and deletion index end with the cycle (reset on completion or invalidation). A 2,000-edge overlapping chain past the budget completes over many passes, each within the budget, and equals the whole-scan prune.",
+   "ends": "S14F-5: the same per-pass budget also covers the protected-path walk (consuming the custody set itself, one visited set, linear) and the paged deletions (rechecked under the write lock, S14F-8), so one owner pass does at most CUSTODY_PASS_ROWS units in total; the walk queue, visited set and deletion index end with the cycle (reset on completion or invalidation). A 2,000-edge overlapping chain past the budget completes over many passes, each within the budget, and equals the whole-scan prune.",
    "test": "test_S14F_5_every_pass_bounds_its_total_work_on_a_long_overlapping_chain"
   }
  }

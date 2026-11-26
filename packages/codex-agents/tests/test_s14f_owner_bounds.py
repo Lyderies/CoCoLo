@@ -1,4 +1,5 @@
 """S14F / S9-WAIT (decision 388): owner-thread maintenance is bounded in work and in waiting."""
+import contextlib
 import sqlite3
 import threading
 import time
@@ -64,21 +65,42 @@ def whole_keys(db, now):
 
 
 def must_keep(db, now, current):
-    """The edges the whole computation protects at `now` (the original per-path walk, independent of the code)."""
+    """The edges the whole computation protects at `now`: every edge key reachable from custody before the current
+    runtime (a reachability search written independently of the code's walk)."""
     edges, keep = edge_map(db), set()
-    for digest in live_ledger_custody(db, now):
-        seen = set()
-        while digest in edges and digest not in seen and digest != current:
-            seen.add(digest)
-            keep.add(digest)
-            digest = edges[digest]
+    frontier = [d for d in live_ledger_custody(db, now) if d in edges and d != current]
+    while frontier:
+        digest = frontier.pop()
+        if digest in keep:
+            continue
+        keep.add(digest)
+        following = edges[digest]
+        if following in edges and following != current:
+            frontier.append(following)
     return keep
 
 
-def checked_advance(test, db, scan, now, current, bound=CUSTODY_PASS_ROWS):
-    """One owner pass that may prune; nothing the whole computation protects at that moment may be deleted."""
+def checked_advance(test, db, scan, now, current, bound=CUSTODY_PASS_ROWS, race=None):
+    """One owner pass that may prune; nothing the whole computation protects at that moment may be deleted.
+
+    `race` (S14F-8) commits from another connection after the pass-start checks, just before the owner takes the
+    write lock, exactly like the r2c interleaving; what the whole computation protects then must survive too.
+    """
     keep, before = must_keep(db, now, current), edge_map(db).keys()
-    removed = scan.advance(db, now, current, bound=bound)
+    transaction = None
+    if race is not None:
+        @contextlib.contextmanager
+        def transaction():
+            race()
+            keep.update(must_keep(db, now, current))
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                yield
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+    removed = scan.advance(db, now, current, bound=bound, transaction=transaction)
     deleted = before - edge_map(db).keys()
     test.assertFalse(deleted & keep, (now, sorted(deleted & keep)))
     test.assertEqual(len(deleted), removed)
@@ -253,6 +275,119 @@ class CustodyWorkTests(unittest.TestCase):
         self.assertEqual(4_000, len(edge_map(db)))
 
 
+def file_copy(test, memory, name):
+    """A real database file (two connections share it, unlike :memory:)."""
+    import os
+    import shutil
+    import tempfile
+    from tests.support import TEMP_ROOT
+    directory = tempfile.mkdtemp(dir=TEMP_ROOT)
+    test.addCleanup(shutil.rmtree, directory, True)
+    path = os.path.join(directory, name)
+    target = sqlite3.connect(path, isolation_level=None)
+    memory.backup(target)
+    target.close()
+    memory.close()
+    return path
+
+
+class CountingSet(set):
+    """Counts the items any full iteration (a copy such as list(s)) walks."""
+    iterated = 0
+
+    def __iter__(self):
+        for item in super().__iter__():
+            CountingSet.iterated += 1
+            yield item
+
+
+class EdgeMap(dict):
+    """A weak-referenceable edge map, to see when the scan lets it go."""
+
+
+class CustodyRaceAndResetTests(unittest.TestCase):
+    @requirements('S14F-8', why_not_scenario=WHY)
+    def test_S14F_8_another_connection_committing_custody_before_the_write_lock_keeps_the_edge(self):
+        a = H(0)
+        for mode in ('wal', 'delete'):
+            memory = one_edge(40)
+            memory.commit()
+            path = file_copy(self, memory, mode + '-race.db')
+            db = sqlite3.connect(path, isolation_level=None)
+            other = sqlite3.connect(path, isolation_level=None)
+            self.addCleanup(db.close)
+            self.addCleanup(other.close)
+            db.execute('PRAGMA journal_mode=' + mode)
+            self.assertNotIn(a, whole_keys(db, NOW))  # no custody: the cycle will want to delete A's edge
+
+            def race():  # r2c: the pass-start checks have passed; now another connection commits a live run of A
+                other.execute('INSERT INTO active_run_capacity VALUES(?,?,?,NULL)', ('p', H(66_666), a))
+
+            raced = []
+
+            def once():  # called by the owner's transaction hook: only the deleting pass reaches it
+                if not raced:
+                    raced.append(True)
+                    race()
+
+            scan = CustodyScan()
+            for _ in range(50):
+                checked_advance(self, db, scan, NOW, CURRENT, bound=30, race=once)
+                if scan.cycles:
+                    break
+            self.assertTrue(raced)
+            self.assertIn(a, edge_map(db))  # kept by the abandoned prune and by the restarted cycle
+            self.assertEqual(1, scan.cycles)
+
+    @requirements('S14F-9', why_not_scenario=WHY)
+    def test_S14F_9_the_completion_walk_never_copies_the_custody_keys(self):
+        db = chain(2_000, live_from=0)  # 2,000 custody keys, every one an edge key
+        scan = CustodyScan()
+        while scan.stage in ('edges', 'rows'):
+            checked_advance(self, db, scan, NOW, CURRENT)
+            if scan.stage == 'rows' and not isinstance(scan.found, CountingSet):
+                scan.found = CountingSet(scan.found)  # instrument before history completes
+        self.assertIsInstance(scan.found, CountingSet)
+        cycle_sized = {'edges', 'order', 'found', 'protected', 'drop'}  # held across passes, drained within budgets
+        while scan.cycles == 0:
+            CountingSet.iterated = 0
+            before = len(scan.found)
+            checked_advance(self, db, scan, NOW, CURRENT)
+            self.assertLessEqual(CountingSet.iterated + scan.work, CUSTODY_PASS_ROWS, CountingSet.iterated)
+            if scan.found is not None and scan.cycles == 0:
+                self.assertLessEqual(before - len(scan.found), CUSTODY_PASS_ROWS)
+            copies = {name: len(value) for name, value in vars(scan).items()
+                      if name not in cycle_sized and isinstance(value, (list, set, dict, tuple))
+                      and len(value) > CUSTODY_PASS_ROWS}
+            self.assertEqual({}, copies)  # no per-pass copy of the custody keys (r2c: list(self.found))
+        self.assertEqual(2_000, len(edge_map(db)))
+
+    @requirements('S14F-9', why_not_scenario=WHY)
+    def test_S14F_9_a_reset_never_discards_cycle_sized_containers_in_one_pass(self):
+        import weakref
+        for how in ('invalidated', 'completed'):
+            db = chain(2_000, live_from=0)
+            scan = CustodyScan()
+            while scan.stage in ('edges', 'rows'):
+                checked_advance(self, db, scan, NOW, CURRENT)
+            scan.edges = EdgeMap(scan.edges)  # a cycle-sized container (2,000 edges)
+            old = weakref.ref(scan.edges)
+            self.assertEqual(2_000, len(old()))
+            if how == 'invalidated':
+                db.execute('INSERT INTO runtime_lineage VALUES(?,?)', (H(70_000), H(70_001)))  # watch fires
+            else:
+                while scan.cycles == 0:
+                    checked_advance(self, db, scan, NOW, CURRENT)
+            sizes = []
+            for _ in range(40):  # the old container drains at most a budget's worth per pass
+                checked_advance(self, db, scan, NOW, CURRENT)
+                sizes.append(len(old()) if old() is not None else 0)
+                if not sizes[-1]:
+                    break
+            self.assertGreater(sizes[0], 0, how)  # not dropped wholesale in the resetting pass
+            self.assertEqual(0, sizes[-1], how)  # but drained in the end
+
+
 class CustodyInvalidationTests(unittest.TestCase):
     def remaining_bound(self, db, used):
         return 3 + 2 * db.execute('SELECT COUNT(*) FROM active_run_capacity').fetchone()[0] - used
@@ -325,12 +460,27 @@ class CustodyPropertyTests(unittest.TestCase):
     def interleave(self, seed, paged_prune):
         import random
         rng = random.Random(seed)
-        db = history(0, edges=1)
-        db.execute('DELETE FROM runtime_lineage')
+        memory = history(0, edges=1)
+        memory.execute('DELETE FROM runtime_lineage')
+        memory.commit()
+        path = file_copy(self, memory, f'interleave-{seed}-{paged_prune}.db')
+        db = sqlite3.connect(path, isolation_level=None)
+        other = sqlite3.connect(path, isolation_level=None)  # S14F-8: a second real connection on the same file
+        self.addCleanup(db.close)
+        self.addCleanup(other.close)
+        db.execute('PRAGMA journal_mode=WAL')  # as the ledger; no fsync (test speed only)
+        for connection in (db, other):
+            connection.execute('PRAGMA synchronous=OFF')
         digests = [H(500 + n) for n in range(8)]
         for n in range(5):
             db.execute('INSERT INTO runtime_lineage VALUES(?,?)', (digests[n], digests[n + 1]))
-        clock, serial, scan = NOW, 0, CustodyScan()
+        clock, serial, scan, race = NOW, 0, CustodyScan(), None
+
+        def other_commit():
+            nonlocal serial
+            serial += 1
+            other.execute('INSERT INTO active_run_capacity VALUES(?,?,?,NULL)',
+                          ('p', H(80_000 + serial), rng.choice(digests)))
 
         def near():
             return clock - RET + rng.randint(-6, 6)
@@ -338,7 +488,7 @@ class CustodyPropertyTests(unittest.TestCase):
         for _ in range(250):
             for _ in range(rng.randint(0, 3)):
                 serial += 1
-                op = rng.randrange(10)
+                op = rng.randrange(12)
                 digest = rng.choice(digests + [CURRENT])
                 if op == 0:
                     db.execute('INSERT INTO active_run_capacity VALUES(?,?,?,?)',
@@ -372,11 +522,15 @@ class CustodyPropertyTests(unittest.TestCase):
                 elif op == 8:
                     clock += rng.randint(-5, 5)
                 elif op == 9 and rng.random() < .2:
-                    db.commit()
                     db.execute('VACUUM')
+                elif op == 10:
+                    other_commit()  # between passes
+                elif op == 11:
+                    race = other_commit  # inside the next pass, after its checks, before its write lock
             bound = rng.randint(1, 12)
             if paged_prune:
-                checked_advance(self, db, scan, clock, CURRENT, bound)
+                checked_advance(self, db, scan, clock, CURRENT, bound, race=race)
+                race = None
             else:
                 answer = scan.step(db, clock, bound)
                 if answer is not None:
