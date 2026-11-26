@@ -137,7 +137,7 @@ class LostRunAfterCrashTests(LostRunHarness):
                   'bundle': str(self.bundle)}
         log = open(base / 'crash-host.log', 'ab')
         self.addCleanup(log.close)
-        self.host_process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.dispatch_pycache, str(FIXTURE), json.dumps(config)],
+        self.host_process = subprocess.Popen([sys.executable, *(['-B'] if self.dispatch_pycache is None else ['-X', 'pycache_prefix=' + self.dispatch_pycache]), str(FIXTURE), json.dumps(config)],
                                              cwd=REPOSITORY_ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
         process = self.host_process
         self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait(10)))

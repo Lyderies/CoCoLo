@@ -63,3 +63,18 @@ All other units passed. Budget debt lines were the usual ones; four units are no
 test_container_stop, test_result_lifetime, test_session_guard).
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+## Follow-up: S8 guards made precise, S13c harness fallback
+
+Both S8 guards compared against base ce81bd96 and only made sense inside S8's own branch. Replaced in `packages/codex-agents/tests/test_health_holds.py`:
+
+| Test | Old | New | Reason |
+|------|-----|-----|--------|
+| test_registration_does_not_edit_primary_owned_files_or_builtin_api | learning_store.py and health_monitor.py byte-identical to ce81bd96 | learning_store.py source must not mention `health_holds` or `HoldsCheck` (no registration or import of the S8 holds check yet; the primary wires it after S5) | S14a and others legitimately edit learning_store.py |
+| test_unrelated_lifetime_caps_bytes_are_preserved | lifetime_caps.json keeps base bytes as a prefix | every `sites` entry present at ce81bd96 is still present with an unchanged value (parsed JSON, superset check, new entries allowed) | S11, S12, S14a add entries in sorted positions. Exception: S14a (335) deliberately re-audited `account_service.py::_capture_admission_rows_locked` and `admission_input_decode.py::_preflight` (checks 5 -> 6, new ends text), so those two are checked for presence only |
+
+Mutations (each reverted): a fake `from .health_holds import HoldsCheck` line in learning_store.py turns the first red; altering a base cap entry's `checks`, or deleting a base entry, turns the second red.
+
+S13c: `packages/codex-agents/tests/test_lost_run_settlement.py` (test harness code, not product) `start_host_process` now uses `['-B']` when `dispatch_pycache` is None, else `-X pycache_prefix=...` (same fallback as `tests/test_project_driver.py` line 151).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
