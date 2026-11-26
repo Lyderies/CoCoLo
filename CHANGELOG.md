@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.74: custody scan and next hold due use the live hold index (S14i, S14g-4), and the account hold status profile is linear in held rows only (S14h); builds 0.8.73 and older refuse a store this build wrote (decisions 399, 400).
+
 - Package 0.8.73: hold queries use the full key (S14g), the test metadata generator is deterministic, and the preparation test follows the single folders finding (IP-G; decisions 395, 396); builds 0.8.72 and older refuse a store this build wrote.
 
 - Package 0.8.72: owner-bound limits on the scan, advance and drain paths (S14f) and tighter test budgets for project start and run retention (S13g); builds 0.8.71 and older refuse a store this build wrote (IP-F; decisions 391, 392).
