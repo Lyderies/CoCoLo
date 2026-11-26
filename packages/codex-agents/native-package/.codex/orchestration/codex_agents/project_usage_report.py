@@ -13,8 +13,10 @@ terminal time of its attempt), once, in whichever store holds it.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import stat
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -181,8 +183,15 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
     if (type(since_ms) is not int or type(until_ms) is not int or not 0 <= since_ms < until_ms
             or until_ms - since_ms > MAX_WINDOW_MS or type(limit) is not int or not 1 <= limit <= MAX_ROWS):
         raise UsageReportError("usage_window_invalid")
+    # S44a: the root the owner types is `.`, which the report took for "not absolute" and called a state problem
+    # (learning-status resolves it first). A relative root is read from the folder the command runs in; every
+    # check on the path stays, and a root that fails one is named as the project root, not as the state.
     try:
-        root = _canonical_project_root(Path(project_root))
+        path = Path(project_root)
+        root = _canonical_project_root(path if path.is_absolute() else Path(os.getcwd()) / path)
+    except (StateError, OSError):
+        raise UsageReportError("usage_project_root_invalid") from None
+    try:
         key = state.digest_key()
     except (StateError, OSError):
         raise UsageReportError("usage_state_unavailable") from None
@@ -190,6 +199,7 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
     sources = {}
     gathered = {}
     cut = False
+    recorded = []  # each store's (first, last) time of any run it holds for the project
     for name, path in (("project_store", state.root / "projects" / project_id / "history.sqlite3"),
                        ("ledger", state.root / "learning.sqlite3")):
         connection = _readonly(path)
@@ -198,6 +208,7 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
             continue
         try:
             rows, more = _rows(connection, project_id, since_ms, until_ms, limit)
+            recorded.append(_recorded_span(connection, project_id))
         except sqlite3.Error:
             raise UsageReportError("usage_store_unavailable") from None
         finally:
@@ -243,8 +254,84 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
     return {
         "window": {"since_ms": since_ms, "until_ms": until_ms, "since": _iso(since_ms), "until": _iso(until_ms)},
         "row_limit": limit, "truncated": cut, "sources": sources,
+        "window_data": _window_data(runs, recorded, since_ms, until_ms),
+        "usage_coverage": _coverage(runs),
         "models": [models[key_] for key_ in sorted(models)], "runs": runs,
     }
+
+
+def _recorded_span(connection, project_id):
+    """(first, last) time any run of the project was recorded in this store, or (None, None)."""
+    # A run is counted at its usage record's time; only a project with none (an earlier version's runs) is read by
+    # its outcomes' times.
+    for kind, source in (("record_type IN (?,?)", "provider"), ("record_type=?", "host")):
+        names = _USAGE_TYPES if source == "provider" else ("outcome",)
+        first, last = connection.execute(
+            f"SELECT MIN(observed_at_ms),MAX(observed_at_ms) FROM records WHERE project_id=? AND {kind} AND source=?",
+            (project_id, *names, source)).fetchone()
+        if type(first) is int and type(last) is int:
+            return first, last
+    return None, None
+
+
+def _window_data(runs, recorded, since_ms, until_ms):
+    """Whether the window holds usage data, and if not why, in plain words (S44a-3)."""
+    firsts = [first for first, _ in recorded if first is not None]
+    lasts = [last for _, last in recorded if last is not None]
+    first, last = (min(firsts), max(lasts)) if firsts else (None, None)
+    data = {"first_run_recorded": None if first is None else _iso(first),
+            "last_run_recorded": None if last is None else _iso(last), "runs_without_usage": 0}
+    if runs:
+        data.update(state="has_runs", runs_without_usage=sum(1 for run in runs if not run["usage_complete"]))
+        data["note"] = ("Runs without complete usage are listed with their tokens left empty, never as zero."
+                        if data["runs_without_usage"] else "Every run in this window has complete usage.")
+    elif first is None:
+        data.update(state="nothing_recorded", note="No run has any usage or outcome recorded for this project, so "
+                    "there is no usage data for any window.")
+    elif until_ms <= first:
+        data.update(state="before_usage_recorded", note=f"This window ends before the first run was recorded "
+                    f"({_iso(first)}); usage was not recorded then, so there is no usage data for it.")
+    else:
+        data.update(state="no_runs_in_window", note=f"No run was recorded in this window; there is no usage data "
+                    f"for it. Runs were recorded from {_iso(first)} to {_iso(last)}.")
+    return data
+
+
+PRIMARY_SESSION_NOTE = (
+    "The primary session's own tokens are not given to CoCoLo: the Codex hooks carry no token counts, which is why "
+    "learning-status shows ingestion.coverage root_usage and child_usage as false (that describes hook events, not "
+    "the runs). Only each child's own tokens are recorded.")
+
+
+def _coverage(runs):
+    """Per provider, whether the window's child runs reported their usage: reported, partial, not_reported, no_runs."""
+    children = {}
+    for provider in ("codex", "claude"):
+        mine = [run for run in runs if run["provider"] == provider]
+        complete = sum(1 for run in mine if run["usage_complete"])
+        state = ("no_runs" if not mine else "reported" if complete == len(mine)
+                 else "not_reported" if complete == 0 else "partial")
+        children[provider] = {"state": state, "runs": len(mine), "runs_with_complete_usage": complete}
+    return {"child_runs": children,
+            "primary_session": {"state": "not_reported", "note": PRIMARY_SESSION_NOTE}}
+
+
+STATUS_USAGE_DAYS = 7
+
+
+def status_run_usage(state, project_root):
+    """What learning-status shows beside the hook coverage flags: the last days' child runs, per provider.
+
+    None when the project's runs cannot be read (not registered, state unreadable): unknown is never shown as zero.
+    """
+    now = int(time.time() * 1000)
+    try:
+        report = usage_report(state, project_root, now - STATUS_USAGE_DAYS * 24 * 3_600_000, now + 1, MAX_ROWS)
+    except UsageReportError:
+        return None
+    return {"window_days": STATUS_USAGE_DAYS, "truncated": report["truncated"], **report["usage_coverage"],
+            "note": f"Each child run's tokens are recorded from the child's own output and listed by "
+                    f"learning-usage-report. {PRIMARY_SESSION_NOTE}"}
 
 
 def _iso(milliseconds: int) -> str:

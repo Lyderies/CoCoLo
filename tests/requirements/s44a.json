@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/s44a.md",
+ "requirements": [
+  {
+   "id": "S44A-1",
+   "statement": "On an installed copy, learning-usage-report run inside the project with `--project-root .` and no `--state-root` opens the same default state that learning-status opens, with every state, key and path check unchanged, and reports the runs; a project root that fails a check is refused as `usage_project_root_invalid`, a state or key that fails one as `usage_state_unavailable`, each with its plain next step.",
+   "source": "tests/requirements/s44a.json#S44A-1"
+  },
+  {
+   "id": "S44A-2",
+   "statement": "Each child run's own token counts, for both providers (Claude and Codex), are recorded and appear in the usage report with their provider and completeness; a provider that gave no counts is shown `not_reported` and never as zero; the report and learning-status say which providers reported (`usage_coverage`, `run_usage`) and that the primary session's own tokens are not reported, instead of leaving the hook flags root_usage and child_usage to be read as run coverage.",
+   "source": "tests/requirements/s44a.json#S44A-2"
+  },
+  {
+   "id": "S44A-3",
+   "statement": "A usage report says plainly when its window holds no usage data: nothing recorded at all, a window before the first run was recorded, or a window between recorded runs, naming the first and last recorded times; and when runs lack complete usage it says so and leaves their tokens empty.",
+   "source": "tests/requirements/s44a.json#S44A-3"
+  }
+ ]
+}

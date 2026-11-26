@@ -1214,6 +1214,13 @@ identity check; feedback alone carries its own authority, the owner's signature.
   effort, role and status; a run with no usage record (an earlier version's native child) is counted by its
   outcome. Run ids are `external_id(digest key, "run", run id)`. At most `--limit` runs (default 500, at most
   2,000) and a window of at most 366 days; a larger window is cut and says `truncated`.
+  S44a: a relative project root (`.`) is read from the folder the command runs in, every path check unchanged; a root that
+  fails a check is refused `usage_project_root_invalid`, a state or key that fails one `usage_state_unavailable`. The reply
+  also carries `window_data` (`has_runs`, `no_runs_in_window`, `before_usage_recorded` or `nothing_recorded`, with the first and
+  last recorded times and a plain note) and `usage_coverage` (per provider `reported`, `partial`, `not_reported` or `no_runs`;
+  the primary session's own tokens are always `not_reported`). `learning-status` adds `run_usage` (the same coverage for the last
+  7 days, read only, null when unreadable). `ingestion.coverage.root_usage` and `child_usage` stay false: they describe the Codex
+  hook surface, which carries no token counts, not the runs.
 - `learning-expire` still applies the ledger's retention to the ledger. Separately, the
   collector's `sweep_event_retention` runs every `WORKER_RESULT_SWEEP_SECONDS`: up to
   `EVENT_SWEEP_BATCH` (500) expired hook and app-server events that no record link

@@ -122,7 +122,7 @@ from codex_agents.learning_engine import (  # noqa: E402
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient  # noqa: E402
 from codex_agents.collector_paths import UNMOVED_STATE, CollectorPaths  # noqa: E402
 from codex_agents.project_usage_report import DEFAULT_ROWS as USAGE_REPORT_ROWS  # noqa: E402
-from codex_agents.project_usage_report import UsageReportError, usage_report  # noqa: E402
+from codex_agents.project_usage_report import UsageReportError, status_run_usage, usage_report  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
@@ -2919,6 +2919,11 @@ def main() -> int:
             holds = holds_report_client(args.state_root, args.project_root, host_client=label)
             for name in ('project_holds', 'result_custody', 'result_retirement_repairs', 'recovery_pending'):
                 report[name] = None if holds is None else holds[name]
+            # S44a: where each provider's per-run usage is (read only; None when it cannot be read).
+            try:
+                report['run_usage'] = status_run_usage(CollectorPaths(args.state_root), args.project_root)
+            except (StateError, OSError):
+                report['run_usage'] = None
             if holds is not None and holds['recovery_pending']['stale']:
                 report['recovery_pending_notice'] = 'Recovery was not checked recently.'
             # T7 S2 (L14.1): orchestrations live in the project's own store, so its service's count replaces the
