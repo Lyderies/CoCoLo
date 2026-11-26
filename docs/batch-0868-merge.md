@@ -97,3 +97,18 @@ Merged with `git merge --no-ff` from the local worktree branches (shared object 
 - Not run (heavy, left to the batch run): test_project_driver, test_project_start, test_project_service_startup, test_lost_run_settlement, test_account_lane_restart and other socket modules S14b touched; test_runtime_release (digest, expected).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+## IP-B part 2: S5 (351), STATUS fix, S14b-6 wiring (349)
+
+### S5 (decision 351) - commit 691dd511 (merged d1d3671f)
+- Conflicts: the four scripts/test-*.json files and packages/codex-agents/tests/lifetime_caps.json (parsed-JSON three-way union, nothing dropped, no value conflicts); runtime_files.py (both new files kept: update_takeover.py and user_settings.py, sorted); project_history.py (purge list keeps S44a's history-index rebuild step AND S5's `_purge_takeover`); service_host.py (OWNER_HISTORY_OPERATIONS and the owner-read dispatch set now carry both `history.run_usage` and `history.takeover_report`; `service.stop_for_update` came in from S5 unconflicted); tests/test_b2_service_outcome.py (the pinned op set is the union of S44a's `history.run_usage` and S5's `history.takeover_report`, `service.stop_for_update`); tests/test_holds_report_socket.py (learning-status request order is now holds_report, run_usage, takeover_report, the order cli.py asks them).
+- Modules (before commit): test_b2_service_outcome, test_holds_report_socket, test_b7b_terminal, test_account_host, test_admission_inputs, test_signature_inputs, test_signature_job_intake, test_lifetime_cap_guard, test_reply_shape_compatibility, test_refusal_steps, test_contracts, test_s44a_usage_install, test_b4t_takeover, test_upgrade_handover, test_history_service_upgrade (428 tests, 32.8 s, 0 failed).
+
+### S5 STATUS.md fix
+docs/requirements/b4t/STATUS.md: the open AP3 note replaced by the decision 348 resolution (eddd2d00) and a pointer to evidence/regression-fix/affected.txt.
+
+### S14b-6 wiring (decision 349) - commit 60a4857d
+See docs/requirements/s14b/STATUS.md "S14b-6". Requirement id S14b-6 (S14b-5 was taken). Red -> green: only the takeover adoption test was red (5 != 0); the cli upgrade test, the running-collector test and the plain-open check were already green on the merged tree because S14b's regression fix already created the indexes in cli --upgrade-ledger. Code: `takeover_owner.adopt_ledger` calls `create_retention_indexes()`. Registration with a running collector cannot create indexes (a running collector refuses it); it relies on the consented step that made the ledger current.
+- Modules (named list from the brief plus test_learning_cli and the op-set pin modules): 37 units, 567 tests, 123.9 s, 0 failed, metadata_errors empty, requirement_failures empty. No --affected/full run, no VERSION bump.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
