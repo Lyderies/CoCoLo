@@ -2,10 +2,13 @@
 """Synthetic LOCKHOLD VM/row measurements, outside the fast suite.
 
 Run from the repository root with the test Python:
-  python -B scripts/measure_lockhold.py --out docs/requirements/lockhold/measurement.json
+  $PY -B scripts/run_measurement.py scripts/measure_lockhold.py -- --out docs/requirements/lockhold/measurement.json
 No live ledger, service or provider is contacted; owner keys are temporary fixtures.
 """
 from __future__ import annotations
+
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # 100,000-event synthetic ledgers
 
 import argparse
 import json

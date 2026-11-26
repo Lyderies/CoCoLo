@@ -361,6 +361,86 @@ class ConfirmFixSweepTests(unittest.TestCase):
         self.assertEqual([first, second], calls)
         self.assertEqual({'released'}, {state for _, state in lost.values()})
 
+    def stopped_run(self):
+        """A run of an earlier, stopped service instance, ready to settle (its process is not watched any more)."""
+        from codex_agents.launch_journal import LaunchJournal
+        from tests.test_launch_journal import claimed
+        earlier = LaunchJournal(self.base / 'launches-earlier')
+        claimed(earlier, 'brg_' + '7' * 32)
+        earlier.release()
+        self.journal.release()
+        self.addCleanup(lambda: None)
+        journal = LaunchJournal(self.base / 'launches-earlier')
+        self.addCleanup(journal.release)
+        self.driver._journal = journal
+        self.driver._unverified_settlements = frozenset()
+        self.driver._remove_workspace = lambda workspace: True
+        return journal, journal.entries()[0]
+
+    @requirements('UH-3')
+    def test_UH_a_run_whose_hold_the_takeover_left_unverified_is_not_settled_again_by_this_service(self):
+        """UH-3: the first history_conflict asks the writer whether the hold is an unverified takeover hold; when it is,
+        the run is remembered and no later sweep sends its settlement again (no release, no account change)."""
+        journal, entry = self.stopped_run()
+        attempts, asked = [], []
+
+        def settle(item):
+            attempts.append(item['bridge_run_id'])
+            raise project_driver.HistoryError('history_conflict')
+        self.driver._settle_entry = settle
+        self.driver._settlement_step = lambda operation, *arguments, **options: (
+            asked.append((operation, arguments)), True)[1]
+        for _ in range(5):
+            lost = self.driver._settle_lost(False)
+        self.assertEqual(1, len(attempts))
+        self.assertEqual([('takeover_unverified', (entry['run_handle'], entry['attempt'], entry['bridge_run_id']))], asked)
+        self.assertEqual('held', lost[entry['run_handle']][1])
+        self.assertNotEqual('settled', journal.entry(entry['bridge_run_id'])['state'])
+
+    @requirements('UH-5')
+    def test_UH_a_conflict_that_is_not_an_unverified_takeover_hold_is_still_retried(self):
+        journal, entry = self.stopped_run()
+        attempts = []
+
+        def settle(item):
+            attempts.append(1)
+            raise project_driver.HistoryError('history_conflict')
+        self.driver._settle_entry = settle
+        self.driver._settlement_step = lambda operation, *arguments, **options: False
+        for _ in range(3):
+            self.driver._settle_lost(False)
+        self.assertEqual(3, len(attempts))
+
+    @requirements('UH-3')
+    def test_UH_3_what_this_service_remembers_of_unverified_runs_is_capped(self):
+        """Review r1 MED (decision 367): the durable marker is the authority; the service keeps at most a capped
+        memory of runs it learnt are unverified, however many stopped runs conflict."""
+        from codex_agents.launch_journal import LaunchJournal
+        from tests.test_launch_journal import claimed
+        earlier = LaunchJournal(self.base / 'launches-earlier')
+        runs = ['brg_' + f'{n:032x}' for n in range(1, 11)]
+        for bridge in runs:
+            claimed(earlier, bridge)
+        earlier.release()
+        self.journal.release()
+        journal = LaunchJournal(self.base / 'launches-earlier')
+        self.addCleanup(journal.release)
+        self.driver._journal = journal
+        self.driver._remove_workspace = lambda workspace: True
+
+        def settle(item):
+            raise project_driver.HistoryError('history_conflict')
+        self.driver._settle_entry = settle
+        self.driver._settlement_step = lambda operation, *arguments, **options: True
+        with mock.patch.object(project_driver, 'MAX_UNVERIFIED_KNOWN', 4, create=True):
+            for _ in range(3):
+                self.driver._settle_lost(False)
+        remembered = [value for value in vars(self.driver).values()
+                      if isinstance(value, (set, frozenset, tuple, list, dict))
+                      and any(isinstance(item, str) and item in runs for item in value)]
+        self.assertTrue(remembered)
+        self.assertLessEqual(max(len(value) for value in remembered), 4)
+
     def scratch(self):
         from codex_agents import bridge
         patcher = mock.patch.object(bridge, 'WORKSPACE_PARENT', str(self.base / 'scratch'))

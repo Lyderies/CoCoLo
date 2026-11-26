@@ -3321,6 +3321,14 @@ class ProjectHistory:
         return {"state": "releasing", "request_id": request_id, "request_digest": digest}
 
     @_operation
+    def takeover_unverified(self, run_handle: str, attempt: int, bridge_run_id: str) -> bool:
+        """UH-3 (decision 366): is a hold of this lost run one the update takeover left unverified? Reads only."""
+        from .project_takeover import takeover_left_unverified
+        if type(run_handle) is not str or not valid_integer(attempt, minimum=1) or type(bridge_run_id) is not str:
+            raise HistoryError("history_invalid_input")
+        return takeover_left_unverified(self._connection, self.project_id, run_handle, attempt, bridge_run_id)
+
+    @_operation
     def record_account_settlement(self, lease_binding: ResultLeaseBinding, raw: bytes) -> dict:
         """RS-B-B4-3: record the account's verified closure of this lost attempt, in one writer transaction: the
         settlement row; a `claim_pending` lease expired and its hold released `lost_unbound`; a `reserved` reservation

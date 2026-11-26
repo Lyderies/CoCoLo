@@ -2,10 +2,13 @@
 """S13 budget measurements: RS-B B1 (writer work of a normal run) and B6 (recurring arrivals), RS-10 (1,000 due holds).
 
 Real product operations on disposable stores; no persistence at import time. The suite calls these at the
-default scale; run this file directly for the 100,000-tombstone numbers:
+default scale; run it through the runner for the 100,000-tombstone numbers:
 
-    python -B scripts/measure_s13.py [--tombstones 100000]
+    $PY -B scripts/run_measurement.py packages/codex-agents/scripts/measure_s13.py -- [--tombstones 100000]
 """
+
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # 100,000 tombstones, three repeats
 import argparse
 import contextlib
 import json

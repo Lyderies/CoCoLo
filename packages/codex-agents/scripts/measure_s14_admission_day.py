@@ -4,7 +4,7 @@
 Run from packages/codex-agents with the test interpreter and PYTHONPATH including the repository's scripts
 directory (the test framework lives there):
 
-    PYTHONPATH=../../scripts $PY -B scripts/measure_s14_admission_day.py [--output FILE]
+    PYTHONPATH=../../scripts $PY -B scripts/run_measurement.py packages/codex-agents/scripts/measure_s14_admission_day.py -- [--output FILE]
 
 For each envelope it builds a synthetic ledger (the admission tests' fixture), places the day's records, drives
 the real `SignatureJobIntake.capture_admission` (the job an open or claim runs) and reads the rows and bytes it
@@ -44,6 +44,9 @@ attestations (ASSUMPTION). Each project's billing attestations are read at every
     provider account over 3 years.
 """
 from __future__ import annotations
+
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}
 
 import argparse
 import hashlib

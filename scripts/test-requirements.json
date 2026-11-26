@@ -3789,6 +3789,62 @@
   "source": "tests/requirements/u3.json#U3",
   "statement": "Budgeted account and project reads have indexed or otherwise bounded work, unchanged answers and production-budget completion with a fixed live set at 1k and 100k historical rows."
  },
+ "UH-1": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_6_the_unverified_fact_written_at_adoption_survives_completion_maintenance_restart_and_a_copy",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_a_hold_the_takeover_left_unverified_is_its_own_plain_finding_not_overdue"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-1",
+  "statement": "A project hold the update takeover recorded as unverified at adoption (a releasing lease/reservation hold whose takeover_obligations row carries the unverified marker) is not reported as hold_overdue."
+ },
+ "UH-2": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_6_the_unverified_fact_written_at_adoption_survives_completion_maintenance_restart_and_a_copy",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_a_hold_the_takeover_left_unverified_is_its_own_plain_finding_not_overdue"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-2",
+  "statement": "Such a hold is reported as its own plain finding, hold_unverified_takeover, once per project, saying it is harmless, takes no run slot, will not clear by itself and needs nothing."
+ },
+ "UH-3": {
+  "checks": [
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_UH_3_what_this_service_remembers_of_unverified_runs_is_capped",
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_UH_a_run_whose_hold_the_takeover_left_unverified_is_not_settled_again_by_this_service",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_the_writer_says_which_runs_the_takeover_left_unverified",
+   "codex:tests.test_container_recovery.UnverifiedTakeoverRecoveryTests.test_UH_3_container_recovery_stops_settling_a_run_the_takeover_left_unverified"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-3",
+  "statement": "The driver stops retrying settlement of a run the store records as left unverified by the takeover, on the lost-run sweep and the container recovery path: learnt from the durable record after a history_conflict (also after a restart), kept in a capped memory, with no release or account change; a conflict for any other run is still retried."
+ },
+ "UH-4": {
+  "checks": [
+   "codex:tests.test_health_holds.UnverifiedDocsTests.test_UH_troubleshooting_explains_the_unverified_update_hold"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-4",
+  "statement": "docs/troubleshooting.md Update hand-over explains in plain words the run an update left counted because its records could not be checked."
+ },
+ "UH-5": {
+  "checks": [
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_UH_a_conflict_that_is_not_an_unverified_takeover_hold_is_still_retried",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_a_verified_takeover_hold_that_is_overdue_is_still_reported_overdue",
+   "codex:tests.test_b4t_takeover.StoreTests.test_UH_5_a_run_still_held_at_adoption_that_later_goes_releasing_is_not_taken_for_unverified"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-5",
+  "statement": "Verified takeover rows, a run still held at adoption that later goes releasing, and genuinely overdue holds behave exactly as before (never taken for unverified)."
+ },
+ "UH-6": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_6_the_unverified_fact_written_at_adoption_survives_completion_maintenance_restart_and_a_copy"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-6",
+  "statement": "The takeover records each releasing hold it refuses as unverifiable as a durable fact in the same adoption transaction (an additive takeover_obligations row, no schema change); the fact survives journal completion, maintenance, restarts and copies of the store, and is kept and pruned under the A1 obligation retention."
+ },
+ "UH-7": {
+  "checks": [
+   "codex:tests.test_health_holds.UnverifiedHoldWorkTests.test_UH_7_the_unverified_finding_work_does_not_grow_with_released_history"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-7",
+  "statement": "The unverified-hold health finding reads live holds only through the live partial index: its work does not grow with released history (1k vs 100k released rows) and it completes within the health deadline."
+ },
  "USAGE-RECHECK-1": {
   "checks": [
    "codex:tests.test_usage_recheck.RecheckDueTests.test_a_far_reset_exhaustion_is_due_for_a_recheck_after_the_interval",
@@ -4727,6 +4783,7 @@
    "codex:tests.test_b4t_takeover.CollectorStopTests.test_pre_identity_collectors_receive_only_the_verified_predecessors_bare_shape",
    "codex:tests.test_b4t_takeover.CollectorStopTests.test_wrong_identity_sends_nothing_and_the_stop_past_thirty_seconds_is_resumable",
    "codex:tests.test_b4t_takeover.FloorTests.test_a_B4t_build_below_the_floor_cannot_advance_either_epoch",
+   "codex:tests.test_b4t_takeover.FloorTests.test_a_store_written_by_this_build_refuses_0868_and_0869",
    "codex:tests.test_b4t_takeover.FloorTests.test_archived_0866_and_0832_cannot_reopen_either_published_store",
    "codex:tests.test_b4t_takeover.FloorTests.test_current_ledger_open_keeps_the_predecessors_capacity_coverage_refusal",
    "codex:tests.test_b4t_takeover.JournalTests.test_B4t_security_takeover_has_no_writer_of_its_own",
@@ -4869,6 +4926,7 @@
    "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_two_archived_outboxes_survive_A_B_C_with_one_effect_and_immutable_originals",
    "codex:tests.test_b4t_takeover.CollectorStopTests.test_wrong_identity_sends_nothing_and_the_stop_past_thirty_seconds_is_resumable",
    "codex:tests.test_b4t_takeover.FloorTests.test_a_B4t_build_below_the_floor_cannot_advance_either_epoch",
+   "codex:tests.test_b4t_takeover.FloorTests.test_a_store_written_by_this_build_refuses_0868_and_0869",
    "codex:tests.test_b4t_takeover.FloorTests.test_current_ledger_open_keeps_the_predecessors_capacity_coverage_refusal",
    "codex:tests.test_b4t_takeover.JournalTests.test_B4t_0_every_write_free_refusal_still_writes_nothing",
    "codex:tests.test_b4t_takeover.JournalTests.test_B4t_security_takeover_has_no_writer_of_its_own",
@@ -5168,5 +5226,67 @@
   ],
   "source": "tests/requirements/s10.json#S10-HM6-8",
   "statement": "Low or unreadable disks are reported to the user as plain health findings; no import-time I/O."
+ },
+ "S14D-1": {
+  "checks": [
+   "root:test_run_measurement.RunnerCapTests.test_a_script_declares_its_own_budget_and_the_cap_still_applies",
+   "root:test_run_measurement.RunnerCapTests.test_data_cap_kills_and_deletes_the_data",
+   "root:test_run_measurement.RunnerCapTests.test_memory_cap_kills_and_says_plainly",
+   "root:test_run_measurement.RunnerCapTests.test_the_script_is_not_imported_or_executed_to_read_its_budget",
+   "root:test_run_measurement.RunnerCapTests.test_the_whole_process_group_is_killed_and_nothing_else",
+   "root:test_run_measurement.RunnerCapTests.test_wall_clock_cap_kills_and_says_plainly",
+   "root:test_run_measurement.RunnerCapTests.test_wall_clock_hard_maximum_needs_a_decision_number",
+   "root:test_run_measurement.RunnerReviewTests.test_a_ps_failure_is_an_error_not_zero_memory",
+   "root:test_run_measurement.RunnerReviewTests.test_a_setsid_grandchild_is_found_killed_after_the_child_exits",
+   "root:test_run_measurement.RunnerReviewTests.test_a_setsid_grandchild_is_killed_on_a_breach",
+   "root:test_run_measurement.RunnerReviewTests.test_a_short_memory_spike_is_a_breach_after_exit",
+   "root:test_run_measurement.RunnerReviewTests.test_data_written_and_gone_between_polls_is_still_a_breach",
+   "root:test_run_measurement.RunnerReviewTests.test_data_written_outside_the_data_dir_is_a_volume_breach",
+   "root:test_run_measurement.RunnerReviewTests.test_hard_maxima_and_odd_numbers",
+   "root:test_run_measurement.RunnerReviewTests.test_the_directory_walk_is_bounded",
+   "root:test_run_measurement.RunnerReviewTests.test_the_directory_walk_is_bounded_for_empty_directories_too"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-1",
+  "statement": "scripts/run_measurement.py runs one measurement script as a child with enforced caps (wall clock default 300 s, declared override, hard maximum 900 s without --approve-decision N; generated data under its own output dir, default 1 GiB; peak RSS default 3 GiB); on a breach it kills only the process group it started, deletes the data, prints one plain line and exits non-zero."
+ },
+ "S14D-2": {
+  "checks": [
+   "root:test_run_measurement.RunnerCapTests.test_data_cap_kills_and_deletes_the_data",
+   "root:test_run_measurement.RunnerCleanupTests.test_a_failing_script_returns_its_status_and_still_deletes_the_data",
+   "root:test_run_measurement.RunnerCleanupTests.test_keep_leaves_the_data_and_names_it",
+   "root:test_run_measurement.RunnerCleanupTests.test_success_reports_bytes_and_deletes_the_data",
+   "root:test_run_measurement.RunnerCleanupTests.test_the_child_writes_its_temporary_files_into_the_output_dir",
+   "root:test_run_measurement.RunnerReviewTests.test_a_breach_that_cannot_delete_its_data_says_so_and_exits_with_an_error",
+   "root:test_run_measurement.RunnerReviewTests.test_an_unreadable_subdirectory_is_still_deleted",
+   "root:test_run_measurement.RunnerReviewTests.test_launch_failure_and_deletion_failure_are_reported_and_clean_up"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-2",
+  "statement": "The runner always deletes the generated-data dir at the end (success or failure) unless --keep is given, and reports bytes written."
+ },
+ "S14D-3": {
+  "checks": [
+   "root:test_run_measurement.RegistryTests.test_every_measure_script_declares_a_valid_budget",
+   "root:test_run_measurement.RegistryTests.test_the_registry_rule_rejects_bad_declarations"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-3",
+  "statement": "Every measure_*.py declares MEASUREMENT_BUDGET as a literal; a registry test fails when one lacks it or declares over the hard maximum without a decision number."
+ },
+ "S14D-4": {
+  "checks": [
+   "root:test_run_measurement.DirectInvocationTests.test_a_measure_script_never_writes_outside_the_runner_dir_by_name",
+   "root:test_run_measurement.DirectInvocationTests.test_no_doc_or_script_invokes_a_measure_script_directly",
+   "root:test_run_measurement.DirectInvocationTests.test_only_a_real_runner_invocation_is_exempt",
+   "root:test_run_measurement.DirectInvocationTests.test_prose_only_counts_inside_code",
+   "root:test_run_measurement.DirectInvocationTests.test_the_scanner_catches_every_known_direct_form"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-4",
+  "statement": "A test fails if any doc, brief or script in docs/, scripts/ or packages/*/scripts invokes a measure_*.py directly instead of through run_measurement.py."
+ },
+ "S14D-5": {
+  "checks": [
+   "root:test_run_measurement.ImportTests.test_importing_the_runner_does_no_io"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-5",
+  "statement": "The runner does no I/O at import, and its tests use tiny fake measure scripts with low caps so each cap trips within seconds."
  }
 }

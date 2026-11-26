@@ -36,7 +36,7 @@ Additional checks:
 Reproduce the large measurement from the repository root with the prepared test interpreter as `$PY`:
 
 ```sh
-$PY -B scripts/measure_u3_sql_growth.py --output docs/requirements/u3/measurement.json
+$PY -B scripts/run_measurement.py scripts/measure_u3_sql_growth.py -- --output docs/requirements/u3/measurement.json
 $PY -B scripts/parallel_tests.py --module codex:tests.test_read_growth --module codex:tests.test_read_plans
 ```
 

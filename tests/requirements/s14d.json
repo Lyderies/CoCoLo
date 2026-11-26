@@ -1,0 +1,10 @@
+{
+ "authority": "docs/requirements/s14d.md",
+ "requirements": [
+  {"id": "S14D-1", "statement": "scripts/run_measurement.py runs one measurement script as a child with enforced caps (wall clock default 300 s, declared override, hard maximum 900 s without --approve-decision N; generated data under its own output dir, default 1 GiB; peak RSS default 3 GiB); on a breach it kills only the process group it started, deletes the data, prints one plain line and exits non-zero.", "source": "tests/requirements/s14d.json#S14D-1"},
+  {"id": "S14D-2", "statement": "The runner always deletes the generated-data dir at the end (success or failure) unless --keep is given, and reports bytes written.", "source": "tests/requirements/s14d.json#S14D-2"},
+  {"id": "S14D-3", "statement": "Every measure_*.py declares MEASUREMENT_BUDGET as a literal; a registry test fails when one lacks it or declares over the hard maximum without a decision number.", "source": "tests/requirements/s14d.json#S14D-3"},
+  {"id": "S14D-4", "statement": "A test fails if any doc, brief or script in docs/, scripts/ or packages/*/scripts invokes a measure_*.py directly instead of through run_measurement.py.", "source": "tests/requirements/s14d.json#S14D-4"},
+  {"id": "S14D-5", "statement": "The runner does no I/O at import, and its tests use tiny fake measure scripts with low caps so each cap trips within seconds.", "source": "tests/requirements/s14d.json#S14D-5"}
+ ]
+}

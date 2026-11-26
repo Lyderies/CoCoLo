@@ -5,6 +5,9 @@ The stand-in mode measures real account persistence, maintenance and backup
 coverage. It does not verify signatures or prove signature-worker confinement.
 It never opens a socket or reads an installed owner ledger.
 """
+
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 512, "rss_mib": 2048}  # --index-scale: five years of summaries
 import argparse
 import json
 from pathlib import Path

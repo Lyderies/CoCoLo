@@ -90,22 +90,54 @@ def adopt_project(history, intent, *, migration=None):
                 continue
             obligation = db.execute('SELECT * FROM takeover_obligations WHERE kind=? AND identity=?',
                                     (hold['kind'], hold['identity'])).fetchone()
+            if obligation is not None and obligation['original_request_digest'] == UNVERIFIED:
+                continue  # an earlier takeover already recorded it unverified; that row is never changed
             original = old['digest'] if obligation is None else obligation['original_runtime_digest']
             try:
                 payload = _settlement_input(history, hold)
                 digest = _request_digest(history, original, hold['request_id'], payload)
-                if (digest != hold['request_digest'] or not successor_custody(db, original,
+                verified = not (digest != hold['request_digest'] or not successor_custody(db, original,
                         COLLECTOR_RUNTIME_DIGEST, project=True)
                         or (obligation is not None and (obligation['original_request_id'] != hold['request_id']
-                            or obligation['original_request_digest'] != digest))):
-                    continue  # refused_unverifiable; custody and the original request stay held
+                            or obligation['original_request_digest'] != digest)))
             except (HistoryError, ClaimError, ValueError, TypeError, KeyError):
+                verified = False
+            if not verified:
+                # refused_unverifiable; custody and the original request stay held (A1). UH-6 (decision 367): the
+                # first takeover that refuses it records that durably, in this same transaction.
+                if obligation is None:
+                    db.execute('INSERT INTO takeover_obligations VALUES(?,?,?,?,?,?)',
+                               (hold['kind'], hold['identity'], intent['takeover_id'], hold['request_id'] or '',
+                                UNVERIFIED, old['digest']))
                 continue
             if obligation is None:
                 db.execute('INSERT INTO takeover_obligations VALUES(?,?,?,?,?,?)',
                     (hold['kind'], hold['identity'], intent['takeover_id'], hold['request_id'], digest, original))
     db.execute("UPDATE takeover_record SET state='adopted' WHERE takeover_id=? AND state='adopting'",
                (intent['takeover_id'],))
+
+
+# 0.8.70 (UH, decisions 366/367): a hold the takeover left unverified is recorded at adoption, in the same
+# transaction, as a `takeover_obligations` row whose original request digest is UNVERIFIED (never a digest: it can
+# authorize nothing, so successor_settlement refuses it). It is written once by the first takeover that refuses the
+# hold, never changed, and kept and pruned with the other obligation rows (A1.10: while its hold is not released).
+UNVERIFIED = 'unverified'
+UNVERIFIED_HOLD_SQL = (
+    "{h}.state='releasing' AND {h}.kind IN ('lease','reservation') "
+    "AND EXISTS (SELECT 1 FROM takeover_obligations o WHERE o.kind={h}.kind AND o.identity={h}.identity "
+    "AND o.original_request_digest='" + UNVERIFIED + "')")
+
+
+def unverified_hold_condition(alias='h'):
+    return UNVERIFIED_HOLD_SQL.format(h=alias)
+
+
+def takeover_left_unverified(db, project_id, run_handle, attempt, bridge_run_id):
+    """Did the takeover record a hold of this run as unverified? Reads only (primary-key seeks)."""
+    rows = db.execute("SELECT 1 FROM project_holds h WHERE h.project_id=? AND ((h.kind='reservation' AND h.identity=?) "
+                      "OR (h.kind='lease' AND h.identity=?)) AND " + unverified_hold_condition('h') + " LIMIT 1",
+                      (project_id, bridge_run_id, f'{run_handle}:{attempt}')).fetchone()
+    return rows is not None
 
 
 def successor_settlement(history, hold, request_id, digest, *, payload=None):
@@ -318,7 +350,7 @@ def purge_takeover(db, now, *, transaction=None, checkpoint=None):
         # Every retained obligation keeps its own parent, even when refused.
         for row in db.execute('SELECT o.original_runtime_digest FROM takeover_obligations o '
                               'JOIN project_holds h ON h.kind=o.kind AND h.identity=o.identity '
-                              "WHERE h.state<>'released'"):
+                              "WHERE h.state<>'released' AND o.original_request_digest<>?", (UNVERIFIED,)):
             digest, seen = row[0], set()
             path = []
             while digest in edges and digest not in seen and len(path) <= 16:

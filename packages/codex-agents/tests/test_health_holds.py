@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
+from test_framework import requirements
 from tests import test_result_leases as leases
 from tests.test_project_history import PROJECT_A, PROJECT_B
 from codex_agents import health_holds as holds
@@ -543,6 +544,70 @@ HoldsTests.test_durable_service_status_reaches_monitor_and_clears_on_recovery.__
 
 HoldsTests.test_durable_service_fault_survives_unreadable_history.__requirements__ = ('S8-HM3-3',)
 HoldsTests.test_report_io_failure_still_attempts_service_close.__requirements__ = ('S8-HM3-3',)
+
+class UnverifiedHoldWorkTests(unittest.TestCase):
+    """Review r1 MED (decision 367): the unverified-hold finding costs work bounded by live holds, not history."""
+
+    def setUp(self):
+        self.base = leases.ResultLeaseTests(methodName='runTest')
+        self.base.setUp()
+        self.addCleanup(self.base.doCleanups)
+        self.store = self.base.store
+        self.path = self.base.fixture.directory / 'history.sqlite3'
+        self.released = 0
+        db = self.store._connection
+        db.execute("INSERT INTO takeover_record VALUES(?,?,'0.8.67',?,'0.8.68','complete',1000,1,0)",
+                   ('1' * 32, 'a' * 64, 'b' * 64))
+        db.execute("INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,request_id,request_digest) "
+                   "VALUES(?,'reservation','brg_unverified','releasing',1000,'lost-1',?)", (PROJECT_A, 'c' * 64))
+        db.execute('INSERT INTO takeover_obligations VALUES(?,?,?,?,?,?)',
+                   ('reservation', 'brg_unverified', '1' * 32, 'lost-1', 'unverified', 'a' * 64))
+
+    def release(self, total):
+        self.store._connection.executemany(
+            "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,released_at_ms,"
+            "release_kind) VALUES(?,?,?,'released',?,1000,1000,?)",
+            ((PROJECT_A, ('lease', 'reservation')[n % 2], f'released-{n}', ('unarmed', None)[n % 2],
+              ('bound', 'completed')[n % 2]) for n in range(self.released, total)))
+        self.released = total
+
+    def work(self):
+        """SQLite progress ticks (every 100 VM steps) of one project pass, and its finding codes."""
+        class Counting:
+            deadline, now_ms, since_last_pass_ms, ticks = time.monotonic() + 30, 61_001, 60_000, 0
+
+            def expired(inner):
+                inner.ticks += 1
+                return False
+        context = Counting()
+        with mock.patch.object(holds, 'SQL_PROGRESS_OPS', 100), closing(holds.open_reader(self.path)) as reader:
+            found = holds.HoldsCheck(None, sweep_interval_seconds=60).check_project(
+                reader, PROJECT_A, context, leases.fixtures.KEY)
+        return context.ticks, {f.reason_code for f in found}
+
+    @requirements('UH-7', why_not_scenario='A real store with 100k historical rows; the work is SQLite VM steps.')
+    def test_UH_7_the_unverified_finding_work_does_not_grow_with_released_history(self):
+        self.release(1_000)
+        small, found_small = self.work()
+        self.release(100_000)
+        large, found_large = self.work()
+        self.assertLessEqual(large, 2 * small + 20, (small, large))
+        self.assertIn('hold_unverified_takeover', found_small)
+        self.assertIn('hold_unverified_takeover', found_large)
+        with closing(holds.open_reader(self.path)) as reader:
+            found = holds.HoldsCheck(None, sweep_interval_seconds=60).check_project(
+                reader, PROJECT_A, CheckContext(time.monotonic() + 0.5, 61_001, 60_000), leases.fixtures.KEY)
+        self.assertIn('hold_unverified_takeover', {f.reason_code for f in found})
+
+
+class UnverifiedDocsTests(unittest.TestCase):
+    @requirements('UH-4', why_not_scenario='A text check of the shipped troubleshooting page; no service or store is involved.')
+    def test_UH_troubleshooting_explains_the_unverified_update_hold(self):
+        text = (Path(__file__).parents[3] / 'docs/troubleshooting.md').read_text()
+        update = text.split('## Update hand-over', 1)[1].split('\n## ', 1)[0]
+        for words in ('hold_unverified_takeover', 'could\nnot be checked', 'Nothing needs doing', 'hold_overdue'):
+            self.assertIn(words, update)
+
 
 if __name__ == '__main__':
     unittest.main()

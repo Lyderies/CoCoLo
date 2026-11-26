@@ -147,7 +147,7 @@ Python in `$PY`:
 
 ```sh
 "$PY" -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_lockhold --module codex:tests.test_lifetime_cap_guard
-"$PY" -B scripts/measure_lockhold.py --out docs/requirements/lockhold/measurement.json
+"$PY" -B scripts/run_measurement.py scripts/measure_lockhold.py -- --out docs/requirements/lockhold/measurement.json
 ```
 
 The remaining environment gates for an unsandboxed primary:

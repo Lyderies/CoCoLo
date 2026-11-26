@@ -18,6 +18,9 @@ Usage: measure_test_behaviour.py [--jobs N] [--suite root|codex|claude ...]
 
 from __future__ import annotations
 
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 900, "data_mib": 256, "rss_mib": 3072}  # runs whole suites: cannot fit 300 s; use --suite one at a time
+
 import argparse
 import inspect
 import json
@@ -173,7 +176,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     parser.add_argument("--suite", action="append", choices=sorted(SUITES))
     args = parser.parse_args()
-    scratch = Path(tempfile.mkdtemp(prefix="measure", dir="/private/tmp" if sys.platform == "darwin" else None))
+    scratch = Path(tempfile.mkdtemp(prefix="measure", dir=os.environ.get("MEASUREMENT_OUTPUT_DIR")))
     work = [(suite, module) for suite in (args.suite or sorted(SUITES)) for module in sorted(discover(suite))]
     started = time.monotonic()
     with ThreadPoolExecutor(args.jobs) as pool:

@@ -6,6 +6,9 @@ owner ledger are read. Fixtures and assertions are shared with the fast suite.
 """
 from __future__ import annotations
 
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # 1k vs 100k rows
+
 import argparse
 import hashlib
 import json

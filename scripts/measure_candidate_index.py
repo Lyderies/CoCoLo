@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Opt-in AP3 measurement on a disposable ~300 MiB ledger, outside test discovery.
 
-Run from the repository root: $PY -B scripts/measure_candidate_index.py
+Run from the repository root: $PY -B scripts/run_measurement.py scripts/measure_candidate_index.py
 Uses the existing isolated account-ledger fixture; never opens an owner ledger.
 """
+
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 768, "rss_mib": 2048}  # ~300 MiB ledger plus index and WAL
 import json
 from pathlib import Path
 import sys

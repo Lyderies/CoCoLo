@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in U3 first-open index build measurement on a disposable ~300 MiB ledger, outside test discovery.
 
-Run from the repository root with the test interpreter: $PY -B scripts/measure_u3_index_build.py
+Run from the repository root with the test interpreter: $PY -B scripts/run_measurement.py scripts/measure_u3_index_build.py
 Never opens an owner ledger. The synthetic ledger mixes record types the way a long-lived project does:
 event records through the real LearningLedger.append path, and dispatch_intent, provider_usage,
 admission_decision, provider_billing/headroom and outcome records copied from rows the real open path wrote
@@ -9,6 +9,9 @@ admission_decision, provider_billing/headroom and outcome records copied from ro
 The five U3 indexes are dropped, the file is vacuumed, then the real open path rebuilds them. Each
 CREATE INDEX is timed separately; file growth is the whole set of five.
 """
+
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 768, "rss_mib": 2048}  # ~295 MiB ledger plus index and WAL
 import json
 from pathlib import Path
 import sys
