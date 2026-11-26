@@ -86,7 +86,7 @@ class ResultLeaseBinding:
 
     def as_data(self):
         self.__post_init__()
-        return asdict(self)
+        return dict(vars(self))  # same as asdict: every field is a plain str or int, no slots
 
     def matches_attempt(self, binding):
         self.__post_init__()

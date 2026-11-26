@@ -7,6 +7,7 @@ exclusion additionally requires the lifetime flock and a newer store version.
 from __future__ import annotations
 
 import fcntl
+import functools
 import os
 import re
 import secrets
@@ -21,6 +22,24 @@ CREATE TABLE runtime_takeover(
 """
 FENCE_MESSAGE = 'This store owner was replaced or lost its writer lock. Run: ./setup.sh --update'
 BUSY_MESSAGE = 'Another store owner is still running. Run: ./setup.sh --update'
+
+
+@functools.lru_cache(maxsize=1024)
+def _classify_sql(sql):
+    """(comment-stripped SQL, its first word upper-cased, whether it only reads). A pure function of the text."""
+    # All SQL is fixed owner code. Strip comments so a leading comment cannot
+    # accidentally turn a write/control statement into a read classification.
+    clean = re.sub(r'/\*.*?\*/|--[^\n]*(?:\n|$)', ' ', sql, flags=re.S).strip()
+    word = clean.split(None, 1)[0].rstrip(';').upper() if clean else ''
+    database_pragma = word == 'PRAGMA' and (any(name in clean.lower() for name in
+        ('wal_checkpoint', 'optimize', 'incremental_vacuum'))
+        or ('journal_mode' in clean.lower() and ('=' in clean or '(' in clean)) or ('=' in clean and any(
+        name in clean.lower() for name in ('user_version', 'application_id', 'schema_version',
+                                          'journal_mode', 'writable_schema'))))
+    reads = (word in {'SELECT', 'EXPLAIN'}
+             or (word == 'WITH' and not re.search(r'\b(?:INSERT|UPDATE|DELETE|REPLACE)\b', sql, re.I))
+             or (word == 'PRAGMA' and not database_pragma))
+    return clean, word, reads
 
 
 class StoreFence:
@@ -182,10 +201,7 @@ class FencedConnection(sqlite3.Connection):
         if not self.in_transaction:
             self._savepoints.clear()
             self._savepoint_transaction = False
-        # All SQL is fixed owner code. Strip comments so a leading comment cannot
-        # accidentally turn a write/control statement into a read classification.
-        clean = re.sub(r'/\*.*?\*/|--[^\n]*(?:\n|$)', ' ', sql, flags=re.S).strip()
-        word = clean.split(None, 1)[0].rstrip(';').upper() if clean else ''
+        clean, word, reads = _classify_sql(sql)
         if word in {'ROLLBACK', 'ABORT'}:
             result = operation()
             if self.in_transaction:  # ROLLBACK TO keeps the named savepoint.
@@ -194,14 +210,7 @@ class FencedConnection(sqlite3.Connection):
                     index = len(self._savepoints) - 1 - self._savepoints[::-1].index(name)
                     del self._savepoints[index + 1:]
             return result
-        database_pragma = word == 'PRAGMA' and (any(name in clean.lower() for name in
-            ('wal_checkpoint', 'optimize', 'incremental_vacuum'))
-            or ('journal_mode' in clean.lower() and ('=' in clean or '(' in clean)) or ('=' in clean and any(
-            name in clean.lower() for name in ('user_version', 'application_id', 'schema_version',
-                                              'journal_mode', 'writable_schema'))))
-        if (word in {'SELECT', 'EXPLAIN'}
-                or (word == 'WITH' and not re.search(r'\b(?:INSERT|UPDATE|DELETE|REPLACE)\b', sql, re.I))
-                or (word == 'PRAGMA' and not database_pragma)):
+        if reads:
             return operation()
         if word in {'BEGIN', 'SAVEPOINT'}:
             # SAVEPOINT starts its own transaction when necessary. Preserve its
