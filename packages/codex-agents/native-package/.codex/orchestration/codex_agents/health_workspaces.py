@@ -219,8 +219,7 @@ def _unproven_finding(count, container):
             f'{"they were" if many else "it was"} left alone.')
     step = (f' Look in {container}; delete {"them" if many else "it"} only when no CoCoLo service is running '
             'on this Mac (check every project).')
-    short = (' Delete only when no CoCoLo service runs on this Mac (any project); they sit in the CoCoLo '
-             'scratch folder (prepare-*).')
+    short = ' In the scratch folder; delete only when no CoCoLo service runs on this Mac (any project).'
     text = head + step
     if _sentence(text) != text:  # past the finding bound: say where in general words instead of the path
         text = head + short

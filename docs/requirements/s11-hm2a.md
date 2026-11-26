@@ -64,7 +64,7 @@ Limits stated plainly:
 | ID | Requirement | Tests |
 |---|---|---|
 | PREP-1 | All leftover `prepare-*` folders whose owner cannot be proven (and old enough) are ONE `owner_unknown` finding (subject `folders`): "N leftover CoCoLo preparation folders are not in use, but nothing proves the services that made them have stopped, so they were left alone. Look in <scratch folder>; delete them only when no CoCoLo service is running on this Mac (check every project)." (singular for 1). Removed orphans stay their own `fixed` findings. | `GroupedUnknownOwnerTests.test_PREP_1_*` |
-| PREP-2 | Within the 240-character bound; when the path does not fit, the step says "Delete only when no CoCoLo service runs on this Mac (any project); they sit in the CoCoLo scratch folder (prepare-*)." Folder names are not in the finding (findings have no detail field). | `test_PREP_2_*` |
+| PREP-2 | Within the 240-character bound; when the path does not fit, the step says "In the scratch folder; delete only when no CoCoLo service runs on this Mac (any project)." Folder names are not in the finding (findings have no detail field). | `test_PREP_2_*` |
 | PREP-3 | Otherwise unchanged: nothing removed without proof; folders younger than the orphan age are not counted. | `test_PREP_3_*` |
 
 Changed assertion (old -> new): `OwnerProofTests.test_HM2A_1_a_folder_without_an_owner_marker_is_reported_and_never_removed`: finding subject was the folder's name -> `folders` (PREP-1).
