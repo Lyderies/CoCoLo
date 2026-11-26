@@ -1,0 +1,71 @@
+{
+  "date": "2026-11-26",
+  "reviewed_wip": "5b30cd6191917c4950b4bcffc35ac05848d5ec44",
+  "baseline": "856c91b7",
+  "review": "reviews/040-s9-r2c/RESULT-claude.md (primary repo): READY, static review, one MED/two LOW",
+  "runtime_or_test_edits_in_finish_pass": false,
+  "assertions_changed": [],
+  "tmpdir": "/tmp/claude-501/s9",
+  "red": {
+    "tests": 5,
+    "seconds": 0.369,
+    "errors": 3,
+    "failures_including_subtests": 4,
+    "runtime_provenance": "git archive 856c91b7 packages/codex-agents/native-package; import paths asserted within archive",
+    "cases": {
+      "test_project_deletion_cancels_snapshot_and_later_check_completes": "S9-HM4-5: LedgerError: maintenance requires all external readers to close",
+      "test_any_exclusive_maintenance_releases_health_snapshot_on_owner": "S9-HM4-5: same maintenance error",
+      "test_maintenance_releases_snapshot_while_cleanup_is_pending": "S9-HM4-5: same maintenance error",
+      "test_sustained_growth_alarms_immediately_after_each_daily_renewal": "S9-HM4-2: warning absent at (day=1, offset_ms=1)",
+      "test_copy_full_and_io_errors_report_space_or_io_without_damage": "S9-HM4-1: codes 13, 10, 778 all report store_corrupt instead of store_unreadable"
+    }
+  },
+  "unittest": {
+    "command": "TMPDIR=/tmp/claude-501/s9 PYTHONPATH=../../scripts python -B -m unittest tests.test_health_ledger_fix tests.test_health_ledger tests.test_health_holds tests.test_lifetime_cap_guard",
+    "cwd": "packages/codex-agents",
+    "tests": 83,
+    "seconds": 5.404,
+    "result": "PASS",
+    "copy_300_mib": {
+      "busy_passes": 9,
+      "max_pass_seconds": 0.151,
+      "writer_commits": 375
+    }
+  },
+  "metadata_runner": {
+    "python": "3.14.7",
+    "modules": {
+      "codex:tests.test_health_holds": 2.016649542027153,
+      "codex:tests.test_health_ledger": 1.6530969169689342,
+      "codex:tests.test_health_ledger_fix": 3.7256375420838594,
+      "codex:tests.test_lifetime_cap_guard": 1.116431750007905
+    },
+    "elapsed_seconds": 3.1869028750807047,
+    "job_seconds": 8.511815751087852,
+    "preflight_seconds": 10.51734350004699,
+    "discovery_seconds": 2.8672142500290647,
+    "metadata_errors": [],
+    "budget_failures": []
+  },
+  "metadata_runner_command": "python -B scripts/parallel_tests.py --module codex:tests.test_health_ledger_fix --module codex:tests.test_health_ledger --module codex:tests.test_health_holds --module codex:tests.test_lifetime_cap_guard (handoff test venv)",
+  "metadata_runner_failed_units": [],
+  "metadata_initial_environment_error": "system Python lacks hypothesis; retried successfully with handoff test venv",
+  "learning_store": {
+    "command": "TMPDIR=/tmp/claude-501/s9 PYTHONPATH=../../scripts python -B -m unittest tests.test_learning_store",
+    "tests": 100,
+    "passed": 95,
+    "seconds": 13.84,
+    "errors": 5,
+    "error_cause": "listener.bind: PermissionError: [Errno 1] Operation not permitted",
+    "primary_rerun_methods": [
+      "test_app_server_cli_normalizes_and_ingests_through_collector",
+      "test_collector_rejects_forged_binding_and_unavailability_is_bounded",
+      "test_collector_serializes_concurrent_clients",
+      "test_second_collector_cannot_replace_the_active_socket",
+      "test_spoofed_project_manifest_cannot_replace_active_collector"
+    ]
+  },
+  "diff_check": "PASS",
+  "commit": "none, requested sandbox handoff",
+  "tests_left_running": false
+}

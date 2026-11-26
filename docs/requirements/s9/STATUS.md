@@ -1,9 +1,13 @@
 # S9 — Targeted follow-up (040-s9-r2c)
 
-Reviewed baseline: `feat/s9-hm4` at `856c91b7`. The review verdict was **READY
-with one MED**, plus the two LOW findings addressed here. All three requested
-fixes are implemented and the named checks below pass. Changes remain uncommitted
-in this sandboxed worktree. VERSION and runtime-releases.json are unchanged.
+Reviewed baseline: `feat/s9-hm4` at `856c91b7`. Confirmed the primary repo's
+`reviews/040-s9-r2c/RESULT-claude.md`: **READY** (static review), with the MED
+maintenance finding and two LOW findings listed below. Independently reviewed
+and verified WIP `5b30cd61` on 2026-11-26; no further runtime/test changes were
+needed. All three fixes pass the named health modules. The additional full
+learning-store module has only the five sandbox socket errors listed below.
+Finish documentation/evidence remains uncommitted in this worktree, as requested.
+VERSION and runtime-releases.json are unchanged.
 
 ## Current requirement → test → evidence
 
@@ -18,45 +22,62 @@ All five new methods below belong to
 | S9-HM4-2 (LOW) | test_sustained_growth_alarms_immediately_after_each_daily_renewal | Red: sustained growth loses its warning 1 ms after renewal. Green: warnings persist at renewal, +1 ms, +4 min, and immediately before/at six-hour maturity, across three daily renewals. Existing burst/truncate and exact-boundary tests still pass. |
 | S9-HM4-1 (LOW) | test_copy_full_and_io_errors_report_space_or_io_without_damage | Red: injected SQLITE_FULL (13), IOERR (10), and extended IOERR_WRITE (778) all report `store_corrupt`. Green: all report `store_unreadable` with “space or IO”, no damage/private-path text and no completion timestamp. Existing real corruption tests still pass. |
 
-Requirements were recorded before tests and production edits. The initial four
-regressions failed on the untouched baseline runtime in **0.419 s** (two errors,
-four failures including subtests). The cleanup race was separately red before its
-fix (**1.676 s**). After finishing the tests, all five were also run against the
-exact native-package archived from `856c91b7`, with both runtime module paths
-asserted inside that archive: **five red, 0.624 s** (three maintenance errors,
-four failures including subtests). No original assertion was changed or removed.
+Independent red verification used the **exact native-package archived from
+`856c91b7`**, with both `health_ledger.__file__` and `learning_store.__file__`
+asserted inside that archive before loading the current five named regressions.
+**Five red in 0.369 s**: three maintenance errors with
+`maintenance requires all external readers to close`, a missing growth warning
+at renewal +1 ms, and FULL/IOERR/IOERR_WRITE incorrectly reporting `store_corrupt`
+(four assertion failures including subtests). This was run before the green
+checks below. No test assertion was changed or removed in this finish pass, nor
+by the targeted follow-up relative to `856c91b7`.
 
-## Current final verification
+## Current final verification (independent finish pass)
 
-- Named runner: `codex:tests.test_health_ledger` (31),
-  `codex:tests.test_health_ledger_fix` (15), `codex:tests.test_health_holds` (33),
-  `codex:tests.test_lifetime_cap_guard` (4): **83 PASS**; workers **4.4 s**,
-  summed workers **11.081 s**, preflight **11.210 s**, discovery **4.153 s**.
-  `metadata_errors: []`, `budget_failures: []`, `failed_units: []`.
-  The existing scenario/integration module registration is retained; the five
-  new tests are reciprocally registered under existing S9 requirement IDs.
-- Additional named unittest selection: **7 PASS, 1 expected FAIL, 0.537 s**.
-  Passing LearningStoreTests:
-  `test_project_delete_requires_closed_readers_and_leaves_only_tombstone`,
-  `test_expiry_fails_before_deletion_while_external_reader_is_open`,
-  `test_expiry_deletes_linked_lineage`,
-  `test_typed_artifact_export_and_backup_are_partitioned_and_deleted`;
-  the socket-free owner-wiring trace case listed below; runtime file-set and
-  version-order checks. Only
-  `test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version`
-  fails, as required while the runtime changes and VERSION/catalogue stay fixed.
+- From `packages/codex-agents`, `TMPDIR=/tmp/claude-501/s9 PYTHONPATH=../../scripts
+  python -B -m unittest tests.test_health_ledger_fix tests.test_health_ledger
+  tests.test_health_holds tests.test_lifetime_cap_guard`: **83 PASS, 5.404 s**.
+  The 300 MiB copy completed in **9/80** busy passes, max pass **0.151 s**,
+  with **375** independent writer commits.
+- Named runner for those same four modules, with the handoff's test venv Python:
+  **83 PASS**; worker elapsed **3.187 s**, summed workers **8.512 s**, preflight
+  **10.517 s**, discovery **2.867 s**. **`metadata_errors: []`**,
+  **`budget_failures: []`**, all worker return codes zero. Module seconds:
+  health_ledger_fix **3.726**, health_ledger **1.653**, health_holds **2.017**,
+  lifetime_cap_guard **1.116**. Existing module layers/stages/budgets and existing
+  S9 requirement IDs are retained; all five regressions are registered in
+  `scripts/test-requirements.json` against `tests/requirements/s9.json`.
+- Additional named module, same TMPDIR/PYTHONPATH:
+  `python -B -m unittest tests.test_learning_store`: **100 run, 95 PASS,
+  5 socket errors, 13.840 s**. All five fail at `listener.bind` with
+  `PermissionError: [Errno 1] Operation not permitted`; no fixes or assertion
+  changes were made for them. Existing external-reader refusal, deletion,
+  expiry, artifact/export/backup and migration tests pass. The primary must
+  rerun the module outside this sandbox. Failing LearningStoreTests methods:
+  `test_app_server_cli_normalizes_and_ingests_through_collector`,
+  `test_collector_rejects_forged_binding_and_unavailability_is_bounded`,
+  `test_collector_serializes_concurrent_clients`,
+  `test_second_collector_cannot_replace_the_active_socket`,
+  `test_spoofed_project_manifest_cannot_replace_active_collector`.
+- The system Python's first metadata-run attempt stopped before workers because
+  it lacks `hypothesis`. Re-running with the handoff test venv produced the clean
+  metadata result above; no dependency or harness code was changed.
 - `git diff --check`: PASS. No schema, learning-record shape, derived observation
   shape, operation or reason-code changes. The previous growth baseline remains
-  the persisted sample until the in-memory renewal candidate matures; restart
-  retains a usable old sample. Candidates are removed on reset/eviction/pruning.
-  Broader schema/record copier runs are not triggered.
-- No full-suite/affected run, sockets, pty, services, install, push or commit.
-  No tests are left running. The primary socket rerun list and reproducible named
-  command below still apply. Prior-round evidence follows as history.
+  persisted until its in-memory replacement matures; candidates are removed on
+  reset/eviction/pruning. Exact default rate equality remains quiet, as required
+  by the existing strict-over boundary test; the renewal regression exercises
+  sustained growth above that threshold across three renewals.
+- No full-suite/affected run, pty, services, install, push or commit. No test
+  process remains running. Durable finish results: [finish-evidence.json](finish-evidence.json).
+  The prior-round integration rerun list below remains applicable. Runtime digest
+  release bookkeeping remains the primary's responsibility; its prior-round
+  expected mismatch was not rerun during this finish pass.
 
-Current changed files: health_ledger.py, learning_store.py,
+Targeted follow-up files (already in WIP): health_ledger.py, learning_store.py,
 test_health_ledger_fix.py, lifetime_caps.json, scripts/test-requirements.json,
-docs/requirements/s9.md, this STATUS.md and assertions.md.
+docs/requirements/s9.md, STATUS.md and assertions.md. This finish pass updates
+STATUS.md/assertions.md and adds finish-evidence.json only.
 
 Maintenance coordination is at `_begin_exclusive_maintenance`, covering deletion
 and expiry alike. Its owner-only registry signals every health worker, awaits
@@ -166,6 +187,7 @@ maintenance entry point as described above; collector/service wiring stays defer
 
 ## Primary must rerun (socket restriction / integration gates)
 
+- Full `codex:tests.test_learning_store` (five socket errors named above).
 - Full `codex:tests.test_health_monitor`, including collector-scope, StatusTests,
   SweepTests and remaining scope cases.
 - Full `codex:tests.test_ledger_owner_wiring` (the socket-free trace case already

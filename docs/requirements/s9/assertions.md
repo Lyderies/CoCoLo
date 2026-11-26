@@ -1,5 +1,15 @@
 # S9 assertion ledger
 
+## Finish verification (2026-11-26, WIP 5b30cd61)
+
+Old → new: **none**. No assertion, test fixture, runtime implementation, module
+registration, stage or budget was edited in this finish pass. The five regressions
+below were independently red on the exact `856c91b7` archived runtime (0.369 s),
+then green in both the direct 83-test run (5.404 s) and named metadata run.
+The full learning-store module's five socket errors are retained unchanged and
+listed for primary rerun in STATUS.md. Verification details are durable in
+[finish-evidence.json](finish-evidence.json).
+
 ## Targeted follow-up (040-s9-r2c)
 
 No assertion present at `856c91b7` was removed, changed or weakened. Five new
