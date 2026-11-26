@@ -2,6 +2,9 @@
 """Compare fresh host-service/driver imports; this does not measure socket readiness."""
 from __future__ import annotations
 
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 120, "data_mib": 128, "rss_mib": 1024}
+
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import io

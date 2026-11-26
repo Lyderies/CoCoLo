@@ -3188,5 +3188,6 @@
  "codex:tests.test_s13a_lease_pass": 8.0,
  "codex:tests.test_s13b_due_drain": 4.0,
  "codex:tests.test_health_resources": 3,
- "codex:tests.test_health_resources_open": 10
+ "codex:tests.test_health_resources_open": 10,
+ "root:test_run_measurement": 8.0
 }

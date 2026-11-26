@@ -5,6 +5,9 @@ Run through tests.test_b7b_budgets in the named test runner. Unimplemented
 scheduler measurements remain unmeasured. Service startup uses real listeners
 when Unix socket binding is permitted; store proxies never establish that budget.
 """
+
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # 100,000-row store operations
 import contextlib
 import json
 import statistics

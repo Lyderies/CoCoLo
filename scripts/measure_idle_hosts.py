@@ -6,6 +6,9 @@ Supply --budget only after recording a baseline; CPU excludes startup and shutdo
 """
 from __future__ import annotations
 
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 120, "data_mib": 64, "rss_mib": 1024}  # --seconds 10 idle observation
+
 import argparse
 import contextlib
 import json

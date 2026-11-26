@@ -32,7 +32,7 @@ See [assertions.md](assertions.md) for the later-note on a `project_host.py` inv
 `$PY` is the test interpreter; use a short temporary root.
 
 ```sh
-TMPDIR=/tmp/s13e "$PY" -B scripts/measure_project_host_start.py --output /tmp/s13e-quiet.json
-TMPDIR=/tmp/s13e "$PY" -B scripts/measure_project_host_start.py --load --output /tmp/s13e-loaded.json
+TMPDIR=/tmp/s13e "$PY" -B scripts/run_measurement.py scripts/measure_project_host_start.py -- --output /tmp/s13e-quiet.json
+TMPDIR=/tmp/s13e "$PY" -B scripts/run_measurement.py scripts/measure_project_host_start.py -- --load --output /tmp/s13e-loaded.json
 TMPDIR=/tmp/s13e "$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_project_host_start_cost --module codex:tests.test_runtime_release
 ```

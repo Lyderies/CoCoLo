@@ -5220,5 +5220,52 @@
   ],
   "source": "tests/requirements/s10.json#S10-HM6-8",
   "statement": "Low or unreadable disks are reported to the user as plain health findings; no import-time I/O."
+ },
+ "S14D-1": {
+  "checks": [
+   "root:test_run_measurement.RunnerCapTests.test_a_script_declares_its_own_budget_and_the_cap_still_applies",
+   "root:test_run_measurement.RunnerCapTests.test_data_cap_kills_and_deletes_the_data",
+   "root:test_run_measurement.RunnerCapTests.test_memory_cap_kills_and_says_plainly",
+   "root:test_run_measurement.RunnerCapTests.test_the_script_is_not_imported_or_executed_to_read_its_budget",
+   "root:test_run_measurement.RunnerCapTests.test_the_whole_process_group_is_killed_and_nothing_else",
+   "root:test_run_measurement.RunnerCapTests.test_wall_clock_cap_kills_and_says_plainly",
+   "root:test_run_measurement.RunnerCapTests.test_wall_clock_hard_maximum_needs_a_decision_number"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-1",
+  "statement": "scripts/run_measurement.py runs one measurement script as a child with enforced caps (wall clock default 300 s, declared override, hard maximum 900 s without --approve-decision N; generated data under its own output dir, default 1 GiB; peak RSS default 3 GiB); on a breach it kills only the process group it started, deletes the data, prints one plain line and exits non-zero."
+ },
+ "S14D-2": {
+  "checks": [
+   "root:test_run_measurement.RunnerCapTests.test_data_cap_kills_and_deletes_the_data",
+   "root:test_run_measurement.RunnerCleanupTests.test_a_failing_script_returns_its_status_and_still_deletes_the_data",
+   "root:test_run_measurement.RunnerCleanupTests.test_keep_leaves_the_data_and_names_it",
+   "root:test_run_measurement.RunnerCleanupTests.test_success_reports_bytes_and_deletes_the_data",
+   "root:test_run_measurement.RunnerCleanupTests.test_the_child_writes_its_temporary_files_into_the_output_dir"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-2",
+  "statement": "The runner always deletes the generated-data dir at the end (success or failure) unless --keep is given, and reports bytes written."
+ },
+ "S14D-3": {
+  "checks": [
+   "root:test_run_measurement.RegistryTests.test_every_measure_script_declares_a_valid_budget",
+   "root:test_run_measurement.RegistryTests.test_the_registry_rule_rejects_bad_declarations"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-3",
+  "statement": "Every measure_*.py declares MEASUREMENT_BUDGET as a literal; a registry test fails when one lacks it or declares over the hard maximum without a decision number."
+ },
+ "S14D-4": {
+  "checks": [
+   "root:test_run_measurement.DirectInvocationTests.test_no_doc_or_script_invokes_a_measure_script_directly",
+   "root:test_run_measurement.DirectInvocationTests.test_the_direct_invocation_pattern_catches_the_known_forms"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-4",
+  "statement": "A test fails if any doc, brief or script in docs/, scripts/ or packages/*/scripts invokes a measure_*.py directly instead of through run_measurement.py."
+ },
+ "S14D-5": {
+  "checks": [
+   "root:test_run_measurement.ImportTests.test_importing_the_runner_does_no_io"
+  ],
+  "source": "tests/requirements/s14d.json#S14D-5",
+  "statement": "The runner does no I/O at import, and its tests use tiny fake measure scripts with low caps so each cap trips within seconds."
  }
 }

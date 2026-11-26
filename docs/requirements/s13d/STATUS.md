@@ -94,7 +94,7 @@ Only named modules/tests; no full-suite or affected run.
 1. In a socket-capable session, obtain the baseline before altering the waits:
 
    ```sh
-   TMPDIR=/private/tmp "$PY" -B scripts/measure_idle_hosts.py --seconds 10
+   TMPDIR=/private/tmp "$PY" -B scripts/run_measurement.py scripts/measure_idle_hosts.py -- --seconds 10
    ```
 
    The tool starts only its own disposable collector/project processes, waits

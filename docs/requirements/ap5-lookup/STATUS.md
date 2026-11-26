@@ -15,7 +15,7 @@ measurement module's former timing and registration.
 - **AP3 / MED-1:** moved the large measurement to
   `scripts/measure_candidate_index.py`, outside test discovery. Run manually from
   the repository root with the prepared test interpreter as `$PY`:
-  `$PY -B scripts/measure_candidate_index.py`.
+  `$PY -B scripts/run_measurement.py scripts/measure_candidate_index.py`.
   It creates and cleans a disposable ledger through the existing fixture,
   retaining every former measurement assertion and printing first-open,
   index-build and reopen seconds, population time and database/index sizes.

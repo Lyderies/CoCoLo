@@ -18,6 +18,9 @@ Usage: measure_test_behaviour.py [--jobs N] [--suite root|codex|claude ...]
 
 from __future__ import annotations
 
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 900, "data_mib": 256, "rss_mib": 3072}  # runs whole suites: cannot fit 300 s; use --suite one at a time
+
 import argparse
 import inspect
 import json

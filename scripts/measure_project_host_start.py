@@ -2,6 +2,9 @@
 """Observe the unchanged E2c-1 test, optionally beside the named --jobs 16 load."""
 from __future__ import annotations
 
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 180, "data_mib": 128, "rss_mib": 1024}
+
 import argparse
 import io
 import json

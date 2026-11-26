@@ -19,6 +19,9 @@ patched only so one project can hold this many claims at once.
 
 from __future__ import annotations
 
+# Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
+MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # drain target is 60 s
+
 import argparse
 import hashlib
 import json
