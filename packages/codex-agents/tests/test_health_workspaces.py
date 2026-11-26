@@ -20,6 +20,7 @@ The module is imported inside each test, so before the code exists every test fa
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import inspect
 import itertools
@@ -1164,6 +1165,7 @@ class LiveFindingTests(Case):
             if older:
                 try:
                     connection.execute('DROP TABLE project_holds')
+                    connection.execute('PRAGMA user_version=17')  # the last version before project_holds (step 18)
                 except sqlite3.Error as error:  # a table another object depends on: say so plainly
                     self.fail(f'cannot make the older store shape: {error}')
         return directory / 'history.sqlite3'
@@ -1248,6 +1250,104 @@ class LiveFindingTests(Case):
         self.assertIsNone(reader())
         self.assertEqual('projects_unreadable:NotADirectoryError', reader.reason)
         self.assertTrue(full.name)
+
+    def reader_for(self, root):
+        from codex_agents import memory_holds
+        return memory_holds.pending_workspaces_reader(root)
+
+    @requirements('HM2A-12')
+    def test_HM2A_12_an_unrecognised_database_is_never_read_as_owing_nothing(self):
+        import sqlite3
+        root = self.projects()
+        reader = self.reader_for(root)
+        directory = root / 'projects' / self.OLD
+        directory.mkdir(mode=0o700)
+        database = directory / 'history.sqlite3'
+        database.write_bytes(b'')  # zero-byte file
+        self.assertIsNone(reader())
+        self.assertEqual('history_unrecognised:' + self.OLD, reader.reason)
+        database.unlink()
+        sqlite3.connect(database).close()
+        sqlite3.connect(database).execute('PRAGMA user_version=5').connection.close()  # no tables
+        self.assertIsNone(reader())
+        self.assertEqual('history_unrecognised:' + self.OLD, reader.reason)
+        database.unlink()
+        # a table named history_identity but no rows and the older version number
+        connection = sqlite3.connect(database)
+        connection.execute('CREATE TABLE history_identity(project_id TEXT, next_source_sequence INT, '
+                           'next_delivery_sequence INT)')
+        connection.execute('PRAGMA user_version=17')
+        connection.commit()
+        connection.close()
+        self.assertIsNone(reader())
+        self.assertEqual('history_unrecognised:' + self.OLD, reader.reason)
+
+    @requirements('HM2A-12')
+    def test_HM2A_12_a_current_store_that_lost_project_holds_is_not_the_older_shape(self):
+        import sqlite3
+        root = self.projects()
+        database = self.history(root, self.OLD, older=True)
+        connection = sqlite3.connect(database)
+        connection.execute('PRAGMA user_version=23')  # a current-version store missing the table is damage
+        connection.commit()
+        connection.close()
+        reader = self.reader_for(root)
+        self.assertIsNone(reader())
+        self.assertEqual('history_unrecognised:' + self.OLD, reader.reason)
+
+    @requirements('HM2A-12')
+    def test_HM2A_12_a_history_truncated_to_zero_beside_a_valid_older_store_counts_only_the_older_one_zero(self):
+        root = self.projects()
+        self.history(root, self.PRJ, older=True)
+        self.assertEqual(set(), self.reader_for(root)())
+        broken = self.history(root, self.OLD, pending=2)
+        broken.write_bytes(b'')
+        reader = self.reader_for(root)
+        self.assertIsNone(reader())
+        self.assertEqual('history_unrecognised:' + self.OLD, reader.reason)
+
+    def slow_open(self, ticks):
+        """The injected clock: opening a history takes `ticks` seconds, nothing else does."""
+        from codex_agents import health_holds, memory_holds
+        now = [0.0]
+        real = health_holds.open_reader
+
+        def slow(path):
+            connection = real(path)
+            now[0] += ticks
+            return connection
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(memory_holds, '_monotonic', lambda: now[0]))
+        stack.enter_context(mock.patch.object(health_holds, 'open_reader', slow))
+        self.addCleanup(stack.close)
+
+    @requirements('HM2A-12')
+    def test_HM2A_12_a_slow_open_past_the_deadline_is_unknown_for_an_older_store_and_a_normal_one(self):
+        root = self.projects()
+        older = self.history(root, self.OLD, older=True)
+        self.slow_open(3.0)
+        reader = self.reader_for(root)
+        self.assertIsNone(reader())
+        self.assertEqual('deadline', reader.reason)
+        older.unlink()
+        self.history(root, self.PRJ, pending=1)
+        self.assertIsNone(reader())
+        self.assertEqual('deadline', reader.reason)
+
+    @requirements('HM2A-13')
+    def test_HM2A_13_evidence_that_is_not_an_object_or_lacks_a_workspace_is_evidence_unreadable(self):
+        import sqlite3
+        root = self.projects()
+        database = self.history(root, self.PRJ, pending=1)
+        reader = self.reader_for(root)
+        for evidence in ('[{"removal":"pending"}]', '{"removal":"pending"}', '{"removal":"pending","workspace":7}',
+                         '"removal":"pending"'):
+            connection = sqlite3.connect(database)
+            connection.execute("UPDATE project_holds SET evidence=? WHERE identity='p0'", (evidence,))
+            connection.commit()
+            connection.close()
+            self.assertIsNone(reader(), evidence)
+            self.assertEqual('evidence_unreadable:' + self.PRJ, reader.reason, evidence)
 
     @requirements('HM2A-13')
     def test_HM2A_13_the_finding_names_the_reason_in_its_text_and_subject_with_a_plain_next_step(self):

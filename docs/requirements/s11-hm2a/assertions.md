@@ -75,3 +75,19 @@ pin behaviour that must not change and passed). Changed, old -> new:
   same limits, same witness test.
 - `learning_store.py` wiring: `pending=lambda: memory_holds.pending_workspaces(root)` -> `pending=memory_holds.pending_workspaces_reader(root)`
   (a callable with the same return value plus a `reason` attribute); `check._pending()` still returns a set or None.
+
+## Decision 365, review r1 fix round (HM2A-12, HM2A-13)
+
+Five tests added (all red on 00451171). One fixture changed, no assertion removed or weakened:
+
+- `LiveFindingTests.history(older=True)`: old = drop `project_holds` only (a current-version store left without the table);
+  new = drop `project_holds` and set `PRAGMA user_version=17`, the real older shape (project_holds arrived with step 18).
+  Reason: the rule now accepts zero only for a validated older store, so a current-version store missing the table is damage
+  (pinned by `test_HM2A_12_a_current_store_that_lost_project_holds_is_not_the_older_shape`). The three tests using it keep
+  their assertions.
+- `memory_holds._read_pending`: a history with no or several `history_identity` rows now raises the unrecognised reason
+  (`history_unrecognised:<project id>`) instead of `history_unreadable:DatabaseError:<project id>`; no existing test pinned the old text.
+- `memory_holds`: a pending row whose evidence is not an object, or whose `workspace` is not text, is `evidence_unreadable:<project id>`
+  (before: a non-object raised AttributeError; a missing workspace was silently skipped). Every success is also checked against
+  the single deadline after the open and the last query.
+- Requirement statements HM2A-12 and HM2A-13 amended (s11-hm2a.md, tests/requirements/s11.json, scripts/test-requirements.json).
