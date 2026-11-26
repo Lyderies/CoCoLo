@@ -28,7 +28,7 @@
   },
   {
    "id": "RS-10-DUE-PROD",
-   "statement": "1,000 due holds are released within 60 s by the service's own maintenance cadence (driver _expire_results every 10 s, writer expire pass, lease pass limit=10). FINDING: NOT MET by the product (100 passes, about 990 s; 60 released by 60 s). The test pins the measured miss until the proposed step lands.",
+   "statement": "1,000 due holds are released within 60 s through the real driver maintenance step and real persistence writer: one lease pass at limit 64 per request, full or backed-off passes continued on the next driver step, otherwise the ten-second cadence applies.",
    "source": "tests/requirements/s13.json#RS-10-DUE-PROD"
   },
   {

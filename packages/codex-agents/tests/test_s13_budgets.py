@@ -8,7 +8,7 @@ Protocol (so a scheduling pause on a loaded machine cannot fail a run without a 
   - wall-clock is a loose bound: each scenario is repeated on fresh stores and the figure is the median at each batch
     position (B1: one warm-up run, then the median of five), compared with the budget itself (5 ms, 50 ms, 60 s);
   - regression controls patch the product in this test only and must turn the same checks red.
-S13a now requires the B6 mechanism; production drain still pins its measured miss (see docs/requirements/s13/STATUS.md).
+S13a now requires the B6 mechanism; S13b requires the production drain budget (see docs/requirements/s13/STATUS.md).
 """
 import importlib.util
 from pathlib import Path
@@ -126,16 +126,15 @@ class S13Budgets(unittest.TestCase):
 
     @requirements('RS-10-DUE-PROD', why_not_scenario=WHY)
     def test_rs10_finding_the_service_maintenance_cadence_misses_the_60_s_drain_of_1000_due_holds(self):
-        # FINDING (S13 fix round): production runs the lease pass with limit=10 once every 10 s (driver
-        # `_expire_results`, writer `expire` pass), so 1,000 due holds take about 100 passes, near 990 s. This pins the
-        # measured miss; when the proposed step lands, this assertion is replaced by `[] == violations`.
+        # S13b flips S13's pinned production miss to the accepted RS-10 budget.
         value = measurements().measure_due_holds_production(1000)
+        self.assertEqual([], production_violations(value), value)
         self.assertEqual(1000, value['released'])
-        self.assertEqual(10, value['pass_limit'])
-        self.assertEqual(100, value['passes'])
-        self.assertEqual(60, value['released_within_60_s'])
-        self.assertEqual(1, len(production_violations(value)), value)
-        self.assertGreater(value['seconds_until_drained'], 900)
+        self.assertEqual(64, value['pass_limit'])
+        self.assertLessEqual(value['passes'], 18)
+        self.assertEqual(1000, value['released_within_60_s'])
+        self.assertLess(value['seconds_until_drained'], 60)
+
 
 
 class S13RegressionControls(unittest.TestCase):

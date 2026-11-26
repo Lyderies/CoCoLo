@@ -2602,6 +2602,7 @@ class ProjectHistory:
         self._connection.execute("UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? "
                                  "AND kind='lease' AND identity=?",
                                  (retry, project_holds_schema.evidence_json(**evidence), self.project_id, identity))
+        self._unarmed_lease_pass_pending = True
 
     @_operation
     def release_earlier_unarmed_leases(self, live, *, limit: int = 10) -> int:
@@ -2615,6 +2616,8 @@ class ProjectHistory:
         rows per call (decision 354, RS-B section 5/12), oldest next_check_ms first; blocked rows back off 1 s doubling
         to 5 min and so leave the due set; the next pass (next driver step) reaches the rows behind them.
         """
+        # Writer-local progress for RS-B section 12; each call replaces the previous pass's signal.
+        self._unarmed_lease_pass_pending = False
         if self._result_key is None:
             raise HistoryError("history_result_unavailable")
         try:
@@ -2667,6 +2670,8 @@ class ProjectHistory:
                 failure = failure or error.reason_code  # One lease that does not verify never stops the others.
                 with self._transaction():
                     self._defer_unarmed_lease(identity, now)
+        # A failed inspection/backoff must not turn an unchanged full selection into a retry spin.
+        self._unarmed_lease_pass_pending |= len(positions) == min(limit, 64)
         if failure is not None:
             raise HistoryError(failure)
         return released

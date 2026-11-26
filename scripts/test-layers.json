@@ -430,5 +430,6 @@
  "codex:tests.test_b4t_native_audit_p66": "scenario",
  "codex:tests.test_b4t_native_audit_v34": "scenario",
  "codex:tests.test_s14b_upgrade_indexes": "scenario",
- "codex:tests.test_s13a_lease_pass": "component"
+ "codex:tests.test_s13a_lease_pass": "component",
+ "codex:tests.test_s13b_due_drain": "component"
 }

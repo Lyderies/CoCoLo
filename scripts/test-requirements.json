@@ -4962,7 +4962,7 @@
    "codex:tests.test_s13_budgets.S13Budgets.test_rs10_finding_the_service_maintenance_cadence_misses_the_60_s_drain_of_1000_due_holds"
   ],
   "source": "tests/requirements/s13.json#RS-10-DUE-PROD",
-  "statement": "1,000 due holds are released within 60 s by the service's own maintenance cadence (driver _expire_results every 10 s, writer expire pass, lease pass limit=10). FINDING: NOT MET by the product (100 passes, about 990 s; 60 released by 60 s). The test pins the measured miss until the proposed step lands."
+  "statement": "1,000 due holds are released within 60 s through the real driver maintenance step and real persistence writer: one lease pass at limit 64 per request, full or backed-off passes continued on the next driver step, otherwise the ten-second cadence applies."
  },
  "RS-S13-CONTROLS": {
   "checks": [
@@ -5013,5 +5013,37 @@
   ],
   "source": "tests/requirements/s13a.json#S13A-FAIR",
   "statement": "A previously blocked lease is retried once its backoff ends despite full batches of new blocked arrivals; new leases join with their creation time as next_check_ms so they cannot continually overtake an older due retry."
+ },
+ "S13B-NEXT": {
+  "statement": "Each production expiry writer request runs one unarmed lease start pass at limit 64; a full pass queues one next request on the next driver step without waiting EXPIRY_SECONDS.",
+  "source": "tests/requirements/s13b.json#S13B-NEXT",
+  "checks": [
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_pass_queues_one_request_on_next_step_and_selects_at_most_64_per_call"
+  ]
+ },
+ "S13B-BOUND": {
+  "statement": "The production drain selects at most 64 due unarmed lease rows per call, including full blocked prefixes, and drains eligible rows on later driver steps without an in-call selection loop.",
+  "source": "tests/requirements/s13b.json#S13B-BOUND",
+  "checks": [
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_pass_queues_one_request_on_next_step_and_selects_at_most_64_per_call",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff"
+  ]
+ },
+ "S13B-IDLE": {
+  "statement": "A non-full production lease pass with no backed-off rows keeps the ten-second expiry cadence; queued and failed requests never cause immediate duplicate or failed-request retries. A full selection whose inspection/backoff fails without progress also waits for the normal cadence.",
+  "source": "tests/requirements/s13b.json#S13B-IDLE",
+  "checks": [
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_non_full_pass_without_backoff_keeps_ten_second_cadence",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_queued_or_failed_request_never_triggers_immediate_retry",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_selection_that_cannot_back_rows_off_waits_instead_of_spinning"
+  ]
+ },
+ "S13B-BACKOFF": {
+  "statement": "A production lease pass that backs rows off continues on the next driver step even if non-full or releasing zero; the following empty pass stops continuation, so all-blocked rows are not retried before durable backoff and eligible rows behind blocked rows progress.",
+  "source": "tests/requirements/s13b.json#S13B-BACKOFF",
+  "checks": [
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_non_full_backed_off_pass_continues_then_empty_pass_stops_busy_loop",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff"
+  ]
  }
 }

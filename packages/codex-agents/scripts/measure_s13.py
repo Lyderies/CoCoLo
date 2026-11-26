@@ -25,7 +25,7 @@ DUE_HOLDS_LIMIT_SECONDS = 60
 BATCH = 64
 VM_TOLERANCE = 16
 REPEATS = 3  # whole scenarios repeated on fresh stores; wall-clock figures are the median per batch position
-PRODUCTION_LIMIT = 10  # result_persistence.py: history.release_earlier_unarmed_leases(live, limit=10)
+PRODUCTION_LIMIT = 64  # result_persistence.py: history.release_earlier_unarmed_leases(live, limit=64)
 EXPIRY_SECONDS = 10.0  # recovery_report.EXPIRY_SECONDS: the driver's maintenance cadence
 SELECTION_TABLES = ('result_leases', 'project_holds')
 
@@ -318,9 +318,9 @@ def measure_due_holds(due=1000, repeats=REPEATS, limit=BATCH):
 def measure_due_holds_production(due=1000, tick=0.5, give_up_seconds=3600.0):
     """RS-10 on the production path: the service's own maintenance step, scheduled by the driver's own cadence.
 
-    The driver's `_expire_results` (the real method, every EXPIRY_SECONDS) asks the real writer lane for one
-    `expire` pass; that pass runs the lane's maintenance, whose lease pass is
-    `release_earlier_unarmed_leases(live, limit=10)` (result_persistence.py). The clock is virtual (the cadence is
+    The driver's `_expire_results` (the real method) asks the real writer lane for one `expire` pass.
+    Its lease pass selects at most 64 rows; full passes or passes that backed rows off continue on the next
+    driver step, otherwise EXPIRY_SECONDS applies. The clock is virtual (the cadence is
     counted, not slept); each pass's real duration is added to it. The result is the time until `due` holds are
     released, and how many passes that took."""
     import time

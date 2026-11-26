@@ -73,6 +73,7 @@ class _EarlierLeases:
     reason: str | None = None
     arguments: tuple = ()  # `register` / `failed_before_open` (S1-R6)
     skipped: int = 0  # `list`: leases that could not be read this time (O10 E2)
+    lease_pass_pending: bool = False  # `expire`: full start pass or rows backed off (RS-B section 12)
 
 
 @dataclass(repr=False)
@@ -1353,9 +1354,12 @@ class ResultPersistenceLane:
                     live = {(pending.lease_binding.run_handle, pending.lease_binding.attempt)
                             for pending in self._jobs.values() if pending.lease_binding is not None}
                 try:
-                    history.release_earlier_unarmed_leases(live, limit=10)
+                    history.release_earlier_unarmed_leases(live, limit=64)
                 except (HistoryError, sqlite3.Error):
                     maintenance_ok = False
+                # A backed-off row may hide eligible rows behind it even when none was released. The next
+                # driver step gets one more bounded request; an empty pass clears this signal.
+                request.lease_pass_pending = getattr(history, '_unarmed_lease_pass_pending', False)
                 # An earlier service's unarmed lease past its time can never be armed; release it here,
                 # with no client action (O10 D1). Armed leases are never expired by time.
                 try:
