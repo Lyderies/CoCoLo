@@ -431,6 +431,8 @@ class ProjectHistory:
             self._fence.connection = self._connection
             self._connection._write_fence = self._fence
             self._initialize()
+            from .run_retention import initialize_import_history
+            initialize_import_history(self)
             # Initialization validates the exact optional index SQL; every successful
             # upgrade/reopen path then installs it with the normal writer fence.
             with self._transaction():
@@ -1981,6 +1983,18 @@ class ProjectHistory:
     def finish_learning_import(self, import_id, *, now_ms, before_commit):
         from .project_learning_corpus import finish_import
         return finish_import(self, import_id, now_ms=now_ms, before_commit=before_commit)
+
+    @_operation
+    def rebuild_learning_history_index(self):
+        """Advance one derived-history page on this persistence owner's thread."""
+        from .run_retention import advance_import_history
+        return advance_import_history(self)
+
+    @functools.partial(_operation, read_only=True)
+    def learning_import_history_record(self, import_id, identifier, record_type=None, *, by_digest=False):
+        """Authority-free historical answer from one explicitly selected import."""
+        from .run_retention import import_history_detail
+        return import_history_detail(self, import_id, identifier, record_type, by_digest=by_digest)
 
     @functools.partial(_operation, read_only=True)
     def learning_import_records(self, import_id, *, after_source_sequence=0, limit=32):
@@ -3535,7 +3549,8 @@ class ProjectHistory:
         from .project_learning_owner import LEARNING_PURGE_BATCH, purge_old_learning
         from .project_qa_checks import purge_old_qa
         # Each removal has its turn whatever another one meets (0.3.4 R1g).
-        for purge in (lambda now, limit: project_result_contexts.sweep(self, limit),  # D3: context-only custody
+        for purge in (lambda now, limit: self.rebuild_learning_history_index(),
+                      lambda now, limit: project_result_contexts.sweep(self, limit),  # D3: context-only custody
                       self._purge_finished_results, self._purge_settlement_evidence,
                       self._orchestration_owner().purge_closed,
                       lambda now, limit: purge_old_qa(self, now, limit),

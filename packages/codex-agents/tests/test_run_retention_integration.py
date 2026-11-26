@@ -71,16 +71,23 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         runs, horizon = 774, 1825
         event_bytes = runs*(103*7+3*30)*1367 + runs*90*1536
         self.membership_entries_per_run = db.execute('SELECT COUNT(*) FROM retention_members').fetchone()[0]
-        # Measured at years scale: 50.53 bytes/member; reserve 64 for B-tree
-        # variance. This live derived index is not duplicated in backups.
-        membership_bytes = runs*horizon*self.membership_entries_per_run*64
-        projected = overhead*runs*(after*horizon+before*92)+event_bytes+membership_bytes
+        # TEMP membership is rebuildable and absent from all backup/image bytes.
+        # Reserve 40 bytes/member for the compact live B-tree, reported separately.
+        membership_bytes = runs*horizon*self.membership_entries_per_run*40
+        projected = overhead*runs*(after*horizon+before*92)+event_bytes
+        self.projected_backup_bytes = projected
+        self.projected_live_bytes = projected/.972+membership_bytes
         # Isolated restore validates replay/capacity coverage after the real purge.
         path = ledger.state.root/'retired.sqlite3'
         path.touch(mode=0o600)
         project_backup.write(db, path, project, schema)
         project_backup.verify(path, project_id=project, compare=db)
-        self.assertLess(projected, 16*1024**3, (before, after, projected/1024**3))
+        from codex_agents.learning_source_image import MAX_BACKUP_BYTES
+        self.assertEqual(16*1024**3, MAX_BACKUP_BYTES)
+        self.assertLess(projected, MAX_BACKUP_BYTES, (before, after, projected/1024**3))
+        self.assertGreater(MAX_BACKUP_BYTES-projected, .79*1024**3)
+        self.assertEqual(0, db.execute(
+            "SELECT count(*) FROM retention_members WHERE length(digest)<>12").fetchone()[0])
 
     @requirements('S14b-3')
     def test_collector_sweep_sql_runs_on_the_E1b_owner_thread(self):
@@ -101,6 +108,20 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         self.assertTrue(statements)
         self.assertTrue(all(thread is fixture.thread for thread, _ in statements))
         self.assertIsNot(threading.current_thread(), fixture.thread)
+        # A restored/upgraded connection schedules the same rebuild on E1b's
+        # owner; normal lookups have a plain answer until its maintenance turn.
+        from codex_agents import run_retention
+        owner.call(lambda: run_retention.rebuild_history_index(owner.ledger))
+        def lookup():
+            with owner.ledger.repository(fixture.project) as reader:
+                return reader.record('old', 'provider_identity')
+        self.assertEqual('history index rebuilding', owner.call(lookup)['detail'])
+        with mock.patch.object(owner.ledger, '_clock_ms', return_value=retention.START+91*retention.DAY):
+            fixture.server._sweep_cycle()
+        self.assertEqual('retention_summary', owner.call(lookup)['record_type'])
+        rebuild_sql = [(thread, sql) for thread, sql in fixture.sql if 'r.rowid>' in sql]
+        self.assertTrue(rebuild_sql)
+        self.assertTrue(all(thread is fixture.thread for thread, _ in rebuild_sql))
         owner.call(seed)  # ordinary work still runs after maintenance
 
     @requirements('S14b-3')
@@ -132,6 +153,50 @@ class RunRetentionIntegrationTests(unittest.TestCase):
                 self.assertIsNone(fixture.server._sweep_cycle())
         self.assertLess(max(latencies), LEDGER_REQUEST_WAIT_MS/1000)
 
+    @requirements('S14b-3', 'S14b-4', 'S14b-5')
+    def test_import_rebuild_pages_resume_and_preserve_digest_answers(self):
+        fixture = sources.LearningSourceTransferTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        ledger = fixture.source
+        ledger._connection.execute('INSERT OR IGNORE INTO record_links '
+                                   "SELECT project_id,record_id,record_id,'evidence' FROM records")
+        for i in range(70):
+            retention.store_product_row(ledger, fixture.project, retention.identity(f'import-old-{i}'))
+            ledger.sweep_run_retention(now_ms=retention.START+91*retention.DAY, batch=1)
+        outcome = {**verification_outcome('import-outcome'), 'observed_at_ms': retention.START}
+        retention.store_product_row(ledger, fixture.project, outcome, 'verifier')
+        ledger.sweep_run_retention(now_ms=retention.START+91*retention.DAY)
+        expected = ledger.record_by_digest(fixture.project, content_digest(outcome), 'outcome')
+        fixture.file_id = 'paged_retention'
+        fixture.backup = ledger.create_sanitized_backup(fixture.project, file_id=fixture.file_id,
+                                                       expires_at_ms=ledger._clock_ms()+3_600_000)
+        fixture.transfer()
+        target = fixture.target
+        self.assertEqual(32, target.rebuild_learning_history_index())
+        self.assertIn('source', target._learning_history_cursors)
+        self.assertEqual('history index rebuilding', target.learning_import_history_record(
+            'source', content_digest(outcome), 'outcome', by_digest=True)['detail'])
+        fixture.reopen()  # TEMP entries and scheduling restart from durable summaries.
+        target = fixture.target
+        with mock.patch.object(target, '_transaction', side_effect=RuntimeError('interrupted')):
+            with self.assertRaisesRegex(RuntimeError, 'interrupted'):
+                target.rebuild_learning_history_index()
+        self.assertEqual(0, target._learning_history_cursors['source'])
+        for _ in range(2):
+            self.assertLessEqual(target.rebuild_learning_history_index(), 32)
+        # The normal project-owner cleanup path advances the final page too.
+        target.expire_results()
+        self.assertNotIn('source', target._learning_history_cursors)
+        self.assertEqual(expected, target.learning_import_history_record(
+            'source', content_digest(outcome), 'outcome', by_digest=True))
+        self.assertIsNone(target.learning_import_history_record('source', 'never-written', 'provider_identity'))
+        # The same full-digest verification rejects a forced candidate collision.
+        from codex_agents import run_retention
+        with mock.patch.object(run_retention, 'digest_prefix', return_value=run_retention.digest_prefix(content_digest(outcome))):
+            self.assertIsNone(target.learning_import_history_record(
+                'source', content_digest('foreign'), 'outcome', by_digest=True))
+
     @requirements('S14b-4', 'S14b-5')
     def test_summary_survives_original_source_image_and_learning_transfer(self):
         fixture = sources.LearningSourceTransferTests(methodName='runTest')
@@ -147,7 +212,27 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         fixture.file_id = 'retention_copy'
         fixture.backup = ledger.create_sanitized_backup(fixture.project, file_id=fixture.file_id,
                                                        expires_at_ms=ledger._clock_ms()+3_600_000)
+        before_size = fixture.backup.stat().st_size
+        ledger._connection.execute('DELETE FROM retention_members')
         fixture.transfer()
+        self.assertEqual(before_size, len(fixture.archive_body()))
+        self.assertEqual(fixture.backup.read_bytes(), fixture.archive_body())
+        target = fixture.target
+        self.assertEqual('history index rebuilding', target.learning_import_history_record(
+            'source', 'old', 'provider_identity')['detail'])
+        target.rebuild_learning_history_index()
+        # Rebuild the original owner from the same durable summary as well.
+        from codex_agents import run_retention
+        run_retention.rebuild_history_index(ledger)
+        ledger.sweep_run_retention(now_ms=retention.START+91*retention.DAY)
+        with ledger.repository(fixture.project) as reader:
+            expected = reader.record('old', 'provider_identity')
+        self.assertEqual(expected, target.learning_import_history_record('source', 'old', 'provider_identity'))
+        fixture.reopen()
+        self.assertEqual('history index rebuilding', fixture.target.learning_import_history_record(
+            'source', 'old', 'provider_identity')['detail'])
+        fixture.target.rebuild_learning_history_index()
+        self.assertEqual(expected, fixture.target.learning_import_history_record('source', 'old', 'provider_identity'))
         rows = fixture.target._connection.execute("SELECT content FROM project_learning_records "
                                                   "WHERE record_type='retention_summary'").fetchall()
         self.assertEqual(1, len(rows))

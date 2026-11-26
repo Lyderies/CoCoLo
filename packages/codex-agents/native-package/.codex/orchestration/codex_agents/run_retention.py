@@ -30,11 +30,35 @@ PROTECTION_INDEXES = (
 )
 
 
+# 774 * 1825 * 15 = 21,188,250 entries. A 96-bit prefix gives birthday
+# collision probability <= n(n-1)/2**97 < 2.84e-15 over that envelope.
+# The prefix selects a candidate only: full digests in the summary prove identity.
+HISTORY_PREFIX_BYTES = 12
+HISTORY_INDEX_BATCH = 32
+HISTORY_INDEX_SCHEMA = (
+    'CREATE TEMP TABLE retention_members(project_ref INTEGER, digest BLOB, lookup_kind INTEGER, '
+    'record_type INTEGER, summary_sequence INTEGER, '
+    'PRIMARY KEY(project_ref,digest,lookup_kind,record_type)) WITHOUT ROWID'
+)
+
+
+def digest_prefix(digest):
+    return bytes.fromhex(digest)[:HISTORY_PREFIX_BYTES]
+
+
+def rebuilding_answer():
+    # A transient lookup answer, never stored or used as learning evidence.
+    return {'record_type': 'history_index_rebuilding', 'detail': 'history index rebuilding'}
+
+
 def initialize(ledger):
-    """Derived indexes: summaries remain the sole durable history, including in backups."""
+    """Schedule derived state; no whole-history work runs while opening a ledger."""
     db = ledger._connection
-    db.execute('CREATE TEMP TABLE retention_members(project_ref INTEGER, digest BLOB, lookup_kind INTEGER, '
-               'record_type INTEGER, summary_sequence INTEGER, PRIMARY KEY(project_ref,digest,lookup_kind,record_type)) WITHOUT ROWID')
+    db.execute(HISTORY_INDEX_SCHEMA)
+    ledger._history_index_after = ('', 0)
+    ledger._history_index_rebuilding = db.execute(
+        "SELECT 1 FROM records INDEXED BY records_type_project "
+        "WHERE record_type='retention_summary' LIMIT 1").fetchone() is not None
     db.execute('CREATE TEMP TABLE retention_revision(n INTEGER)')
     db.execute('INSERT INTO retention_revision VALUES(0)')
     # Only mutations that can release protection invalidate the completed walk.
@@ -43,20 +67,66 @@ def initialize(ledger):
         for operation in ('DELETE', 'UPDATE'):
             db.execute(f'CREATE TEMP TRIGGER retention_{table}_{operation} AFTER {operation} ON main.{table} '
                        'BEGIN UPDATE retention_revision SET n=n+1; END')
-    rebuild_history_index(ledger)
 
 
 def rebuild_history_index(ledger):
+    """Schedule a fresh rebuild. Maintenance owns its bounded, resumable pages."""
+    with ledger._held():
+        if ledger._readers() or ledger._connection.in_transaction:
+            raise ValueError('history rebuild requires an idle owner')
+        # Replacing the TEMP tree avoids a row-by-row DELETE of a large index.
+        ledger._connection.execute('DROP TABLE retention_members')
+        ledger._connection.execute(HISTORY_INDEX_SCHEMA)
+        ledger._history_index_after = ('', 0)
+        ledger._history_index_rebuilding = ledger._connection.execute(
+            "SELECT 1 FROM records INDEXED BY records_type_project "
+            "WHERE record_type='retention_summary' LIMIT 1").fetchone() is not None
+
+
+def advance_history_index(ledger):
+    """One indexed owner page; commit its entries before advancing the cursor."""
     db = ledger._connection
-    db.execute('DELETE FROM retention_members')
-    cursor = db.execute("SELECT p.rowid,r.source_sequence,r.content FROM records r JOIN projects p "
-                        "ON p.project_id=r.project_id WHERE r.record_type='retention_summary'")
-    while rows := cursor.fetchmany(256):
-        members = []
-        for row in rows:
-            members.extend(_summary_members(row[0], row[1], json.loads(bytes(row[2]))))
-        db.executemany('INSERT OR IGNORE INTO retention_members VALUES(?,?,?,?,?)', members)
-    cursor.close()
+    project, after = ledger._history_index_after
+    def next_project(project):
+        row = db.execute(
+            "SELECT project_id FROM records INDEXED BY records_type_project "
+            "WHERE record_type='retention_summary' AND project_id>? ORDER BY project_id LIMIT 1",
+            (project,)).fetchone()
+        return row[0] if row else None
+    def page():
+        current, cursor = project, after
+        if not current:
+            current = next_project(current)
+        if current is None:
+            return None, [], False
+        def rows():
+            # records_type_project's implicit rowid suffix provides the seek;
+            # do not use a tuple range that can rescan the entire project prefix.
+            return db.execute(
+                "SELECT p.rowid,r.rowid,r.source_sequence,r.content FROM records r "
+                "INDEXED BY records_type_project JOIN projects p ON p.project_id=r.project_id "
+                "WHERE r.record_type='retention_summary' AND r.project_id=? AND r.rowid>? "
+                "ORDER BY r.rowid LIMIT ?", (current, cursor, HISTORY_INDEX_BATCH)).fetchall()
+        found = rows()
+        if not found:
+            current, cursor = next_project(current), 0
+            if current is None:
+                return None, [], False
+            found = rows()
+        more = len(found) == HISTORY_INDEX_BATCH or next_project(current) is not None
+        return current, found, more
+    try:
+        current, found, more = db.read_call(RUN_RETENTION_READ_LIMITS, page)
+        with ledger._account_transaction():
+            for project_ref, rowid, sequence, content in found:
+                db.executemany('INSERT OR IGNORE INTO retention_members VALUES(?,?,?,?,?)',
+                               _summary_members(project_ref, sequence, json.loads(bytes(content))))
+    except SQLReadError:
+        return False
+    if found:
+        ledger._history_index_after = (current, found[-1][1])
+    ledger._history_index_rebuilding = more
+    return True
 
 
 # Append-only numeric vocabulary for the rebuildable index, independent of live writers.
@@ -71,14 +141,28 @@ def _summary_members(project_ref, sequence, summary):
         # establish an individual member's type. Never guess a typed identity.
         kinds = list(summary['record_counts'])
         types = [kinds[0] if len(kinds) == 1 else ''] * len(summary['record_id_digests'])
-    rows = [(project_ref, bytes.fromhex(digest), 0, HISTORY_TYPES.index(kind), sequence)
+    rows = [(project_ref, digest_prefix(digest), 0, HISTORY_TYPES.index(kind), sequence)
             for digest, kind in zip(summary['record_id_digests'], types)]
     # Legacy summaries sometimes included non-outcome content digests too. Only
     # typed new summaries, or all-outcome legacy summaries, prove this type.
     if 'record_id_types' in summary or set(summary['record_counts']) == {'outcome'}:
-        rows.extend((project_ref, bytes.fromhex(digest), 1, HISTORY_TYPES.index('outcome'), sequence)
+        rows.extend((project_ref, digest_prefix(digest), 1, HISTORY_TYPES.index('outcome'), sequence)
                     for digest in summary['record_content_digests'])
     return rows
+
+
+def summary_matches(summary, target, *, by_digest=False, record_type=None):
+    """A prefix (including a forced collision) never proves full membership."""
+    if by_digest:
+        return (record_type in (None, 'outcome')
+                and ('record_id_types' in summary or set(summary['record_counts']) == {'outcome'})
+                and target in summary['record_content_digests'])
+    types = summary.get('record_id_types')
+    if types is None:
+        kinds = list(summary['record_counts'])
+        types = [kinds[0] if len(kinds) == 1 else ''] * len(summary['record_id_digests'])
+    return any(digest == target and (record_type is None or kind == record_type)
+               for digest, kind in zip(summary['record_id_digests'], types))
 
 
 def index_summary(ledger, project, summary):
@@ -87,6 +171,70 @@ def index_summary(ledger, project, summary):
                                           (project, summary['record_id'])).fetchone()[0]
     ledger._connection.executemany('INSERT OR IGNORE INTO retention_members VALUES(?,?,?,?,?)',
                                    _summary_members(project_ref, sequence, summary))
+
+
+def initialize_import_history(history):
+    """Imported summaries are inert, permanent history on the project owner."""
+    db = history._connection
+    db.execute(HISTORY_INDEX_SCHEMA)
+    history._learning_history_cursors = {}
+    # MAX_IMPORTS is two; only the indexed existence probe reads records here.
+    for row in db.execute('SELECT import_id FROM project_learning_imports WHERE project_id=?',
+                          (history.project_id,)).fetchall():
+        if db.execute("SELECT 1 FROM project_learning_records WHERE project_id=? AND import_id=? "
+                      "AND record_type='retention_summary' LIMIT 1", (history.project_id, row[0])).fetchone():
+            history._learning_history_cursors[row[0]] = 0
+
+
+def advance_import_history(history):
+    """One page per project-owner maintenance turn, using the import type index."""
+    pending = history._learning_history_cursors
+    if not pending:
+        return 0
+    import_id = next(iter(pending))
+    db = history._connection
+    rows = db.execute(
+        "SELECT source_sequence,content FROM project_learning_records "
+        "WHERE project_id=? AND import_id=? AND record_type='retention_summary' AND source_sequence>? "
+        "ORDER BY source_sequence LIMIT ?",
+        (history.project_id, import_id, pending[import_id], HISTORY_INDEX_BATCH)).fetchall()
+    with history._transaction():
+        ref = db.execute('SELECT rowid FROM project_learning_imports WHERE project_id=? AND import_id=?',
+                         (history.project_id, import_id)).fetchone()
+        for sequence, content in rows:
+            db.executemany('INSERT OR IGNORE INTO retention_members VALUES(?,?,?,?,?)',
+                           _summary_members(ref[0], sequence, json.loads(bytes(content))))
+    if len(rows) < HISTORY_INDEX_BATCH:
+        del pending[import_id]
+    else:
+        pending[import_id] = rows[-1][0]
+    return len(rows)
+
+
+def import_history_detail(history, import_id, identifier, record_type, *, by_digest=False):
+    if record_type is not None and record_type not in HISTORY_TYPES:
+        return None
+    target = identifier if by_digest else content_digest(identifier)
+    try:
+        full_digest = bytes.fromhex(target)
+        if len(full_digest) != 32:
+            return None
+    except (ValueError, TypeError):
+        return None
+    target = full_digest.hex()
+    kind = HISTORY_TYPES.index(record_type) if record_type is not None else None
+    row = history._connection.execute(
+        "SELECT r.content FROM retention_members m JOIN project_learning_records r "
+        "ON r.project_id=? AND r.import_id=? AND r.source_sequence=m.summary_sequence "
+        "WHERE m.project_ref=(SELECT rowid FROM project_learning_imports WHERE project_id=? AND import_id=?) "
+        "AND m.digest=? AND m.lookup_kind=? AND (? IS NULL OR m.record_type=?) LIMIT 1",
+        (history.project_id, import_id, history.project_id, import_id, digest_prefix(target),
+         int(by_digest), kind, kind)).fetchone()
+    if row:
+        summary = json.loads(bytes(row[0]))
+        if summary_matches(summary, target, by_digest=by_digest, record_type=record_type):
+            return summary
+    return rebuilding_answer() if import_id in history._learning_history_cursors else None
 
 
 def _protected_ids(ledger, candidates, now):
@@ -154,6 +302,10 @@ def sweep(ledger, now, batch):
     with ledger._held():
         ledger._run_retention_more = False
         if ledger._readers() or db.in_transaction:
+            return 0
+        if ledger._history_index_rebuilding:
+            completed_page = advance_history_index(ledger)
+            ledger._run_retention_more = completed_page and ledger._history_index_rebuilding
             return 0
         revision = db.execute('SELECT n FROM retention_revision').fetchone()[0]
         # Keep the high-water mark on short pages. Only a changed dependency or

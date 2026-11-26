@@ -49,3 +49,61 @@ propagated completion replay fences, and rollback/release of a linked group.
 - New closed-contract assertions reject malformed member types. Existing
   lifetime-cap registry entries now name the indexed lookup check; the bounded
   linked-component entry names the oversized-group/no-starvation check.
+
+## Final fix
+
+- `test_real_open_claim_footprint_retires_to_measured_metadata_and_summary`:
+  old `projected = retained/recent/event + 64 bytes × live membership count` ->
+  planned backup projection excludes the TEMP index; the live database projection
+  is reported separately with a 40-byte/member reserve. The existing strict
+  `< 16 GiB` assertion remains, now bound directly to the unchanged product
+  `learning_source_image.MAX_BACKUP_BYTES`; an additional `> .79 GiB` positive
+  margin assertion and exact 12-byte key assertion strengthen it. This implements
+  the explicit final product decision, rather than raising a storage threshold.
+- `test_old_detail_resolves_its_own_summary_after_other_batches` and
+  `test_typed_history_and_years_of_summaries_use_indexed_membership`: synchronous
+  `rebuild_history_index()` completion -> schedule and advance bounded owner
+  maintenance pages before the existing exact summary/type/not-found assertions.
+  No lookup assertion is removed or changed. The years-scale fixture still uses
+  validated product appends for all 365,001 summaries and 50,000 detail records.
+- `test_summary_survives_original_source_image_and_learning_transfer`: existing
+  summary count/digests/detail assertions remain; add byte-for-byte archive and
+  byte-size equality, rebuilding response, exact original-owner/imported-owner
+  lookup equality, and imported-owner restart/rebuild equality.
+- `test_collector_sweep_sql_runs_on_the_E1b_owner_thread`: all original SQL thread
+  and ordinary-work assertions remain; add a scheduled rebuild, safe lookup
+  before maintenance, exact history after maintenance, and rebuild SQL thread checks.
+- New regressions: 70-summary paged reopen/epoch-upgrade/restart, read refusal
+  during rebuild (ID and content digest), compact WITHOUT ROWID index and stated
+  collision bound, forced equal prefixes (including a lost same-type collision)
+  without foreign data, byte-identical populated/empty-index backups and equal
+  planned sizes, and restoration from actual backup summary rows.
+
+Red evidence on e32ade83 before runtime changes: reopen test expected zero
+startup-built members but got 70; forced-prefix seam and imported-history API
+were absent; restored lookup returned immediate history instead of the required
+scheduled rebuild response; product-path projection test rejected all 15
+32-byte membership keys. Backup exclusion itself was already correct because
+the old index was TEMP; its preserved byte-exclusion assertions passed before
+and after this change. A fixture-only correction prepended `project_id` to
+backup record columns (the manifest lists partition columns implicitly); it
+reached the intended rebuilding assertion and failed before runtime edits.
+
+- The years-scale test adds a strict `<= 40 bytes/member` compact-index reserve
+  assertion; its original scale, typed-history and not-found assertions remain.
+  Its old full-index build timing now measures all bounded maintenance pages.
+- Added imported 71-summary paging, interrupted-page checkpoint, digest-answer
+  equivalence and forced-candidate rejection checks, including automatic project
+  cleanup. Added a second project to the ledger-rebuild regression.
+- Added uppercase full-digest lookup equality: red first with not found during
+  full-digest verification, then green after byte-normalizing the comparison.
+  This preserves the former bytes-based lookup's case equivalence.
+- No execution budget was increased: the final isolated 25-test module passes
+  all functional checks but still reports 76.681 s against its 60 s runner budget.
+
+- New `test_exclusive_vacuum_reschedules_rowid_based_history` fails first because
+  the product deletion/VACUUM path did not schedule a rebuild; it now requires
+  a reset checkpoint, a safe rebuilding answer and the same summary afterward.
+  This protects the new cursor and numeric project references from VACUUM rowid
+  changes. Fifteen original-store backup/migration/expiry assertions are unchanged
+  and rerun green alongside this case and the new restore case.

@@ -12060,7 +12060,7 @@ class LearningLedger:
 
     def _retention_detail(self, project_id, identifier, *, by_digest=False, record_type=None):
         """An indexed membership proof; budget refusal never invents history."""
-        from .run_retention import RUN_RETENTION_READ_LIMITS, HISTORY_TYPES
+        from .run_retention import RUN_RETENTION_READ_LIMITS, HISTORY_TYPES, digest_prefix, summary_matches, rebuilding_answer
         target = identifier if by_digest else content_digest(identifier)
         if record_type is not None and record_type not in HISTORY_TYPES:
             return None
@@ -12071,16 +12071,26 @@ class LearningLedger:
             return None
         if len(target_bytes) != 32:
             return None
+        target = target_bytes.hex()
         def read():
             return self._connection.execute(
                 "SELECT r.content FROM retention_members m JOIN records r "
                 "ON r.project_id=? AND r.source_sequence=m.summary_sequence "
                 "WHERE m.project_ref=(SELECT rowid FROM projects WHERE project_id=?) AND m.digest=? AND m.lookup_kind=? "
                 "AND (? IS NULL OR m.record_type=?) LIMIT 1",
-                (project_id, project_id, target_bytes, int(by_digest), kind, kind)).fetchone()
+                (project_id, project_id, digest_prefix(target), int(by_digest), kind, kind)).fetchone()
         with self._held():
-            row = self._connection.read_in_current_mode(RUN_RETENTION_READ_LIMITS, read)
-        return json.loads(bytes(row[0])) if row else None
+            try:
+                row = self._connection.read_in_current_mode(RUN_RETENTION_READ_LIMITS, read)
+            except SQLReadError:
+                if self._history_index_rebuilding:
+                    return rebuilding_answer()
+                raise
+            if row:
+                summary = json.loads(bytes(row[0]))
+                if summary_matches(summary, target, by_digest=by_digest, record_type=record_type):
+                    return summary
+            return rebuilding_answer() if self._history_index_rebuilding else None
 
     def record_by_digest(
         self, project_id: str, digest: str, record_type: str
@@ -13494,6 +13504,10 @@ class LearningLedger:
     def _finish_exclusive_maintenance(self) -> None:
         try:
             self._connection.execute("VACUUM")
+            # Rowids used by the derived history walk/project references may
+            # change. Schedule a fresh bounded rebuild before any later lookup.
+            from .run_retention import rebuild_history_index
+            rebuild_history_index(self)
             mode_cursor = self._connection.execute("PRAGMA journal_mode = WAL")
             mode_row = mode_cursor.fetchone()
             mode_cursor.close()

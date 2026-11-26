@@ -328,6 +328,10 @@ def stage_chunk(history, import_id, index, records, attestations, *, now_ms, bef
         from .project_learning_chunks import record_chunk_membership
         record_chunk_membership(history, import_id, index, records, attestations, digest)
         _authorization(before_commit)
+        if any(record['record_type'] == 'retention_summary' for _, record in records):
+            # Scheduling only: a rolled-back chunk may cause an empty rewalk,
+            # never a false not-found. Imported bytes remain the sole authority.
+            history._learning_history_cursors[import_id] = 0
         return receipt
 
 

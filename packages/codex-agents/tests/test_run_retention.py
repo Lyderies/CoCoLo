@@ -134,8 +134,139 @@ class RunRetentionTests(unittest.TestCase):
         from codex_agents.run_retention import rebuild_history_index
         self.db.execute('DELETE FROM retention_members')
         rebuild_history_index(self.ledger)
+        self.sweep()
         with self.ledger.repository(self.project) as reader:
             self.assertEqual(first, reader.record('first', 'provider_identity'))
+
+    @requirements('S14b-3', 'S14b-4', 'S14b-5')
+    def test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe(self):
+        from codex_agents import run_retention
+        from codex_agents.learning_contracts import content_digest
+        for i in range(70):
+            self.append(identity(f'rebuild-{i}'))
+            self.sweep(batch=1)
+        expected = self.summaries()[-1]
+        store_product_row(self.ledger, self.fixture.project_b_id, identity('other-project-history'))
+        self.sweep(batch=1)
+        # Epoch-only product upgrade, followed by a second restart mid-rebuild.
+        self.db.execute('PRAGMA user_version=16')
+        for restart in range(2):
+            self.ledger.close()
+            self.fixture.ledger = self.ledger = learning_store.LearningLedger(
+                self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
+            self.db = self.ledger._connection
+            self.assertEqual(0, self.db.execute('SELECT count(*) FROM retention_members').fetchone()[0])
+            with self.ledger.repository(self.project) as reader:
+                for name in ('rebuild-69', 'never-written'):
+                    self.assertEqual('history index rebuilding', reader.record(name, 'provider_identity')['detail'])
+            from codex_agents.sql_read_budget import SQLReadError
+            with mock.patch.object(self.db, 'read_in_current_mode', side_effect=SQLReadError('sql_read_work_limit')):
+                with self.ledger.repository(self.project) as reader:
+                    self.assertEqual('history index rebuilding', reader.record('rebuild-69', 'provider_identity')['detail'])
+                self.assertEqual('history index rebuilding', self.ledger.record_by_digest(
+                    self.project, content_digest('anything'), 'outcome')['detail'])
+            # Existing live rows remain available while the derived index builds.
+            self.append(identity(f'live-{restart}', START+200*DAY))
+            with self.ledger.repository(self.project) as reader:
+                self.assertEqual(f'live-{restart}', reader.record(f'live-{restart}', 'provider_identity')['record_id'])
+            self.sweep()
+            self.assertGreater(self.db.execute('SELECT count(*) FROM retention_members').fetchone()[0], 0)
+            self.assertLessEqual(self.db.execute('SELECT count(*) FROM retention_members').fetchone()[0], 32)
+        # Refusal must preserve the cursor; the next owner maintenance resumes.
+        from codex_agents.sql_read_budget import SQLReadError
+        checkpoint = self.ledger._history_index_after
+        with mock.patch.object(self.db, 'read_call', side_effect=SQLReadError('sql_read_work_limit')):
+            self.assertEqual(0, self.sweep())
+        self.assertEqual(checkpoint, self.ledger._history_index_after)
+        for _ in range(5):
+            self.sweep()
+        self.assertFalse(self.ledger._history_index_rebuilding)
+        with self.ledger.repository(self.project) as reader:
+            self.assertEqual(expected, reader.record('rebuild-69', 'provider_identity'))
+            with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
+                reader.record('never-written', 'provider_identity')
+        with self.ledger.repository(self.fixture.project_b_id) as reader:
+            self.assertIn('older than 90 days', reader.record('other-project-history', 'provider_identity')['detail'])
+        rows = self.db.execute('SELECT length(digest) FROM retention_members').fetchall()
+        self.assertTrue(rows)
+        self.assertEqual({12}, {r[0] for r in rows})
+        ddl = self.db.execute("SELECT sql FROM sqlite_temp_master WHERE name='retention_members'").fetchone()[0]
+        self.assertIn('WITHOUT ROWID', ddl)
+        n = 774*1825*15
+        self.assertLess(n*(n-1)/2**97, 2.84e-15)
+
+    @requirements('S14b-3', 'S14b-4', 'S14b-5')
+    def test_exclusive_vacuum_reschedules_rowid_based_history(self):
+        self.append(identity('vacuum-old'))
+        self.sweep()
+        [expected] = self.summaries()
+        # The existing product deletion path vacuums the whole database, which
+        # may renumber both summary-walk rowids and numeric project references.
+        self.ledger.delete_project(self.fixture.project_b_id)
+        self.assertTrue(self.ledger._history_index_rebuilding)
+        self.assertEqual(('', 0), self.ledger._history_index_after)
+        with self.ledger.repository(self.project) as reader:
+            self.assertEqual('history index rebuilding', reader.record('vacuum-old', 'provider_identity')['detail'])
+        self.sweep()
+        with self.ledger.repository(self.project) as reader:
+            self.assertEqual(expected, reader.record('vacuum-old', 'provider_identity'))
+
+    @requirements('S14b-4')
+    def test_equal_prefixes_never_return_another_members_summary(self):
+        from codex_agents import run_retention
+        from codex_agents.learning_contracts import content_digest
+        # Force both distinct ID and content digest prefixes to collide.
+        with mock.patch.object(run_retention, 'digest_prefix', return_value=b'x'*12):
+            outcome = verification_outcome('collision-outcome')
+            self.append(identity('collision-first'))
+            self.sweep(batch=1)
+            first = self.summaries()[0]
+            self.append(identity('collision-second'))
+            self.sweep(batch=1)
+            self.append(outcome, 'verifier')
+            self.sweep()
+            own = self.summaries()[-1]
+            with self.ledger.repository(self.project) as reader:
+                self.assertEqual(first, reader.record('collision-first', 'provider_identity'))
+                with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
+                    reader.record('collision-second', 'provider_identity')
+                with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
+                    reader.record('collision-foreign', 'provider_identity')
+            self.assertEqual(own, self.ledger.record_by_digest(self.project, content_digest(outcome), 'outcome'))
+            with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
+                self.ledger.record_by_digest(self.project, content_digest('foreign'), 'outcome')
+
+    @requirements('S14b-1', 'S14b-4', 'S14b-5')
+    def test_backup_bytes_exclude_index_and_restored_rows_rebuild_answers(self):
+        from codex_agents import project_backup, run_retention
+        self.append(identity('backup-old'))
+        self.sweep()
+        expected = self.summaries()[0]
+        schema = self.db.execute('PRAGMA user_version').fetchone()[0]
+        planned = project_backup.estimate_bytes(self.db, self.project, schema)
+        paths = [self.ledger.state.root / f'index-{i}.sqlite3' for i in range(2)]
+        for i, path in enumerate(paths):
+            path.touch(mode=0o600)
+            project_backup.write(self.db, path, self.project, schema)
+            if i == 0:
+                self.db.execute('DELETE FROM retention_members')
+        self.assertEqual(paths[0].read_bytes(), paths[1].read_bytes())
+        self.assertEqual(planned, project_backup.estimate_bytes(self.db, self.project, schema))
+        with contextlib.closing(sqlite3.connect(paths[0])) as restored:
+            self.assertIsNone(restored.execute("SELECT 1 FROM sqlite_master WHERE name='retention_members'").fetchone())
+            # Restore the actual backup's permanent summary rows into the owner;
+            # the derived state is deliberately absent, as on recovery/import.
+            columns = ','.join(('project_id', *learning_store._BACKUP_TABLE_COLUMNS['records']))
+            rows = restored.execute('SELECT '+columns+' FROM records').fetchall()
+        with self.ledger._account_transaction():
+            self.db.execute('DELETE FROM records WHERE project_id=?', (self.project,))
+            self.db.executemany('INSERT INTO records('+columns+') VALUES('+','.join('?' for _ in rows[0])+')', rows)
+        run_retention.rebuild_history_index(self.ledger)
+        with self.ledger.repository(self.project) as reader:
+            self.assertEqual('history index rebuilding', reader.record('backup-old', 'provider_identity')['detail'])
+        self.sweep()
+        with self.ledger.repository(self.project) as reader:
+            self.assertEqual(expected, reader.record('backup-old', 'provider_identity'))
 
     @requirements('S14b-3')
     def test_sql_work_is_bounded_even_when_every_row_is_protected(self):
@@ -253,6 +384,7 @@ class RunRetentionTests(unittest.TestCase):
         self.assertEqual({'event': 1, 'outcome': 1}, summary['record_counts'])
         self.assertEqual({outcome['status']: 1}, summary['outcome_counts'])
         self.assertEqual(summary, self.ledger.record_by_digest(self.project, content_digest(outcome), 'outcome'))
+        self.assertEqual(summary, self.ledger.record_by_digest(self.project, content_digest(outcome).upper(), 'outcome'))
 
     @requirements('S14b-3', 'S14b-4')
     def test_historical_lookup_budget_failure_does_not_invent_membership(self):
@@ -298,6 +430,10 @@ class RunRetentionTests(unittest.TestCase):
         persistent_seconds = time.perf_counter()-started
         started = time.perf_counter()
         run_retention.rebuild_history_index(self.ledger)
+        pages = 0
+        while self.ledger._history_index_rebuilding:
+            self.sweep()
+            pages += 1
         history_seconds = time.perf_counter()-started
         index_bytes = (self.db.execute('PRAGMA temp.page_size').fetchone()[0]
                        * self.db.execute('PRAGMA temp.page_count').fetchone()[0])
@@ -305,7 +441,9 @@ class RunRetentionTests(unittest.TestCase):
                                        persistent_index_build_seconds=persistent_seconds,
                                        membership_index_build_seconds=history_seconds,
                                        membership_index_bytes=index_bytes,
-                                       membership_bytes_per_entry=index_bytes/365_001)
+                                       membership_bytes_per_entry=index_bytes/365_001,
+                                       membership_index_pages=pages)
+        self.assertLessEqual(index_bytes/365_001, 40)
         # The reviewed implementation's JSON walk cannot reach the oldest
         # member under the read budget. Keep this as the regression oracle.
         from codex_agents.sql_read_budget import SQLReadError

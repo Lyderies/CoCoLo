@@ -56,17 +56,20 @@ def main():
     before = sum(size for _, size in measurements[:half])
     after = sum(size for _, size in measurements[half:])
     entries = getattr(case, 'membership_entries_per_run', 0)
-    membership = 774*1825*entries*64
-    projected = 1.745*.972*774*(after*1825+before*92)+774*((103*7+3*30)*1367+90*1536)+membership
+    membership = 774*1825*entries*40
+    projected = 1.745*.972*774*(after*1825+before*92)+774*((103*7+3*30)*1367+90*1536)
     report = {'passed': result.wasSuccessful(), 'signature_execution': 'stand-in' if args.stand_in_signatures else 'real',
               'before_column_bytes': before, 'after_column_bytes': after,
               'retained_columns': dict(measurements[half:]),
               'runs_per_day': 774, 'horizon_years': 5, 'projected_gib': round(projected/1024**3, 3) if before and after else None,
               'margin_gib': round(16-projected/1024**3, 3) if before and after else None,
-              'membership_entries_per_run': entries, 'membership_index_reserved_bytes_per_entry': 64,
+              'membership_entries_per_run': entries, 'membership_index_reserved_bytes_per_entry': 40,
+              'projected_live_database_gib': round((projected/.972+membership)/1024**3, 3) if before and after else None,
+              'backup_membership_index_bytes': 0,
               'membership_index_projected_gib': round(membership/1024**3, 3),
               'overhead_source': 'accepted S14: 1.745 database/column, 0.972 planned-backup/database',
-              'includes': 'all backed-up tables, released hold receipts, actual partial summaries, 92 days recent detail, weighted events, live derived membership index'}
+              'includes': 'all backed-up tables, released hold receipts, actual partial summaries, 92 days recent detail, weighted events; derived membership excluded from backup/source images/transfers',
+              'live_size_basis': 'planned backup / accepted .972 backup-to-database factor + compact TEMP index reserve'}
     if args.output:
         args.output.write_text(json.dumps(report, indent=1)+'\n')
     print(json.dumps(report, indent=1))

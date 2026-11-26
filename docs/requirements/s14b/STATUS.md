@@ -1,160 +1,171 @@
-# Fix round — S14b / review 040-s14b-r1
+# Final fix — S14b
 
-**NOT READY: S14b-1 still fails.** Functional retention, idle and lookup fixes
-are in the worktree; the corrected five-year projection is **16.464 GiB**, or
-**0.464 GiB over** the unchanged 16 GiB ceiling. This supersedes the earlier
-14.219 GiB claim, whose outcome fixture bypassed product provenance.
+The planned five-year backup/source image now projects to **15.201 GiB** at
+774 runs/day (2× peak) for 1,825 days, leaving **0.799 GiB** below the unchanged
+**16 GiB** `learning_source_image.MAX_BACKUP_BYTES` hard product ceiling.
+The former **16.464 GiB** projection incorrectly applied that backup ceiling to
+backup bytes plus a connection-local, rebuildable membership index.
 
-Branch `feat/s14b-retention`, starting at `ef0c6eb4`, base `ce81bd96`.
-No commit was attempted under the sandbox rule. VERSION and the runtime digest
-catalogue are unchanged. No sockets, installed services, PTYs, full suite,
-merge, installation or push were used.
+Live storage is reported separately: **15.639 GiB** estimated main database
+plus **0.789 GiB** reserved compact TEMP membership index = **16.428 GiB**.
+The live database is **not** claimed to fit below 16 GiB. The live estimate uses
+the accepted S14 `.972` planned-backup/database factor in reverse and reserves
+40 bytes for each of 21,188,250 membership entries. Payload variance, controlled
+evidence and long-lived runs retain the prior projection's limits.
+
+[final-measurement.json](final-measurement.json) records the product-path
+measurement: 16,280 before / 5,589 retained column bytes per run, including
+actual terminal provenance, outcome auto-links, claimed run, released receipts,
+permanent summaries, 92 days recent detail and weighted event retention. Only
+signature execution was substituted; persistence, validation, provenance,
+retention and actual backup verification were exercised. The real signature
+worker still times out in this sandbox before open completes; primary must
+rerun it unsandboxed. Neither the 16 GiB ceiling nor any existing lookup equality,
+type or not-found assertion was relaxed.
+
+Branch `feat/s14b-retention`, starting at `e32ade83`, base `ce81bd96`.
+Changes are uncommitted, as required under the sandbox. VERSION, schema versions,
+permanent record layouts, backup manifests and runtime digest catalogue are
+unchanged. No installed services, sockets, PTYs, full suite, merge, install or
+push were used.
 
 ## Requirement → test → evidence
 
 `R` = `tests.test_run_retention.RunRetentionTests`;
 `I` = `tests.test_run_retention_integration.RunRetentionIntegrationTests`.
 
-| Requirement / finding | Test | Evidence |
+| Requirement | Matching checks | Evidence |
 | --- | --- | --- |
-| S14b-1 / HIGH-1 sizing | I.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary | **FAIL**, 16.464 GiB at 774 runs/day for 1,825 days; no threshold relaxation. Product validation and auto-linking, matching terminal host event, and actual claimed run replace the unlinked fixture. Before/retained columns: 16,280 → 5,589. |
-| S14b-2 / HIGH-1 behavior | R.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer | Red first: expected 2 swept rows, got 0 with real auto-links. Green: expired terminal host event + outcome commit with one summary, exact counts/status and digest answer. |
-| S14b-2 / LOW-1 | R.test_protection_is_checked_inside_write_transaction_and_propagates | Red first: protection check saw no write transaction. Green: recheck is inside BEGIN IMMEDIATE, sharing summary append and deletion. |
-| S14b-2 live dependencies | R.test_completion_replay_fence_pins_expired_outcome_and_its_event; R.test_full_outcomes_and_attested_and_file_backed_rows_stay; R.test_live_windows_Claude_bootstrap_and_latest_reading_preserve_admission_answers | Completion-fence regression red first (2 rows incorrectly removed), then green. Full linked group survives any live/controlled member, file, attestation, outside link or completion fence. Existing admission selection remains unchanged. |
-| S14b-2 atomicity / progress | R.test_linked_group_rolls_back_together_and_reconsiders_released_protection; R.test_oversize_linked_group_stays_atomic_without_starving_later_work | Green: summary + both detail rows roll back together; releasing protection revisits them. Oversized-group progress test red first (later pair not reached), then green: 34-row group stays full while a later pair sweeps. |
-| S14b-3 / MED-1 | R.test_protected_tail_reaches_idle_and_does_not_wrap_on_short_pages | Red first: continuation remained true; 40 read scopes instead of at most 20 for idle checks. Green: 70 pinned rows reach idle; 20 subsequent full-interval checks read only the empty indexed tail. |
-| S14b-3 owner budget | I.test_pinned_ledger_reaches_idle_without_delaying_owner_requests; I.test_collector_sweep_sql_runs_on_the_E1b_owner_thread | Green without sockets: 256 pinned rows drain the walk to idle, later maintenance reports no more work, ordinary owner requests remain below the existing 800 ms budget; SQL stays on the owner thread. |
-| S14b-3 bounds / failure | R.test_sql_work_is_bounded_even_when_every_row_is_protected; R.test_released_capacity_history_does_not_exhaust_retention_work_budget; R.test_summary_failure_rolls_back_and_readers_and_transactions_skip; R.test_failed_fast_continuation_stops_and_batch_ceiling_never_limits_a_run | Green: bounded SQL, released-history seek, active-reader/transaction skip, rollback, and no 10 ms continuation on refusal/failure. |
-| S14b-4 / MED-2 / LOW-4 | R.test_typed_history_and_years_of_summaries_use_indexed_membership | Wrong-type lookup red first. Green at 365,001 summaries: exact old summary, wrong type not found, typo not found. The reviewed JSON scan demonstrably exhausts the same read budget; indexed lookups finish within it. |
-| S14b-4 membership / refusal | R.test_historical_lookup_budget_failure_does_not_invent_membership; R.test_mistyped_content_digest_is_not_found; R.test_old_detail_resolves_its_own_summary_after_other_batches | False age-answer regression red first, then green: read refusal propagates, never invents membership. Invalid content digest returns not found. Lookup is also correct after rebuilding the derived index solely from retained summaries. |
-| S14b-4 stored vocabulary | R.test_summary_stays_readable_when_live_writer_vocabulary_shrinks; R.test_summary_contract_is_closed_and_old_vocabulary_remains_readable | Green: stored vocabularies stay independent; malformed member-type arrays refuse cleanly. Legacy summary shape remains accepted. |
-| S14b-5 copying / restore | I.test_summary_survives_original_source_image_and_learning_transfer; R.test_summary_contract_is_closed_and_old_vocabulary_remains_readable; named copier modules below | Green: optional typed membership survives summary validation, original-source imaging, inert learning transfer and streamed backup verification. Corrected footprint case verifies backup before its failing size assertion. |
+| S14b-1 | I.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary; R.test_backup_bytes_exclude_index_and_restored_rows_rebuild_answers | Product projection red on old 32-byte keys (15 noncompact entries); green with stand-in signatures at 15.201 GiB, strict `< MAX_BACKUP_BYTES`, additional `> .79 GiB` margin. Populated/empty-index backup files are byte-identical, estimates equal. The exclusion property was already correct on e32ade83 because the old index was TEMP. |
+| S14b-2 | All existing R cutoff, dependency, outcome/status, linked-group, rollback and admission-selection checks | All functional assertions passed in the named retention module; historical summary contents and product retention behavior remain unchanged. |
+| S14b-3 | R.test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe; I.test_collector_sweep_sql_runs_on_the_E1b_owner_thread; I.test_pinned_ledger_reaches_idle_without_delaying_owner_requests; I.test_import_rebuild_pages_resume_and_preserve_digest_answers | Reopen regression red first: startup built all 70 entries instead of zero. Green: at most 32 summaries per owner turn, two projects, epoch-16 upgrade, mid-rebuild restart, read refusal retains checkpoint, ordinary live reads work; E1b rebuild SQL stays on its owner. Imported-owner interruption retains its checkpoint, resumes, and ordinary project cleanup completes rebuilding. |
+| S14b-4 | R.test_equal_prefixes_never_return_another_members_summary; R.test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe; R.test_typed_history_and_years_of_summaries_use_indexed_membership | Forced prefix seam absent on e32ade83; green with 12-byte WITHOUT ROWID keys. Equal prefixes across distinct IDs and outcome digests return no foreign summary; a lost same-type collision returns not found. Full digest and member type are verified against the permanent summary before returning it. During rebuilding, misses and SQL read refusal return plain `history index rebuilding`; after completion, original exact history/type/not-found assertions remain. |
+| S14b-5 | R.test_backup_bytes_exclude_index_and_restored_rows_rebuild_answers; R.test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe; I.test_summary_survives_original_source_image_and_learning_transfer; I.test_import_rebuild_pages_resume_and_preserve_digest_answers | Restore's scheduled-rebuild expectation and imported-history API failed before implementation. Green: actual backup summary rows rebuild the same answers; source archive bytes and sizes match the original backup exactly; imported-owner ID/digest answers equal original-owner summaries after paged rebuilding and restart. No membership table is copied. |
 
-## Measured footprint and build cost
+## Implementation and collision bound
 
-[fix-measurement.json](fix-measurement.json) is the corrected product-path
-measurement. The signature executor was substituted only in this measurement;
-persistence, validation, terminal provenance, auto-links, release, purge,
-summaries and backup verification run normally. It does **not** prove real
-signature-worker execution. Account attestations measure zero added bytes/run;
-no synthetic per-run signature allowance is credited as a saving.
+`retention_members` stays TEMP, with a WITHOUT ROWID key containing a **12-byte
+(96-bit) digest prefix**, numeric project/import reference, lookup kind and stored
+member type. At 774 × 1,825 × 15 = **21,188,250 entries**, the birthday union bound
+is `n(n−1)/2^97 < 2.84e−15`. This is a probabilistic efficiency/wording bound,
+not the data-safety mechanism: full digests and types in each candidate summary
+are checked before returning any data. `INSERT OR IGNORE` may lose a colliding
+membership; it cannot make another item's summary a valid answer.
 
-The retained/recent/event projection is 15.201 GiB before the live membership
-index. There are 15 indexed members/run. Reserving 64 bytes/member over five
-years adds 1.263 GiB, bringing the total to **16.464 GiB**. The accepted S14
-1.745 database/column × 0.972 planned-backup/database factor remains the source
-for persistent overhead; the rebuildable index is counted once, without backup
-duplication. Even using the measured ~50.54 bytes/member instead of the 64-byte
-reserve leaves the projection above 16 GiB. There is no positive stated margin.
-Payload variance, controlled evidence and long-lived runs cannot improve this
-result. Further storage reduction or an owner-approved plan revision is needed.
+Opening/restoring/upgrading schedules rebuilding, with only an indexed existence
+probe at open. Ledger maintenance seeks at most 32 summaries by project and
+rowid through the existing `records_type_project` index; **no new persistent
+index** is needed. Each page uses the existing 25 ms / 2,048-callback / 4 MiB
+cooperative SQL read scope, commits its TEMP entries before advancing the cursor,
+and yields the owner between pages. An interrupted/failed page retains its
+checkpoint. Active readers/transactions skip work; refusal/failure ends fast
+continuation until the next ordinary maintenance interval. New summaries still
+update membership atomically with their permanent append. Existing exclusive
+VACUUM maintenance invalidates numeric references and reschedules this walk.
 
-[fix-index-measurement.json](fix-index-measurement.json): 365,001 summaries,
-50,000 product-path detail records, **545,497,088 bytes (520.2 MiB)** ledger.
-Rebuilding the five persistent indexes took **0.197 s**; rebuilding the derived
-membership index took **4.243 s**, with **18,448,384 bytes** of temp pages,
-**50.543 bytes/member**. Three old/wrong-type/unknown lookups took **0.518 ms**
-total under the existing 2,048-callback / 25 ms / 4 MiB SQL read budget. Persistent
-index creation is an upgrade cost; the derived index rebuild recurs on each
-ledger open, so its startup cost remains material at larger sizes.
+The source-image import's project owner also builds only TEMP membership from
+its permanent `project_learning_records`: bounded 32-summary pages use the
+existing `(project, import, type, sequence)` index. Import chunks schedule the
+walk; owner `expire_results` maintenance advances it. Restart reconstructs its
+scheduling from durable imported summaries. This grants no learning/account
+activation or evidence authority. The explicit imported-history lookup checks
+full digests/types through the same verifier as the original ledger.
 
-The real worker was attempted and timed out before open completion (20.627 s
-including cleanup); [fix-real-signatures.json](fix-real-signatures.json) records
-that no real-worker footprint was collected. Primary must rerun it unsandboxed.
+Lookups return a transient `{'record_type': 'history_index_rebuilding',
+'detail': 'history index rebuilding'}` when membership is not yet known during
+the walk. It is never persisted or presented as proof of membership. Live records
+continue to resolve normally; already verified historical hits may return their
+summary during rebuilding. Completed-index read refusals retain the existing
+SQLReadError behavior rather than inventing membership.
 
-## Implementation bounds
+## Checks and remaining gates
 
-A seed page contains at most 32 detail rows. Expired linked host events are
-included through bounded same-run closure, never by sweeping arbitrary host
-history. Distinct expired same-run members can retire together; external links,
-self-links, stable control and live authority protect the whole component.
-Groups larger than the page bound remain intact. At most 12 component queries
-share one selection read scope, avoiding the shared 16-cursor limit. Page,
-selection and transactional protection each have a cooperative 25 ms SQL scope;
-these are not hard OS I/O latency guarantees.
+- Initial named core run: **154 tests, 91.1 s, metadata_errors []**; all functional
+  assertions passed except the real signature-worker timeout. The retention
+  module exceeded its 60-second runner budget at 91.125 s while other copier
+  tests also ran. [final-core-evidence.json](final-core-evidence.json).
+- Named copier/enumeration run: **152 tests, 32.5 s, metadata_errors [],
+  budget_failures []**. Only failure: intentional `test_runtime_release` digest
+  pin, left for primary release bookkeeping. [final-copiers-evidence.json](final-copiers-evidence.json).
+- Product-path stand-in projection: **1 test, 0.868 s, green**. The real worker
+  attempt in the core run timed out at the existing ten-second open pump bound
+  (21.9 s including cleanup), before the footprint check.
+- Direct final regressions: paged reopen, forced collisions, backup restore,
+  imported lookup/restart and E1b owner rebuild: **5 tests, 1.068 s, green**.
+  Additional two-project/imported-page/interruption check: **2 tests, 0.854 s,
+  green**.
+- Isolated named retention (before the VACUUM followup): **25 tests, all functional tests green,
+  metadata_errors [], requirement_failures []**, but the runner remains **FAIL
+  on its unchanged execution budget: 76.681 s > 60 s**. This is an unresolved
+  merge gate, not a claimed all-green run.
+  [final-retention-evidence.json](final-retention-evidence.json).
+- Final non-socket migration/event classes plus all four non-worker integration
+  checks: **40 tests, 7.516 s, green**. Includes imported pages/interruption,
+  project cleanup advancing the rebuild, source-image restart and E1b owner SQL.
+- Full-digest case normalization followup: added uppercase-digest assertion
+  failed first with not found; byte-normalized full-digest verification now
+  preserves that prior answer. **4 targeted tests, 1.636 s, green**.
+- Final scale check: **1 test, 100.826 s, green** (separate measurement,
+  below the builder's five-minute run limit). **365,001 product summaries +
+  50,000 product details**, **545,497,088 bytes** main ledger, compact TEMP index
+  **10,203,136 bytes / 27.954 bytes per entry**, below the strict 40-byte reserve.
+  Rebuild: **11,407 bounded pages**, **24.175 s** cumulative build time; three
+  typed/unknown lookups: **0.494 ms** total. This cumulative time is not one
+  owner-thread operation. Five existing persistent indexes rebuilt in **0.280 s**.
+  [final-index-measurement.json](final-index-measurement.json).
+- Added exclusive-maintenance regression: existing project deletion invokes
+  VACUUM, which may change rowids used by the walk/project references. Red first:
+  no rebuild was scheduled. Green: maintenance discards derived references and
+  schedules fresh pages, preserving safe lookup and the exact historical answer.
+  This case + actual backup restore + 15 existing original-store backup,
+  schema-five migration, expiry and deletion checks: **17 tests, 2.917 s, green**.
+  Empty-history maintenance uses an indexed existence probe and keeps ordinary
+  not-found behavior.
+- Final named copier/reader followup after the VACUUM invalidation: **100 tests
+  across six modules, 5.8 s, all green, metadata_errors [], budget_failures [],
+  requirement_failures []**.
+  [final-followup-evidence.json](final-followup-evidence.json).
+- Final `git diff --check` passed. No test run remains in flight.
 
-The cursor survives short pages instead of wrapping. Dependency-release TEMP
-triggers invalidate the completed walk; historical inserts also rewind it.
-Stable pinned rows stay skipped while dependencies are unchanged. Time-sensitive
-admission evidence gets a daily reconsideration, with full-interval backoff;
-empty tails report no more work. Restart safely rewalks durable rows. No new
-work is called from open/claim/dispatch.
+Named modules covered (all `codex:tests.`): `test_run_retention`,
+`test_run_retention_integration`, `test_project_history`,
+`test_project_learning_corpus`, `test_learning_source_transfer`,
+`test_learning_source_image`, `test_learning_source_image_legacy`,
+`test_learning_chunk_upgrade`, `test_learning_qa_upgrade`,
+`test_legacy_capacity_upgrade`, `test_owner_backup_streamed`,
+`test_large_project_backups`, `test_account_observation_backup`,
+`test_backup_installed_project`, `test_backup_reply_private`,
+`test_learning_contracts`, `test_learning_chunk_membership`,
+`test_refusal_steps`, `test_reply_shape_compatibility`, `test_learning_cycle_core`,
+`test_learning_outcome_pages`, `test_learning_analysis`, `test_learning_retention`,
+`test_runtime_release`; selected original-store backup/migration/expiry checks
+in `test_learning_store`, plus non-socket classes of `test_learning_migration`
+and `test_event_retention`. No new test module or requirement ID was added; new
+methods are registered under the existing S14b requirements. Existing modules
+remain registered as integration/scenario. Imports perform no persistence I/O.
 
-Summaries remain durable authority-free history. An optional aligned
-`record_id_types` array proves each new member's type. A compact TEMP B-tree
-maps project, digest, lookup kind and type to the permanent summary sequence;
-it is rebuilt at open and updated atomically with new summaries. No main table,
-column, schema version or backup layout changes. Older mixed summaries cannot
-prove an individual member's type: they remain readable and support untyped
-membership, but ambiguous typed lookups refuse rather than guess. Reader and
-copier inventories remain in [readers.md](readers.md) and
-[copy-module-inventory.md](copy-module-inventory.md).
+Primary must rerun these socket/service tests with the builder rules' short
+TMPDIR and clean environment: `test_account_original_open`,
+`test_account_claim_jobs`, `test_open_request_lifetime`,
+`test_active_run_capacity`, `test_run_holds`, `test_ledger_owner_wiring`
+(socket cases), `test_event_retention.CollectorSweepTests`,
+`test_learning_migration.MigrationCliTests`, `test_learning_engine`
+(socket/confinement cases), `test_learning_cli`, `test_reply_shape_live`,
+`test_upgrade_handover`, `test_history_service_upgrade`,
+`test_state_location.LegacyStateMoveTests`. No PTY checks were run.
+Primary must also resolve/recheck the unchanged 60-second retention test-module
+execution budget (76.681 s in isolation here); no timing ceiling was raised.
+Primary also owns the real-signature measurement/integration rerun, digest
+catalogue/release pin, remaining conservative inventory in
+[copy-module-inventory.md](copy-module-inventory.md), affected/batch/full gates,
+macOS/Linux lifecycle checks and accepted S14 backup boundaries after assembly.
 
-## Checks completed
+## Files changed
 
-- Named 23-module run: **255 tests, 53.6 s, metadata_errors []**. Retention direct
-  tests and all selected copier modules passed. Failures: new component cap was
-  not yet registered (fixed and rerun green below); real worker timed out;
-  intentional runtime-release digest pin. Sanitised runner result:
-  [fix-named-evidence.json](fix-named-evidence.json).
-- Final named followup: **74 tests across 7 modules, 49.7 s, all green,
-  metadata_errors [], budget_failures []**. Includes all 22 direct retention
-  tests, cap guard, contracts, learning retention and append/type/candidate
-  lookup readers. [fix-followup-evidence.json](fix-followup-evidence.json).
-- Non-socket migration classes (`LearningMigrationTests`, `EmptyRetirementTests`,
-  `ActivationSchemaTests`, `DrainedRuleTests`) and event-retention classes
-  (`RetentionPolicyTests`, `EventRetentionTests`): **36 tests, 7.091 s, green**.
-- Final non-worker retention integration cases + cap guard: **7 tests, 1.280 s,
-  green**. Exact-once read-refusal followup: **1 test, 0.103 s, green**.
-- Stand-in corrected footprint: **1 test, 0.771 s, FAIL only at unchanged size
-  cap**, after product-path retirement and backup verification passed.
-- Dedicated scale measurement: **1 test, 44.540 s, green** (includes fixture
-  population, index builds and bounded lookup comparisons).
-- `git diff --check` passed. No full-suite run. The runtime digest failure is
-  intentionally left for primary release bookkeeping; VERSION/catalogue remain
-  unchanged. Assertion replacements are recorded in [assertions.md](assertions.md).
-
-The 23-module run covered `test_run_retention`,
-`test_run_retention_integration`, `test_lifetime_cap_guard`,
-`test_learning_contracts`, `test_owner_backup_streamed`,
-`test_large_project_backups`, `test_learning_source_image`,
-`test_learning_source_image_legacy`, `test_learning_source_transfer`,
-`test_account_observation_backup`, `test_backup_installed_project`,
-`test_backup_reply_private`, `test_project_learning_corpus`, `test_refusal_steps`,
-`test_reply_shape_compatibility`, `test_learning_chunk_upgrade`,
-`test_learning_qa_upgrade`, `test_legacy_capacity_upgrade`,
-`test_learning_cycle_core`, `test_learning_chunk_membership`,
-`test_learning_outcome_pages`, `test_learning_analysis`, `test_runtime_release`.
-
-## Primary reruns / unmet gates
-
-1. **S14b-1 storage gate remains failed**; do not merge as satisfying the 16 GiB
-   requirement. Decide the next storage reduction/re-plan outside this one round.
-2. Run `scripts/measure_s14b_retention.py` without `--stand-in-signatures`, and
-   `test_run_retention_integration`, where real signature workers can execute.
-   Reproduce scale cost with `scripts/measure_s14b_retention.py --index-scale`.
-3. Socket/service suites not run here: `test_account_original_open`,
-   `test_account_claim_jobs`, `test_open_request_lifetime`,
-   `test_active_run_capacity`, `test_run_holds`, `test_ledger_owner_wiring`
-   (socket cases), `test_event_retention.CollectorSweepTests`,
-   `test_learning_migration.MigrationCliTests`, `test_learning_engine`
-   (socket/confinement cases), `test_learning_cli`, `test_reply_shape_live`,
-   `test_upgrade_handover`. Use the builder rules' short TMPDIR and clean env.
-   No PTY checks were run.
-4. Run the remaining conservative copier/enumeration inventory, primary affected
-   and batch/full-suite gates, macOS/Linux lifecycle/settlement flows, accepted
-   S14 backup boundaries after batch assembly, and review. The optional summary
-   shape was exercised in all selected non-socket copier modules above; this is
-   not a claim that every service-containing inventory module was run here.
-5. Primary owns VERSION/digest-catalogue bookkeeping and the release-pin rerun.
-
-## Files changed in this round
-
-- Runtime: `learning_store.py`, `learning_contracts.py`, `run_retention.py`.
-- Tests: `test_run_retention.py`, `test_run_retention_integration.py`,
-  `lifetime_caps.json`; registration: `scripts/test-requirements.json`.
-- Measurement tool: `scripts/measure_s14b_retention.py`.
-- Requirements/evidence: `docs/requirements/s14b.md`, this STATUS,
-  `assertions.md`, `fix-measurement.json`, `fix-index-measurement.json`,
-  `fix-real-signatures.json`, `fix-named-evidence.json`,
-  `fix-followup-evidence.json`.
+Runtime: `learning_store.py`, `run_retention.py`, `project_history.py`,
+`project_learning_corpus.py`. Tests: `test_run_retention.py`,
+`test_run_retention_integration.py`. Measurement/registration:
+`scripts/measure_s14b_retention.py`, `scripts/test-requirements.json`.
+Requirements and evidence: `docs/requirements/s14b.md`, this STATUS,
+[assertions.md](assertions.md), `final-*-evidence.json`,
+`final-measurement.json`, `final-index-measurement.json`.
