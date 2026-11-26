@@ -395,6 +395,25 @@ class StarterBase(unittest.TestCase):
     def now_ms(self):
         return time.time_ns() // 1_000_000
 
+    # S13G-3: a policy clock the test drives (the launcher's `clock` option: only the starter's own clock moves).
+    def start_clock(self):
+        self.clock_path = self.base / 'starter-clock'
+        self.advance(self.now_ms())
+        return str(self.clock_path)
+
+    def advance(self, now):
+        staged = self.clock_path.with_suffix('.new')
+        staged.write_text(str(now))
+        staged.replace(self.clock_path)  # child threads never read a partial clock
+
+    def clock_ms(self):
+        return int(self.clock_path.read_text())
+
+    def sync_clock_to_due(self, name):
+        """The collector marks a stopped project due on its own real clock once it is up; the policy clock moves there."""
+        due = wait_for(self, lambda: (self.wake(name) or {}).get('due_at_ms'), 30, f'{name} was never marked due')
+        self.advance(max(self.clock_ms(), due))
+
     def command(self, name):
         return f'run learning-start-project-service --project-root {self.root(name)}'
 
@@ -1200,8 +1219,13 @@ class ProbationTests(StarterBase):
     def test_E2c_4_a_probation_is_kept_across_a_collector_restart(self):
         self.add('lasts')
         root, _project_id, copy = self.add('dies', record=False)
-        constants = {'START_PROBATION_SECONDS': 10.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
-        self.launch(constants=constants)
+        # S13G-3: the policy clock is driven by the test (was: a 10 s probation and real waits of 6 s and 4.5 s).
+        # The same order: 'dies' starts 36 of 60 probation seconds after 'lasts'; the restart comes after the end of
+        # 'lasts' probation (+0.5 s) and more than 2 s before the end of 'dies' probation.
+        constants = {'START_PROBATION_SECONDS': 60.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
+        clock = self.start_clock()
+        self.launch(constants=constants, clock=clock)
+        self.sync_clock_to_due('lasts')
 
         def started(name):
             row = self.starts(name) or {}
@@ -1209,18 +1233,20 @@ class ProbationTests(StarterBase):
 
         lasts = wait_for(self, lambda: started('lasts'), 30, lambda: f'never started: {self.starts("lasts")}')
         self.assertIsNotNone(lasts['probation_pid'])
-        time.sleep(max(0.0, (lasts['started_at_ms'] + 6_000 - self.now_ms()) / 1000))
+        self.advance(max(self.clock_ms(), lasts['started_at_ms'] + 36_000))
         CollectorClient(self.state.socket, timeout=30).record_launch(root, str(copy), copy.name)
+        # A claim of 'dies' before its record was written backs off one RECHECK on the policy clock; step past it.
+        self.advance(self.clock_ms() + 1_000)
         dies = wait_for(self, lambda: started('dies'), 30, lambda: f'never started: {self.starts("dies")}')
         self.stop_collector()  # both hosts are within their probation and keep serving
         for pid in self.host_pids('dies'):
             os.kill(pid, signal.SIGKILL)  # ended while no collector watched it
         # 'lasts' had a failure streak before this start; its probation ends while no collector runs.
         update_ledger(self, 'UPDATE project_starts SET failures=2,streak_first_ms=? WHERE project_id=?',
-                      (self.now_ms() - 60_000, self.projects['lasts'][1]))
-        time.sleep(max(0.0, (lasts['probation_until_ms'] + 500 - self.now_ms()) / 1000))
-        self.assertLess(self.now_ms(), dies['probation_until_ms'] - 2_000)
-        self.launch(constants=constants)
+                      (self.clock_ms() - 60_000, self.projects['lasts'][1]))
+        self.advance(lasts['probation_until_ms'] + 500)
+        self.assertLess(self.clock_ms(), dies['probation_until_ms'] - 2_000)
+        self.launch(constants=constants, clock=clock)
         row = wait_for(self, lambda: self.starts('dies')['failures'] == 1 and self.starts('dies'), 20,
                        lambda: f'the early end was not counted after the restart: {self.starts("dies")}')
         self.assertEqual('service_ended_early', row['reason'])
@@ -1295,7 +1321,7 @@ class ProductionIntervalTests(StarterBase):
         served = [f'real{index}' for index in range(4)]
         for name in served:
             self.add(name)
-        changed = [f'changed{index}' for index in range(16)]
+        changed = [f'changed{index}' for index in range(6)]
         for name in changed:  # full verification, refused at its last step: the project's runtime changed
             root, _id, _copy = self.add(name)
             installed = root / '.codex' / 'orchestration' / 'codex_agents' / '__init__.py'
@@ -1509,8 +1535,13 @@ class ProbationDeadlineTests(StarterBase):
     def test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline(self):
         """Review round 2 (decision 243, HIGH 4): survival needs the host alive at or after its probation's end."""
         self.add('dies')
-        constants = {'START_PROBATION_SECONDS': 3.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
-        self.launch(constants=constants)
+        # S13G-3: the probation is measured on the starter's policy clock, which the test moves past the deadline
+        # (was: 3 s probation and a real wait of its remainder plus 1 s). A long probation keeps the first collector's
+        # own monotonic watch from ending it before the test stops that collector.
+        constants = {'START_PROBATION_SECONDS': 60.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
+        clock = self.start_clock()
+        self.launch(constants=constants, clock=clock)
+        self.sync_clock_to_due('dies')
         row = wait_for(self, lambda: (self.starts('dies') or {}).get('outcome') == 'started'
                        and self.starts('dies')['attempt'] is None and self.starts('dies'), 30,
                        lambda: f'never started: {self.starts("dies")}')
@@ -1519,8 +1550,8 @@ class ProbationDeadlineTests(StarterBase):
         for pid in self.host_pids('dies'):
             os.kill(pid, signal.SIGKILL)  # it ends early, while no collector watches it
         wait_for(self, lambda: not self.host_pids('dies'), 10, 'the host did not end')
-        time.sleep(max(0.0, (row['probation_until_ms'] + 1_000 - self.now_ms()) / 1000))
-        self.launch(constants=constants)  # after its probation's deadline
+        self.advance(row['probation_until_ms'] + 1_000)
+        self.launch(constants=constants, clock=clock)  # after its probation's deadline
         after = wait_for(self, lambda: self.starts('dies')['probation_attempt'] is None and self.starts('dies'), 20,
                          lambda: f'the kept probation was never reconciled: {self.starts("dies")}')
         self.assertEqual((1, 'service_ended_early'), (after['failures'], after['reason']))

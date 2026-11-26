@@ -11,3 +11,9 @@ Numbers (summed fragment seconds from scripts/parallel_tests.py --jobs 16):
   the probation tests or fewer real launches. Next candidates: ProbationTests (12.8 s serial), BackoffTests (17 s serial), ProductionIntervalTests (12 s serial).
 - Load run: modules test_run_retention_scale, test_project_start, test_billing_gate, test_container_stop, test_host_commands,
   test_b2_service_outcome_paths, test_write_merge, test_lost_run_settlement, --jobs 16. metadata_errors [] (no module or fragment added).
+
+## Decision 390 rewrite (done)
+ProbationTests restart, ProbationDeadlineTests and ProductionIntervalTests rewritten (see assertions.md).
+test_project_start: 130.1 alone, 174.4 under the 8-module --jobs 16 load run (ceiling 183.4; one load run only, run-to-run noise ~+-15 s,
+so not yet shown in two runs). test_run_retention_scale 18.1 under load. failed_units [], metadata_errors [].
+Next if more is needed: BackoffTests early-exit (real 4 s own-child probation), crash-loop (5 real host spawns), negative-wait sleeps (1.0-3.0 s).
