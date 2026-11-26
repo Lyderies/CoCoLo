@@ -2506,6 +2506,8 @@ class LearningLedger:
                 migration = getattr(connection, '_hold_migration', None)
                 return self._clock_ms() if migration is None else migration.now_ms
             connection.create_function("ledger_now_ms", 0, ledger_now_ms)
+            from .admission_capture_content import pack_content
+            connection.create_function("admission_capture_content", 4, pack_content, deterministic=True)
             from .legacy_slots import register_legacy_functions
             register_legacy_functions(connection)
             version = connection.execute('PRAGMA user_version').fetchone()[0]

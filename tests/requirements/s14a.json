@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/s14a.md",
+ "requirements": [
+  {
+   "id": "S14A-1",
+   "statement": "At 774 runs per day (2x the sourced 387 peak), two accounts per provider and the full 16-window payload together, real admission intake fits the unchanged 4096-row/2-MiB slot with at least 20 percent byte margin and remaining row capacity.",
+   "source": "tests/requirements/s14a.json#S14A-1"
+  },
+  {
+   "id": "S14A-2",
+   "statement": "The capture retains every candidate and every original content byte losslessly; bounded reconstruction precedes unchanged digest, canonical shape and decision checks. No field is dropped or summarized. Corruption, over-expansion and stale recapture fail closed.",
+   "source": "tests/requirements/s14a.json#S14A-2"
+  },
+  {
+   "id": "S14A-3",
+   "statement": "The accepted S14 runtime-charge parity, independent accounting oracle, cutoffs, anchored claim and exact-limit acceptance / one-byte-over refusal remain green without weakening their assertions.",
+   "source": "tests/requirements/s14a.json#S14A-3"
+  }
+ ]
+}

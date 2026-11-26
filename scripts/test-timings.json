@@ -1,4 +1,6 @@
 {
+ "codex:tests.test_admission_capture_claim": 2.0,
+ "codex:tests.test_admission_capture_bytes": 19.64,
  "claude:tests.test_contracts": 0.05,
  "claude:tests.test_job_read_tool": 0.11,
  "claude:tests.test_journal": 0.11,

@@ -545,6 +545,7 @@ def _returned_admission(ledger, request, pool, handle):
 
 
 def _fresh_admission(ledger, request, intake, snapshot, work_limits, *, appended=None):
+    from .admission_capture_content import pack_content
     from .admission_inputs import AdmissionCaptureLimits
     from .claim_admission import same_admission_inputs
     signer = ledger._current_signer_bytes()
@@ -556,7 +557,9 @@ def _fresh_admission(ledger, request, intake, snapshot, work_limits, *, appended
     if appended is not None:
         originals = [row for row in snapshot.rows if row[1] == request.project_id and row[2] == appended['record_id']]
         rows = [row for row in current.rows if row[1] == request.project_id and row[2] == appended['record_id']]
-        if (len(rows) != 1 or rows[0][4] != 'admission_decision' or rows[0][5] != canonical_json(appended)
+        packed = pack_content(appended['record_type'], canonical_json(appended),
+                              appended['record_id'], appended['observed_at_ms'])
+        if (len(rows) != 1 or rows[0][4] != 'admission_decision' or rows[0][5] != packed
                 or rows[0][6] != content_digest(appended) or rows[0][7] != 'lifecycle'
                 or (originals and originals != rows)):
             raise OpenError('open_preparation_stale')

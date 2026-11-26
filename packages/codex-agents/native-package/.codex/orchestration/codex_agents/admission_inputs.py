@@ -14,6 +14,9 @@ from .signature_inputs import OwnerGeneration
 
 MAX_ADMISSION_CAPTURE_ROWS = 4096
 MAX_ADMISSION_CAPTURE_BYTES = 64 * 1_048_576
+# S14a measured maximum: 2.612 decoded-content bytes per admission charge byte.
+# Three adds 14.9% margin; applied to the caller's limit, not the global ceiling.
+ADMISSION_DECODED_CONTENT_MULTIPLE = 3
 ADMISSION_CAPTURE_RECORD_TYPES = frozenset({
     "provider_identity", "billing_attestation", "provider_billing",
     "provider_headroom", "admission_decision", "probe_admission",
@@ -81,7 +84,9 @@ class AdmissionInputPolicy:
 
 
 # rowid, project, record id, sequence, type, canonical content, digest, source,
-# observation time, ingestion time, owner signature. Raw content is unparsed.
+# observation time, ingestion time, owner signature. Content is unparsed and may
+# use admission_capture_content's lossless owner-local packing. The digest always
+# names the original canonical record. This is never a persisted/wire format.
 AdmissionInputRow = tuple[int, str, str, int, str, bytes, str, str, int, int, bytes | None]
 
 
@@ -89,16 +94,24 @@ def admission_input_size(
     project_id: str, provider: str, runtime_digest: str, policy: AdmissionInputPolicy,
     owner: OwnerGeneration | None, signer: bytes | None, rows: tuple[AdmissionInputRow, ...],
 ) -> int:
-    """Copied field bytes plus fixed-width integer accounting, not heap size."""
+    """Retained field bytes, including shared metadata copies once, not heap size.
+
+    Owner capture pools identical project/type/source strings within one snapshot;
+    the detached decoder verifies that actual sharing before accepting the charge.
+    """
     size = (len(project_id.encode("utf-8")) + len(provider) + len(runtime_digest) + 24
             + len(policy.minimum_version) + len(policy.maximum_exclusive_version))
     if owner is not None:
         size += 16 + len(owner[1]) + len(owner[2])
     if signer is not None:
         size += len(signer)
+    shared = set()
     for _, project, identifier, _, kind, content, digest, source, _, _, signature in rows:
-        size += (32 + len(project.encode("utf-8")) + len(identifier.encode("utf-8"))
-                 + len(kind) + len(content) + len(digest) + len(source.encode("utf-8")))
+        size += 32 + len(identifier.encode("utf-8")) + len(content) + len(digest)
+        for value in (project, kind, source):
+            if value not in shared:
+                size += len(value.encode("utf-8"))
+                shared.add(value)
         if signature is not None:
             size += len(signature)
     return size

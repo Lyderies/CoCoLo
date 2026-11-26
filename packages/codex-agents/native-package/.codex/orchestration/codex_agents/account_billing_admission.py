@@ -416,13 +416,16 @@ class AccountBillingAdmission:
     def _fresh(self, reservation, snapshot, *, appended=None):
         """`appended`: the record (or records) this generation itself wrote after its snapshot: its admission record
         and, for a completed run, the run's own readings. Each must be in the ledger exactly as written."""
+        from .admission_capture_content import pack_content
         current = self._capture(reservation.project, snapshot.anchor_ms)
         expected = snapshot
         for record in () if appended is None else (appended if type(appended) is list else [appended]):
             rows = [r for r in current.rows if r[1] == reservation.project and r[2] == record['record_id']]
             originals = [r for r in snapshot.rows if r[1] == reservation.project and r[2] == record['record_id']]
             source = 'lifecycle' if record['record_type'] == 'probe_admission' else 'provider'
-            if (len(rows) != 1 or rows[0][4] != record['record_type'] or rows[0][5] != canonical_json(record)
+            packed = pack_content(record['record_type'], canonical_json(record),
+                                  record['record_id'], record['observed_at_ms'])
+            if (len(rows) != 1 or rows[0][4] != record['record_type'] or rows[0][5] != packed
                     or rows[0][6] != content_digest(record) or rows[0][7] != source
                     or (originals and originals != rows)):
                 raise ProbeAdmissionError('probe_conflict')
