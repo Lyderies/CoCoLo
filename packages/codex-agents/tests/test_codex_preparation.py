@@ -500,7 +500,8 @@ class CodexPreparationTests(unittest.TestCase):
         found = health_workspaces.WorkspaceCheck(container=workspace.parent, live=lambda: set(), pending=lambda: set(),
                                                  state_root=state_root).run(
             health_monitor.CheckContext(deadline=time.monotonic() + 30, now_ms=later, since_last_pass_ms=None))
-        self.assertIn(('owner_unknown', workspace.name), [(item.reason_code, item.subject) for item in found])
+        self.assertEqual([('owner_unknown', 'folders')], [(item.reason_code, item.subject) for item in found])  # PREP-1
+        self.assertTrue(found[0].text.startswith('1 leftover CoCoLo preparation folder is not in use'))
         self.assertTrue(workspace.is_dir())
         self.discard(handle)
         self.assertFalse(workspace.exists())

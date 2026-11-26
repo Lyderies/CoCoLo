@@ -69,4 +69,6 @@ Limits stated plainly:
 
 Changed assertion (old -> new): `OwnerProofTests.test_HM2A_1_a_folder_without_an_owner_marker_is_reported_and_never_removed`: finding subject was the folder's name -> `folders` (PREP-1).
 
-Wording change (safety, primary): the step was "delete only after you quit CoCoLo" -> "delete only when no CoCoLo service is running on this Mac (check every project)" (the scratch folder is shared by all projects). Test assertion `assertIn('quit', text)` -> `assertIn('no CoCoLo service runs on this Mac (any project)', text)`; `assertIn(str(container), text)` -> `assertIn('scratch folder', text)` (with the safe wording the path rarely fits 240 characters, so the general words are the usual form).
+Wording change (safety, primary): the step was "delete only after you quit CoCoLo" -> "delete only when no CoCoLo service is running on this Mac (check every project)" (the scratch folder is shared by all projects). The wording is covered by new tests (`assertIn('quit', ...)` and `assertIn(str(container), ...)` were only drafts of them and never existed at base 6edd6a79).
+
+Existing assertions changed (old -> new): `test_health_workspaces.py:644` `found[0].subject` was the folder's name -> `'folders'` (PREP-1: one finding for all folders); `test_codex_preparation.py:503` `assertIn(('owner_unknown', workspace.name), ...)` -> `assertEqual([('owner_unknown', 'folders')], ...)` plus a check that the text starts with the singular `1 leftover CoCoLo preparation folder is not in use` (PREP-1: subject is `folders`, count 1).
