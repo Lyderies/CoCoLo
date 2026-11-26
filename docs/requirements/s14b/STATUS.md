@@ -232,8 +232,12 @@ inside the consented records-upgrade step on every path that performs it, never 
 - B4t takeover adoption (`takeover_owner.OwnerOperations.adopt_ledger`): RED before (0 indexes after adoption of the
   archived 0.8.66 store, `5 != 0`), now calls `ledger.create_retention_indexes()` inside the owner open. Test
   `test_b4t_takeover.AccountLineageTests.test_S14b_6_takeover_adoption_creates_the_retention_indexes_on_the_consented_open`.
-- Not covered by the decision's list: `cli _migrate_learning` (learning-migrate) also opens with
-  `allow_schema_upgrade=True`; it is a history move, not the records-upgrade consent, so it creates none.
+- `learning-migrate-project` (`cli._migrate_learning`) opens with `allow_schema_upgrade=True` and CAN perform the 17 -> 18
+  step: RED before (schema 18, 0 indexes), now it creates the five indexes in the same drained-owner operation when the
+  open performed the step (`_ledger_takes_additive_step`). Test `test_learning_migrate_that_performs_the_schema_step_creates_the_indexes`.
+- Primary decision (running-collector registration): accepted as is. In 0.8.68 a live ledger reaches 18 only through
+  takeover adoption (creates the indexes), `--upgrade-ledger` or learning-migrate (both create them); no new collector
+  operation. The running-collector test stays as a guard.
 - Registered: requirement in `tests/requirements/s14b.json` and `scripts/test-requirements.json`, module
   `test_s14b_upgrade_indexes` in layers/stages/timings. Live proof after install (indexes present on the local ledger,
   `retention_due` set) is still to do (decision 349).

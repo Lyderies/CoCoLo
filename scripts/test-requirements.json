@@ -4908,6 +4908,7 @@
   "checks": [
    "codex:tests.test_b4t_takeover.AccountLineageTests.test_S14b_6_takeover_adoption_creates_the_retention_indexes_on_the_consented_open",
    "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_cli_upgrade_ledger_creates_the_five_indexes_and_a_sweep_removes_a_record",
+   "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_learning_migrate_that_performs_the_schema_step_creates_the_indexes",
    "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_registration_with_a_running_collector_keeps_the_indexes_of_the_consented_step"
   ],
   "source": "tests/requirements/s14b.json#S14b-6",

@@ -982,6 +982,21 @@ def _migration_state(snapshot):
     return "pending" if snapshot["has_learning"] else "not_needed"
 
 
+def _ledger_takes_additive_step(state):
+    """True when the ledger is at schema 17, so an owner open performs the additive 17 -> 18 step."""
+    import sqlite3
+    try:
+        if not state.database.is_file() or not state.database.stat().st_size:
+            return False
+        connection = sqlite3.connect(state.database.as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            return int(connection.execute("PRAGMA user_version").fetchone()[0]) == 17
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return False
+
+
 def _migrate_learning(args):
     """Move, report or roll back one project's learning history: offline owner work.
 
@@ -1016,7 +1031,12 @@ def _migrate_learning(args):
             raise
     ledger = history = None
     try:
+        steps = _ledger_takes_additive_step(state)
         ledger = LearningLedger(state, allow_schema_upgrade=True)
+        if steps:
+            # S14b-6 (decision 349): this open performed the 17 -> 18 step under the owner's migration
+            # consent, so the retention indexes are created in the same operation (drained offline owner).
+            ledger.create_retention_indexes()
         project_id = ledger.project_for_root(args.project_root)
         try:
             history = open_offline_history(state, project_id)

@@ -112,3 +112,8 @@ See docs/requirements/s14b/STATUS.md "S14b-6". Requirement id S14b-6 (S14b-5 was
 - Modules (named list from the brief plus test_learning_cli and the op-set pin modules): 37 units, 567 tests, 123.9 s, 0 failed, metadata_errors empty, requirement_failures empty. No --affected/full run, no VERSION bump.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### S14b-6 follow-up: learning-migrate (primary decision)
+`cli._migrate_learning` can perform the 17 -> 18 step. Test first (red: schema 18 with 0 indexes after `learning-migrate-project` on a schema-17 ledger), then `_ledger_takes_additive_step` + `create_retention_indexes()` in the same operation. The fixture was split so only the two upgrade tests downgrade to schema 6. Running-collector registration accepted as is (no new collector op). Modules: the part-2 list plus test_learning_migration: 39 units, 585 tests, 128.9 s, 0 failed, metadata_errors empty. No VERSION bump.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
