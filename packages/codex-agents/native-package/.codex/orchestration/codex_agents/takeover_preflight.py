@@ -260,6 +260,7 @@ def read_plan(state, project_root, *, runtime_locked=False):
         # does not name this tree's entry moves on to the next trusted tree. Only when no trusted tree's entry
         # matches does the unproven outcome apply, to the first trusted tree, exactly as before.
         unproven = None
+        captured = []  # one candidate identity (peer pid) per planning pass, shared by every trusted tree
         for candidate in candidates:
             try:
                 identity = trusted_package(candidate, releases=releases)
@@ -292,7 +293,9 @@ def read_plan(state, project_root, *, runtime_locked=False):
                                                for node in ast.walk(ast.parse(api.read_bytes())))
                 process, pid, stop = None, None, 'stop_op' if stop_op else 'signal'
                 try:
-                    pid = _peer(endpoint)
+                    if not captured:
+                        captured.append(_peer(endpoint))
+                    pid = captured[0]
                     from .takeover_process import foreign_lock_holder
                     if foreign_lock_holder(pid, (state.root / 'projects' / row['project_id'] / 'history.lock',
                                                  directory / 'host.lock')):

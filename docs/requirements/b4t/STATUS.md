@@ -414,3 +414,7 @@ migration/admission permission.
 [Changed-file manifest](files.md). `git diff --check` passes. No path in these
 requirement documents names an absolute home directory; no raw logs are copied
 here. No VERSION or digest-catalogue file appears in the changed-file list.
+
+## 0.8.69 install refusal: Codex review corrections (decision 372)
+- MED: idle unproven text no longer advises `kill <pid>` (pid reuse bypasses the A1 pin/recheck). New: "Nothing was changed. Retry ./setup.sh --update. If it is refused again, collect `ps -o pid,lstart,command -p <pid>` and the setup output and ask for help (docs/troubleshooting.md, 'Update hand-over')." docs/troubleshooting.md matches. Assertion in test_B4t_0869_idle_service_that_cannot_be_proven_names_a_working_step: old `assertIn("kill {pid}")` -> new `assertNotIn('kill')` + exact new wording (test of wording added in df9fd5d1).
+- LOW: takeover_preflight captures one peer pid per planning pass, shared by every trusted tree. Test test_one_peer_identity_is_captured_per_planning_pass (registered RS-B-B4t-0, RS-B-B4t-3).

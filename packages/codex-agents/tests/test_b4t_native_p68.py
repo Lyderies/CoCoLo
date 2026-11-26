@@ -146,7 +146,8 @@ class RealP68LaunchCopyTests(StarterBase):
         self.assertNotIn('0 child runs', text)
         self.assertIn('no child run', text)
         self.assertIn(f'ps -o pid,lstart,command -p {pid}', text)
-        self.assertIn(f'kill {pid}', text)
+        self.assertNotIn('kill', text)
+        self.assertIn('Retry ./setup.sh --update. If it is refused again, collect `ps -o pid,lstart,command -p '+str(pid)+'` and the setup output and ask for help', text)
         self.assertIn('Nothing was changed', text)
         self.assertIn('./setup.sh --update', text)
         from codex_agents.process_tree import process_gone

@@ -21,9 +21,9 @@ A1_WRITE_FREE = {
 A1_IDLE_UNPROVEN = {
     True: ("The update stopped (predecessor_unproven): this project's old service has no child run in progress, but "
            "it could not be confirmed to be this project's own service, so it was not stopped. Nothing was changed. "
-           "Check it with: ps -o pid,lstart,command -p {pid}. If that line names this project's project_host.py "
-           "with this project's folder, stop it with: kill {pid}. Then run ./setup.sh --update. "
-           "See docs/troubleshooting.md, 'Update hand-over'."),
+           "Nothing was changed. Retry ./setup.sh --update. If it is refused again, collect "
+           "`ps -o pid,lstart,command -p {pid}` and the setup output and ask for help "
+           "(docs/troubleshooting.md, 'Update hand-over')."),
     False: ("The update stopped (predecessor_unproven): this project's old service has no child run in progress, but "
             "its process could not be read, so it could not be confirmed to be this project's own service and it "
             "was not stopped. Nothing was changed. Wait a minute and run ./setup.sh --update again; if it stops the "

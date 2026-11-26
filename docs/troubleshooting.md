@@ -166,9 +166,9 @@ An installed service runs from its protected runtime copy under
 `~/.codex/agent-orchestration/`; the update accepts that copy's
 `project_host.py` as well as the project's own. If an idle service still cannot
 be confirmed, the message says it has no child run in progress and names its
-process number: check it with `ps -o pid,lstart,command -p <pid>`, and if that
-line names this project's `project_host.py` and this project's folder, stop it
-with `kill <pid>`, then run `./setup.sh --update`.
+process number. Nothing was changed. Retry `./setup.sh --update`. If it is
+refused again, collect `ps -o pid,lstart,command -p <pid>` and the setup output
+and ask for help.
 
 `project_store_busy` means another program, such as a backup or records command,
 is using this project's records. Nothing was changed. Let it finish, then run
