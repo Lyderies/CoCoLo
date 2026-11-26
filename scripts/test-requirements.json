@@ -2453,6 +2453,28 @@
   "source": "tests/requirements/s13.json#RS-10-DUE-PROD",
   "statement": "1,000 due holds are released within 60 s through the real driver maintenance step and real persistence writer: one lease pass at limit 64 per request, full or backed-off passes continued on the next driver step, otherwise the ten-second cadence applies."
  },
+ "RS-10-DUE-TX-1": {
+  "checks": [
+   "codex:tests.test_s13_batch_tx.BatchTransactionTests.test_a_row_that_fails_verification_rolls_back_alone_is_backed_off_and_the_others_commit"
+  ],
+  "source": "tests/requirements/s13.json#RS-10-DUE-TX-1",
+  "statement": "A start-pass batch (at most 64 rows) commits in one transaction with a savepoint per row: a row that fails verification mid-batch rolls back alone, is backed off like any blocked row, the failure is reported after the batch, and every other row of the batch commits."
+ },
+ "RS-10-DUE-TX-2": {
+  "checks": [
+   "codex:tests.test_s13_batch_tx.BatchTransactionTests.test_a_kill_at_the_batch_commit_leaves_every_row_reserved_and_removes_no_file",
+   "codex:tests.test_s13_batch_tx.BatchTransactionTests.test_a_kill_in_the_middle_of_the_batch_leaves_every_row_reserved_and_the_next_pass_releases_each_once"
+  ],
+  "source": "tests/requirements/s13.json#RS-10-DUE-TX-2",
+  "statement": "A crash or kill before the batch COMMIT (mid-batch or at the commit) leaves every row of the batch reserved; the next pass releases them all exactly once, with no double release and no lost file removal (file removal runs only after the commit)."
+ },
+ "RS-10-DUE-TX-3": {
+  "checks": [
+   "codex:tests.test_s13_batch_tx.BatchTransactionTests.test_an_error_that_is_not_a_history_error_rolls_the_whole_batch_back_and_the_next_pass_redoes_it"
+  ],
+  "source": "tests/requirements/s13.json#RS-10-DUE-TX-3",
+  "statement": "An error that is not a HistoryError mid-batch rolls the whole batch back: every row stays reserved and held, the error surfaces unchanged, no transaction is left open, and the next pass redoes the batch; file removal happens only for rows whose release committed."
+ },
  "RS-10-FLAT": {
   "checks": [
    "codex:tests.test_s13_budgets.S13Budgets.test_b6_start_pass_work_is_equal_with_and_without_released_leases_of_history"

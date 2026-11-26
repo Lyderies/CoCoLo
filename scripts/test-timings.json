@@ -3204,5 +3204,6 @@
  "codex:tests.test_s15_owner_caps": 10.4,
  "codex:tests.test_s15_failure_matrix": 14.0,
  "codex:tests.test_s14f_owner_bounds": 30.0,
- "codex:tests.test_s14g_hold_queries": 1.2
+ "codex:tests.test_s14g_hold_queries": 1.2,
+ "codex:tests.test_s13_batch_tx": 4.0
 }

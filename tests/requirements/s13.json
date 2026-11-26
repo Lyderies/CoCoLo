@@ -22,6 +22,21 @@
    "source": "tests/requirements/s13.json#RS-10-DUE"
   },
   {
+   "id": "RS-10-DUE-TX-1",
+   "statement": "A start-pass batch (at most 64 rows) commits in one transaction with a savepoint per row: a row that fails verification mid-batch rolls back alone, is backed off like any blocked row, the failure is reported after the batch, and every other row of the batch commits.",
+   "source": "tests/requirements/s13.json#RS-10-DUE-TX-1"
+  },
+  {
+   "id": "RS-10-DUE-TX-2",
+   "statement": "A crash or kill before the batch COMMIT (mid-batch or at the commit) leaves every row of the batch reserved; the next pass releases them all exactly once, with no double release and no lost file removal (file removal runs only after the commit).",
+   "source": "tests/requirements/s13.json#RS-10-DUE-TX-2"
+  },
+  {
+   "id": "RS-10-DUE-TX-3",
+   "statement": "An error that is not a HistoryError mid-batch rolls the whole batch back: every row stays reserved and held, the error surfaces unchanged, no transaction is left open, and the next pass redoes the batch; file removal happens only for rows whose release committed.",
+   "source": "tests/requirements/s13.json#RS-10-DUE-TX-3"
+  },
+  {
    "id": "RS-B-9-B6-MECH",
    "statement": "RS-B draft 4 section 5 (bounded selection, back-off, re-due order): a start-pass batch selects at most 64 rows and a blocked row gets a back-off so later batches do not examine it before it is due.",
    "source": "tests/requirements/s13.json#RS-B-9-B6-MECH"
