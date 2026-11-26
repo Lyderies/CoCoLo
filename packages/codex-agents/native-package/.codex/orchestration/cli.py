@@ -127,7 +127,7 @@ from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
     HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
-    provider_state_snapshot_client, routing_evidence_client, owner_learning_client, orchestration_report_client, orchestration_counts_client, capacity_report_client, holds_report_client, runtime_hint_path,
+    provider_state_snapshot_client, routing_evidence_client, owner_learning_client, orchestration_report_client, orchestration_counts_client, run_usage_client, capacity_report_client, holds_report_client, runtime_hint_path,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
@@ -2920,7 +2920,7 @@ def main() -> int:
             for name in ('project_holds', 'result_custody', 'result_retirement_repairs', 'recovery_pending'):
                 report[name] = None if holds is None else holds[name]
             # S44a: where each provider's per-run usage is.
-            report['run_usage'] = status_run_usage()  # names the report; the client opens no database
+            report['run_usage'] = status_run_usage(run_usage_client(args.state_root, args.project_root, host_client=label))  # the service's reading; the client opens no database
             if holds is not None and holds['recovery_pending']['stale']:
                 report['recovery_pending_notice'] = 'Recovery was not checked recently.'
             # T7 S2 (L14.1): orchestrations live in the project's own store, so its service's count replaces the

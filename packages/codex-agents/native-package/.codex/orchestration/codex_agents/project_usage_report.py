@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 import sqlite3
 import stat
-import time
 import urllib.parse
 from pathlib import Path
 
@@ -261,17 +260,28 @@ def usage_report(state, project_root, since_ms: int, until_ms: int, limit: int =
 
 
 def _recorded_span(connection, project_id):
-    """(first, last) time any run of the project was recorded in this store, or (None, None)."""
-    # A run is counted at its usage record's time; only a project with none (an earlier version's runs) is read by
-    # its outcomes' times.
-    for kind, source in (("record_type IN (?,?)", "provider"), ("record_type=?", "host")):
-        names = _USAGE_TYPES if source == "provider" else ("outcome",)
-        first, last = connection.execute(
-            f"SELECT MIN(observed_at_ms),MAX(observed_at_ms) FROM records WHERE project_id=? AND {kind} AND source=?",
-            (project_id, *names, source)).fetchone()
-        if type(first) is int and type(last) is int:
-            return first, last
-    return None, None
+    """(first, last) time any run of the project was recorded in this store, or (None, None).
+
+    A run counts at its usage record's time; a run with no usage record at all (an earlier version's) counts at
+    its outcome's time, as the rows of a window do. Both kinds count here, so the span never skips one.
+    """
+    marks = ",".join("?" for _ in _USAGE_TYPES)
+    times = []
+    usage_runs = set()
+    for blob, observed in connection.execute(
+            f"SELECT content,observed_at_ms FROM records WHERE project_id=? AND record_type IN ({marks}) "
+            "AND source='provider'", (project_id, *_USAGE_TYPES)):
+        value = _record(blob)
+        if value is not None and type(observed) is int:
+            usage_runs.add(value["run_id"])
+            times.append(observed)
+    for blob, observed in connection.execute(
+            "SELECT content,observed_at_ms FROM records WHERE project_id=? AND record_type='outcome' "
+            "AND source='host'", (project_id,)):
+        value = _record(blob)
+        if value is not None and type(observed) is int and value["run_id"] not in usage_runs:
+            times.append(observed)
+    return (min(times), max(times)) if times else (None, None)
 
 
 def _window_data(runs, recorded, since_ms, until_ms):
@@ -283,7 +293,8 @@ def _window_data(runs, recorded, since_ms, until_ms):
             "last_run_recorded": None if last is None else _iso(last), "runs_without_usage": 0}
     if runs:
         data.update(state="has_runs", runs_without_usage=sum(1 for run in runs if not run["usage_complete"]))
-        data["note"] = ("Runs without complete usage are listed with their tokens left empty, never as zero."
+        data["note"] = ("Runs without complete usage are listed with the tokens they did report and the others left "
+                        "empty, never as zero."
                         if data["runs_without_usage"] else "Every run in this window has complete usage.")
     elif first is None:
         data.update(state="nothing_recorded", note="No run has any usage or outcome recorded for this project, so "
@@ -304,13 +315,18 @@ PRIMARY_SESSION_NOTE = (
 
 
 def _coverage(runs):
-    """Per provider, whether the window's child runs reported their usage: reported, partial, not_reported, no_runs."""
+    """Per provider, whether the window's child runs reported their usage.
+
+    reported: every run has complete usage; partial: some usage came in (a run with only some of its counts
+    counts too); not_reported: runs, but no count at all; no_runs: none.
+    """
     children = {}
     for provider in ("codex", "claude"):
         mine = [run for run in runs if run["provider"] == provider]
         complete = sum(1 for run in mine if run["usage_complete"])
+        some = sum(1 for run in mine if run["usage_complete"] or any(run[field] is not None for field in _TOKENS))
         state = ("no_runs" if not mine else "reported" if complete == len(mine)
-                 else "not_reported" if complete == 0 else "partial")
+                 else "not_reported" if some == 0 else "partial")
         children[provider] = {"state": state, "runs": len(mine), "runs_with_complete_usage": complete}
     return {"child_runs": children,
             "primary_session": {"state": "not_reported", "note": PRIMARY_SESSION_NOTE}}
@@ -319,16 +335,61 @@ def _coverage(runs):
 STATUS_USAGE_DAYS = 7
 
 
-def status_run_usage():
-    """What learning-status shows beside the hook coverage flags: where each child run's usage is.
+def service_run_usage(history, now_ms: int) -> dict:
+    """The last days' child runs of this project's own store, per provider (the service's reading for status).
 
-    learning-status is a client and opens no database, so it names the report that reads the runs; the counts
-    live there (usage_coverage), never invented here. Plain JSON data only.
+    Bounded to MAX_ROWS runs; `truncated` says when more were cut. Content-free: counts and states only.
     """
-    return {"state": "see_report", "report_command": "learning-usage-report", "window_days": STATUS_USAGE_DAYS,
-            "note": f"Each child run's tokens are recorded from the child's own output and listed by "
-                    f"learning-usage-report, which also says per provider whether they were reported. "
-                    f"{PRIMARY_SESSION_NOTE}"}
+    rows, more = _rows(history._connection, history.project_id, max(0, now_ms - STATUS_USAGE_DAYS * 86_400_000),
+                       now_ms + 1, MAX_ROWS)
+    runs = []
+    for observed, run_id, provider, model, outcome, (complete, inputs, outputs, creation, cached) in rows[:MAX_ROWS]:
+        name = _text(outcome.get("model")) if outcome else None
+        if provider is None:
+            try:
+                provider = provider_for_model(name or model)
+            except ContractError:
+                provider = "unknown"
+        runs.append({"provider": provider, "usage_complete": bool(complete), "input_tokens": _integer_or_none(inputs),
+                     "output_tokens": _integer_or_none(outputs), "cache_creation_input_tokens": _integer_or_none(creation),
+                     "cache_read_input_tokens": _integer_or_none(cached)})
+    return {"window_days": STATUS_USAGE_DAYS, "truncated": more or len(rows) > MAX_ROWS, **_coverage(runs)}
+
+
+def checked_run_usage(value) -> None:
+    """Reject open fields and malformed values of the service's run-usage reply before presentation."""
+    from .history_contracts import HistoryError, valid_integer
+
+    def require(condition):
+        if not condition:
+            raise HistoryError("history_invalid_response")
+
+    require(type(value) is dict and value.keys() == {"window_days", "truncated", "child_runs", "primary_session"})
+    require(value["window_days"] == STATUS_USAGE_DAYS and type(value["truncated"]) is bool)
+    children = value["child_runs"]
+    require(type(children) is dict and children.keys() == {"codex", "claude"})
+    for entry in children.values():
+        require(type(entry) is dict and entry.keys() == {"state", "runs", "runs_with_complete_usage"})
+        require(entry["state"] in ("no_runs", "reported", "partial", "not_reported"))
+        require(valid_integer(entry["runs"], maximum=MAX_ROWS) and valid_integer(entry["runs_with_complete_usage"],
+                                                                                maximum=entry["runs"]))
+    require(value["primary_session"] == {"state": "not_reported", "note": PRIMARY_SESSION_NOTE})
+
+
+def status_run_usage(service_reply) -> dict:
+    """What learning-status shows beside the hook coverage flags, from the project's running service.
+
+    The status client opens no database: `service_reply` is the service's answer, or None when the service is not
+    running. Unknown is shown as unknown (null, with the reason), never as zero.
+    """
+    if service_reply is None:
+        return {"state": "unavailable", "window_days": STATUS_USAGE_DAYS, "truncated": None, "child_runs": None,
+                "primary_session": None, "report_command": "learning-usage-report",
+                "note": "This project's service is not running or did not answer, so recent run usage is unknown "
+                        "(not zero). learning-usage-report reads it from the stored records."}
+    return {"state": "available", **service_reply, "report_command": "learning-usage-report",
+            "note": f"Per provider, whether the last {STATUS_USAGE_DAYS} days' child runs reported their usage; "
+                    f"learning-usage-report lists the runs and tokens. {PRIMARY_SESSION_NOTE}"}
 
 
 def _iso(milliseconds: int) -> str:

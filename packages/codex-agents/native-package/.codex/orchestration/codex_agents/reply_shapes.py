@@ -160,6 +160,7 @@ REPLY_FIELDS = {'account.billing_probe': {'optional': ['billing_waivers', 'clien
                                           'record_id',
                                           'result_digest']},
  'history.holds_report': {'optional': [], 'required': ['project_holds', 'recovery_pending', 'result_custody', 'result_retirement_repairs']},
+ 'history.run_usage': {'optional': [], 'required': ['child_runs', 'primary_session', 'truncated', 'window_days']},
  'history.orchestration_counts': {'optional': [], 'required': ['active', 'closed', 'paused']},
  'history.issue_qa_checks': {'optional': [],
                              'required': ['check_receipt',

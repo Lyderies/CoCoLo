@@ -236,50 +236,149 @@ class RecordedChildRunsReachTheReportTests(test_bridge.BridgeTestCase):
         self.assertIn("hook", report["usage_coverage"]["primary_session"]["note"].lower())
 
 
-class StatusRunUsageTests(InstalledUsageCase):
-    """S44a-2: learning-status says where per-run usage is, instead of leaving `root_usage: false` to be misread."""
+STATUS_PROGRAM = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+import cli
+from codex_agents import client_runtime, history_api
+from codex_agents.project_history import ProjectHistory
+from codex_agents.history_service import HistoryService, HistoryAuthorization
+from codex_agents.history_api import history_request_digest
+directory, project, runtime, mode, root = Path(sys.argv[2]), sys.argv[3], "a" * 64, sys.argv[4], sys.argv[5]
+store = ProjectHistory(directory, project)
+service = HistoryService(project, runtime, lambda: store, close_history=False,
+    authorizer=lambda request, token: HistoryAuthorization(project, runtime,
+        history_request_digest(request), "host", frozenset({"history.run_usage"})))
+scope = SimpleNamespace(project_id=project, runtime_digest=runtime)
+def down(endpoint, raw, **kw):
+    raise OSError("the project's service is not running")
+with mock.patch.object(cli, "_require_protected_runtime"), mock.patch.object(cli, "_require_own_roots"), \\
+     mock.patch.object(cli, "_start_collector_quietly"), \\
+     mock.patch.object(cli, "status_client", return_value={"ready": True}), \\
+     mock.patch.object(cli, "capacity_report_client", return_value=None), \\
+     mock.patch.object(cli, "holds_report_client", return_value=None), \\
+     mock.patch.object(client_runtime, "read_runtime_hint", return_value=(scope, None, directory / "unused.sock")), \\
+     mock.patch.object(client_runtime, "enroll_clients"), \\
+     mock.patch.object(history_api, "exchange_frame",
+                       side_effect=down if mode == "down" else (lambda endpoint, raw, **kw: service.handle(raw, None))):
+    sys.argv = ["cli.py", "learning-status", "--state-root", root, "--project-root", root]
+    assert cli.main() == 0
+service.close()
+store.close()
+'''
 
-    __why_not_scenario__ = ('The real status helper reads a real default state root and stores; learning-status itself '
-                            'needs a running collector, which a test does not start.')
+
+class StatusRunUsageTests(InstalledUsageCase):
+    """S44A-2: learning-status says, per provider, whether the child runs reported usage: from the project's running
+    service (the status client opens no database), or unknown with a plain reason when the service is not there."""
+
+    __why_not_scenario__ = ('The real learning-status command and the real history service run in one process; the '
+                            'collector, enrollment and sockets are stubbed, so no live scenario.')
+
+    def status(self, mode: str) -> tuple[dict, str]:
+        from tests.support import ORCHESTRATION_ROOT
+        self.store.close()
+        done = subprocess.run(
+            [sys.executable, "-I", "-B", "-S", "-c", STATUS_PROGRAM, str(ORCHESTRATION_ROOT),
+             str(self.state_root.resolve() / "projects" / self.project_id), self.project_id, mode,
+             str(self.state_root)], capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        return json.loads(done.stdout, parse_constant=lambda name: self.fail(f"non-JSON constant {name}")), done.stdout
 
     @requirements('S44A-2')
-    def test_s44a_2_status_says_where_run_usage_is_without_opening_any_database(self) -> None:
-        # learning-status is a client: it never opens a database (test_cli_status_client_boundary), so it names the
-        # report that reads the runs instead of reading them.
-        from codex_agents.project_usage_report import status_run_usage
-        with mock.patch("sqlite3.connect", side_effect=AssertionError("status opened a database")):
-            shown = status_run_usage()
-        self.assertEqual("see_report", shown["state"])
-        self.assertIn("learning-usage-report", shown["report_command"])
+    def test_s44a_2_status_shows_per_provider_coverage_from_the_service(self) -> None:
+        now = int(time.time() * 1000)
+        self.finished(now - HOUR, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
+        self.finished(now - 2 * HOUR, model=CLAUDE, role="claude_agents_researcher", usage=None)
+        report, text = self.status("up")
+        shown = report["run_usage"]
+        self.assertEqual("available", shown["state"])
+        self.assertEqual(("reported", "not_reported"), (shown["child_runs"]["codex"]["state"],
+                                                        shown["child_runs"]["claude"]["state"]))
+        self.assertEqual("not_reported", shown["primary_session"]["state"])
         self.assertIn("learning-usage-report", shown["note"])
-        self.assertIn("hook", shown["note"].lower())
+        self.assertNotIn("run-private", text)
+
+    @requirements('S44A-2')
+    def test_s44a_2_status_says_unknown_with_a_reason_when_the_service_is_not_running(self) -> None:
+        now = int(time.time() * 1000)
+        self.finished(now - HOUR, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
+        shown = self.status("down")[0]["run_usage"]
+        self.assertEqual("unavailable", shown["state"])
+        self.assertIsNone(shown["child_runs"])  # unknown is null, never zero
+        self.assertIn("unknown", shown["note"])
+        self.assertIn("not running", shown["note"])
+
+    @requirements('S44A-2')
+    def test_s44a_2_status_coverage_reads_only_the_last_days(self) -> None:
+        now = int(time.time() * 1000)
+        self.finished(now - 30 * 24 * HOUR, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
+        shown = self.status("up")[0]["run_usage"]
+        self.assertEqual("no_runs", shown["child_runs"]["codex"]["state"])
 
     @requirements('S44A-2')
     def test_s44a_2_learning_status_carries_the_run_usage_and_stays_read_only(self) -> None:
         source = (self.cli).read_text()
         start = source.index('elif args.command == "learning-status"')
         branch = source[start:source.index("elif args.command", start + 10)]
-        self.assertIn("status_run_usage", branch)
-        self.assertIn("run_usage", branch)
+        self.assertIn("run_usage_client", branch)
+        self.assertNotIn("usage_report(", branch)  # the client reads no store
 
     @requirements('S44A-2')
-    def test_s44a_2_every_json_output_here_is_strict_json_with_the_new_fields(self) -> None:
-        # Plain-language lines belong to human output only: each JSON document parses with no extra text and no
-        # NaN or Infinity, and carries run_usage / usage_coverage / window_data.
-        from codex_agents.project_usage_report import status_run_usage
+    def test_s44a_2_a_partial_measurement_is_partial_and_its_note_matches_the_values(self) -> None:
+        self.finished(T0 + HOUR, model=CLAUDE, role="claude_agents_researcher", usage={"input_tokens": 12})
+        report = self.report()
+        run = report["runs"][0]
+        self.assertEqual((False, 12, None), (run["usage_complete"], run["input_tokens"], run["output_tokens"]))
+        self.assertEqual("partial", report["usage_coverage"]["child_runs"]["claude"]["state"])
+        self.assertIn("tokens they did report", report["window_data"]["note"])
 
-        def strict(text):
-            return json.loads(text, parse_constant=lambda name: self.fail(f"non-JSON constant {name}"))
+    @requirements('S44A-3')
+    def test_s44a_3_an_outcome_only_run_counts_in_the_recorded_span(self) -> None:
+        # An earlier version's run (outcome only, day 1), then provider usage (day 3): day 2 lies after the first run.
+        from tests.learning_support import verification_outcome
+        from tests.test_usage_report import CONFIGURATION, SECRET_SLICE
+        from codex_agents.learning_adapters import empty_usage
+        from codex_agents.learning_contracts import content_digest
+        value = verification_outcome("legacy-outcome")
+        value.update(run_id="legacy-run", model=CODEX, effort="high", role="codex_agents_verification_worker",
+                     status="accepted", accepted=True, admission_state="accepted", task_slice=SECRET_SLICE,
+                     observed_at_ms=T0 + HOUR)
+        value["configuration_digest"] = content_digest({name: value[name] for name in CONFIGURATION})
+        value["usage"] = empty_usage()
+        value["usage_sources"] = {field: {"source": "unavailable", "coverage": "unknown"} for field in value["usage"]}
+        self.append(value, "host", T0 + HOUR)
+        self.finished(T0 + 3 * 24 * HOUR, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
+        data = self.report(T0 + 24 * HOUR + 2 * HOUR, T0 + 2 * 24 * HOUR)["window_data"]
+        self.assertEqual("no_runs_in_window", data["state"])
+        self.assertEqual(iso(T0 + HOUR), data["first_run_recorded"])
 
-        self.finished(T0 + HOUR, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
-        done = self.run_installed("--project-root", ".", "--since", iso(T0), "--until", iso(T0 + 24 * HOUR))
-        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
-        document = strict(done.stdout)
-        self.assertIn("usage_coverage", document)
-        self.assertIn("window_data", document)
-        run_usage = strict(json.dumps(status_run_usage(), allow_nan=False))
-        self.assertEqual({"state", "report_command", "window_days", "note"}, set(run_usage))
 
+class RelativeRootRefusalTests(InstalledUsageCase):
+    __why_not_scenario__ = ('The installed copy of the package runs as a real subprocess against a real state root.')
+
+    @requirements('S44A-1')
+    def test_s44a_1_a_relative_root_through_a_symlink_is_refused_as_a_root(self) -> None:
+        (self.project / "link").symlink_to(self.project)
+        report = self.report(expected=2, root="link")
+        self.assertEqual("usage_project_root_invalid", report["reason_code"])
+
+    @requirements('S44A-1')
+    def test_s44a_1_a_root_that_climbs_above_the_project_is_not_the_project(self) -> None:
+        self.finished(T0 + HOUR, usage={"input_tokens": 7, "cached": 1, "output_tokens": 2})
+        report = self.report(expected=2, root="..")
+        self.assertFalse(report["ready"])
+        self.assertIn(report["reason_code"], ("usage_project_not_registered", "usage_project_root_invalid"))
+
+    @requirements('S44A-1')
+    def test_s44a_1_a_root_that_climbs_out_and_back_is_the_project_it_names(self) -> None:
+        (self.project / "sub").mkdir()
+        self.finished(T0 + HOUR, usage={"input_tokens": 7, "cached": 1, "output_tokens": 2})
+        report = self.report(root="sub/..")
+        self.assertEqual(1, len(report["runs"]))
 
 
 if __name__ == "__main__":

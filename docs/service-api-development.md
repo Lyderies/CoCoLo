@@ -1219,7 +1219,8 @@ identity check; feedback alone carries its own authority, the owner's signature.
   also carries `window_data` (`has_runs`, `no_runs_in_window`, `before_usage_recorded` or `nothing_recorded`, with the first and
   last recorded times and a plain note) and `usage_coverage` (per provider `reported`, `partial`, `not_reported` or `no_runs`;
   the primary session's own tokens are always `not_reported`). `learning-status` adds `run_usage` (the same coverage for the last
-  7 days, read only, null when unreadable). `ingestion.coverage.root_usage` and `child_usage` stay false: they describe the Codex
+  7 days, from the project's running service through the read-only operation `history.run_usage`; `state: "unavailable"` with
+  `child_runs: null` and a plain reason when the service is not running; the status client opens no database). `ingestion.coverage.root_usage` and `child_usage` stay false: they describe the Codex
   hook surface, which carries no token counts, not the runs.
 - `learning-expire` still applies the ledger's retention to the ledger. Separately, the
   collector's `sweep_event_retention` runs every `WORKER_RESULT_SWEEP_SECONDS`: up to

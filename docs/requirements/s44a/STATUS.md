@@ -4,8 +4,8 @@ State: built and tested on branch `feat/s44a-usage` (base `a737ae9d`); not merge
 install (that is the primary's step: run `learning-usage-report --project-root . --since .. --until ..` from the project after the
 install).
 
-Done: S44A-1 (the `.` root; named refusals), S44A-2 (per-run usage both providers in the report as `usage_coverage`; status `run_usage` only names the report, because the status client opens no database),
-S44A-3 (`window_data`). Requirements and tests: `docs/requirements/s44a.md`. No existing assertion changed; two tests of this step were reshaped (see assertions.md, 'Correction').
+Done: S44A-1 (the `.` root; named refusals), S44A-2 (per-run usage both providers in the report as `usage_coverage`; status `run_usage` from the service via `history.run_usage`),
+S44A-3 (`window_data`). Requirements and tests: `docs/requirements/s44a.md`. No existing assertion changed; two op-set/request-list pins changed (see assertions.md).
 
 Files: `project_usage_report.py`, `cli.py` (status `run_usage`), `refusal_steps.py` (usage refusal steps), tests in
 `packages/codex-agents/tests/test_s44a_usage_install.py`, registry entries in `scripts/test-*.json` and `tests/requirements/s44a.json`,
@@ -16,4 +16,8 @@ promotion and are checked by `validation.py`).
 
 To resume: run `python -B scripts/parallel_tests.py --jobs 4 --affected a737ae9d` from this worktree.
 
-Correction: status_run_usage() read databases in the status client and broke test_health_monitor / test_cli_status_client_boundary (non-JSON traceback). Fixed; both green with test_s44a_usage_install and test_usage_report.
+Correction (after review r1): S44A-2 restored as originally written. Status gets per-provider coverage from the running
+service via the new read-only operation `history.run_usage` (null + plain reason when the service is not running); the
+client opens no database. Partial measurements are `partial` (MED 4); outcome-only runs count in the recorded span (MED 2);
+status behaviour is pinned through the real `learning-status` output (MED 3). Existing assertions changed: two op-set /
+request-list pins, listed in assertions.md.
