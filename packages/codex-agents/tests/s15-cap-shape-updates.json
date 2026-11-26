@@ -585,6 +585,20 @@
     "test": "test_W5_an_idle_registered_run_is_retired_and_withdrawn"
    }
   },
+  "project_driver.py::_release_failed": {
+   "new": {
+    "checks": 3,
+    "ends": "the first two are time thresholds, not counts (FAILED_VIEW_SECONDS: a failed run is kept at most that long for a late prepare, then released; cancelled, idle or already-viewed runs are released at once). The third bounds the _failed_views map (its past-the-bound test is test_RS_B_4_failed_views_past_the_bound_drop_the_oldest_and_the_newest_still_answers_a_late_prepare; the view-window expiry is test_W5_a_refused_run_view_expires_after_the_view_window) (RS-B-4 final fix, W5) by MAX_RETIRED_RUNS: a view is dropped after FAILED_VIEW_SECONDS (_late_failure) and, past the count, the oldest is dropped, so a run past the bound still answers a late prepare from its own view",
+    "kind": "time",
+    "test": "test_W5_a_failed_run_is_kept_for_a_late_prepare_for_a_bounded_time_and_then_released"
+   },
+   "old": {
+    "checks": 3,
+    "ends": "the first two are time thresholds, not counts (FAILED_VIEW_SECONDS: a failed run is kept at most that long for a late prepare, then released; cancelled, idle or already-viewed runs are released at once). The third bounds the _failed_views map (RS-B-4 final fix, W5) by MAX_RETIRED_RUNS: a view is dropped after FAILED_VIEW_SECONDS (_late_failure) and, past the count, the oldest is dropped, so a run past the bound still answers a late prepare from its own view",
+    "kind": "count",
+    "test": "test_RS_B_4_failed_views_past_the_bound_drop_the_oldest_and_the_newest_still_answers_a_late_prepare"
+   }
+  },
   "project_driver.py::_retry_cleanup": {
    "new": {
     "checks": 0,

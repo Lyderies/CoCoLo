@@ -1,4 +1,5 @@
 """B7a store/protocol/status unit tests. No sockets or provider calls."""
+import collections
 import contextlib
 import copy
 import io
@@ -539,9 +540,13 @@ class HoldsClientStatusTests(unittest.TestCase):
 class HoldsLimitRegistryTests(unittest.TestCase):
     def test_B7_3_presentation_bounds_registered_with_past_limit_tests(self):
         from tests import test_lifetime_cap_guard as guard
-        registry = json.loads(guard.REGISTRY.read_text())['sites']
-        sites = {}
-        for name in ('holds_report_contracts.py', 'project_holds_report.py'):
+        names = ('holds_report_contracts.py', 'project_holds_report.py')
+        # Decision 382: the guard now checks every registry entry against its site count, so a
+        # two-file scan must be compared with only those files' entries (old: whole registry, dict of sites).
+        registry = {key: entry for key, entry in json.loads(guard.REGISTRY.read_text())['sites'].items()
+                    if key.split('::')[0] in names}
+        sites = collections.Counter()
+        for name in names:
             sites.update(guard.cap_sites((guard.RUNTIME / name).read_text(), name))
         self.assertEqual([], guard.problems(sites, registry, guard.test_names()))
 

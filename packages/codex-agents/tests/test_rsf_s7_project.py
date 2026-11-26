@@ -75,7 +75,9 @@ class ProjectReplayTests(ProjectFixture):
         entry = registry.get('project_history.py::record_account_settlement', {})
         self.assertEqual(8192, entry.get('max_closure_bytes'))
         self.assertIn('BOUNDED evidence', entry['ends'])
-        self.assertEqual(self._testMethodName, entry['test'])
+        # Decision 384 (S15 cap-binding audit, bound-audited-383): old binding was this test's own name;
+        # the audited past-limit binding is the re-audited settlement-evidence test.
+        self.assertEqual('test_reaudited_retained_settlement_evidence_crosses_the_history_writers_own_cap', entry['test'])
 
     def test_settled_request_refuses_an_altered_digest_before_pruning(self):
         self.bound()
