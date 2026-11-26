@@ -923,6 +923,20 @@ class DriverWithdrawalTests(WithdrawHarness):
         project_driver.RunDriver._release_failed(stub, run)
         self.assertEqual('released', run.state)
 
+    def test_W5_a_refused_run_view_expires_after_the_view_window(self):
+        now = [100.0]
+        stub = mock.Mock(_clock=lambda: now[0], _failed_views={})
+        run = mock.Mock(duty_done_at=None, withdraw_reason='refused_before_claim', failed_viewed=False,
+                        closed=False, state='failed', key=('h', 1))
+        project_driver.RunDriver._release_failed(stub, run)
+        self.assertEqual('released', run.state)
+        self.assertEqual(100.0 + project_driver.FAILED_VIEW_SECONDS, stub._failed_views[run.key][3])
+        late = mock.Mock(duty_done_at=100.0 - project_driver.FAILED_VIEW_SECONDS, withdraw_reason='refused_before_claim',
+                         failed_viewed=False, closed=False, state='failed', key=('h', 2))
+        project_driver.RunDriver._release_failed(stub, late)  # past the window: released, no view kept
+        self.assertEqual('released', late.state)
+        self.assertNotIn(late.key, stub._failed_views)
+
     def test_W5_an_idle_registered_run_is_retired_and_withdrawn(self):
         with mock.patch.object(project_driver, 'REGISTERED_IDLE_SECONDS', 0.5):
             *_, run_handle = self.opened()

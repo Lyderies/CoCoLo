@@ -2086,6 +2086,7 @@
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_failure_before_preparation_withdraws_its_open_once",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_lost_reply_is_asked_again_and_withdraws_once",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_never_leased_cancel_withdraws_its_open_once",
+   "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_refused_run_view_expires_after_the_view_window",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_an_idle_registered_run_is_retired_and_withdrawn",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_the_entry_is_retired_only_after_its_row_is_releasing",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_D108_a_format_18_project_store_upgrades_to_19_and_keeps_its_rows_and_its_refusals",
@@ -4424,6 +4425,7 @@
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_one_byte_limits_rejected",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_loader_rejects_malformed_deep_json_with_plain_warning",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_and_initial_status",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_byte_cap_rejects_valid_json_one_byte_over",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_typed_bounds_and_no_import_io"
   ],
   "source": "tests/requirements/s9.json#S9-HM4-4",

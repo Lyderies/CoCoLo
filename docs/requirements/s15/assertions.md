@@ -220,3 +220,19 @@ RS-8's eight missing combinations are explicitly **pending**, assigned to
 S27a/c/d with the real service/native boundary reason and independent reached
 release mutation required for each positive release. They add zero executed
 mutation claims; historical 48 controls remain historical evidence only here.
+
+## Last corrections: lifetime-cap binding changes
+
+- `user_settings.py::load` (bytes): rebound from
+  `test_shared_settings_typed_bounds_and_no_import_io` (whose oversize input was
+  also invalid JSON) to the new
+  `test_shared_settings_byte_cap_rejects_valid_json_one_byte_over`: valid JSON of
+  exactly SETTINGS_BYTES is accepted, SETTINGS_BYTES+1 is refused. Verified to
+  fail with the `len(raw) > SETTINGS_BYTES` check disabled, then restored.
+- `project_driver.py::_release_failed` (kind now `time`): rebound from the
+  MAX_RETIRED_RUNS test to
+  `test_W5_a_failed_run_is_kept_for_a_late_prepare_for_a_bounded_time_and_then_released`
+  (injected clock past FAILED_VIEW_SECONDS). The second FAILED_VIEW_SECONDS site
+  (view window) has the new `test_W5_a_refused_run_view_expires_after_the_view_window`;
+  the MAX_RETIRED_RUNS test stays named in the entry's `ends`. The registry key is
+  per function, so one entry cannot hold two tests. No assertion was removed.

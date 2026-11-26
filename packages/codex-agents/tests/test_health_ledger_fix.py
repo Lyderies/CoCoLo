@@ -295,6 +295,22 @@ sys.exit(1)
         self.assertEqual(user_settings.UserSettings().store_size_bytes, settings.store_size_bytes)
         self.assertNotIn('[', settings.warning)
 
+    @requirements('S9-HM4-4')
+    def test_shared_settings_byte_cap_rejects_valid_json_one_byte_over(self):
+        from codex_agents import user_settings
+        path = self.root / 'user-settings.json'
+        limit = user_settings.SETTINGS_BYTES
+        for size, accepted in ((limit, True), (limit + 1, False)):
+            # Valid JSON of exactly `size` bytes: only the byte cap can refuse the larger one.
+            body = '{"store_size_bytes":1048576}' + ' ' * (size - 28)
+            self.assertEqual(size, len(body.encode()))
+            json.loads(body)
+            path.write_text(body)
+            settings = user_settings.load(self.root)
+            self.assertEqual(accepted, settings.warning is None, size)
+            if accepted:
+                self.assertEqual(1048576, settings.store_size_bytes)
+
     @requirements('S9-HM4-4', 'S9-HM4-5')
     def test_shared_settings_typed_bounds_and_no_import_io(self):
         import importlib

@@ -1,4 +1,4 @@
-# S15 — decision 383 fix round verified (base 82cc5c48; uncommitted)
+# S15 — decision 383 fix round verified (base 82cc5c48; committed as bf063c27)
 
 This fix round is verified within the no-socket scope. **S15 is not declared
 closed**: the eight missing RS-8 combinations are explicitly assigned to the
@@ -51,7 +51,7 @@ Initial affected-regression check: 45 tests, three failures and one fixture erro
 all their current oracles pass. [assertions.md](assertions.md) records every
 changed pin/oracle and links the complete 72-entry old/new fixture.
 
-No new product defect was found, no runtime code changed, no commit was made,
+No new product defect was found, no runtime code changed, the fix round is commit bf063c27,
 and no socket was opened. No test run remains in flight. The affected run's
 separate version/runtime-digest bookkeeping failure was not changed or rerun;
 that remains the primary's release bookkeeping. Original B0-2 and decisions
@@ -268,7 +268,7 @@ Both affected modules already have layer, stage and timing registrations.
 # S15 finish pass — INCOMPLETE (2026-11-26, base 28d24d58)
 
 The strict guard is unchanged and remains **RED**. Do not merge this pass as
-finished S15. No product file was changed and no commit was made.
+finished S15. (Historical: that earlier pass changed no product file and made no commit; superseded by fix round bf063c27, which is GREEN.)
 Decisions 132/377 remain in force; the original B0-2 service assertion stays skipped.
 
 ## Guard binding audit and primary adjudication
@@ -401,7 +401,7 @@ where this pass records only source review. The B0-2 skip must remain intact.
 
 
 2026-11-26, branch `feat/s15-fault-matrix`, base `88822538`.
-Changes remain uncommitted as requested. No product code changed and no sockets
+(Historical: this early session left its changes uncommitted; later work is committed, fix round bf063c27.) No product code changed and no sockets
 were opened. Read builder rules, original brief, and owner decisions 132/377.
 
 ## New product defect: lease × failed_before_launch, repeated past the cap
