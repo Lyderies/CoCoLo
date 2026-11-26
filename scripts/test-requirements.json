@@ -4384,7 +4384,8 @@
    "codex:tests.test_health_ledger.LedgerHealthTests.test_full_corruption_latches_until_full_clean_result",
    "codex:tests.test_health_ledger.LedgerHealthTests.test_healthy_copy",
    "codex:tests.test_health_ledger.LedgerHealthTests.test_quick_check_every_visit",
-   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_300_mib_snapshot_and_scan_finish_under_process_writer"
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_300_mib_snapshot_and_scan_finish_under_process_writer",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_copy_full_and_io_errors_report_space_or_io_without_damage"
   ],
   "source": "tests/requirements/s9.json#S9-HM4-1",
   "statement": "Report corruption through resumable read-only quick/full checks on consistent copies; healthy stores are quiet."
@@ -4396,7 +4397,8 @@
    "codex:tests.test_health_ledger.LedgerHealthTests.test_size_boundary_report_only",
    "codex:tests.test_health_ledger.LedgerHealthTests.test_warning_reaches_owner_attention",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_future_baseline_is_reset_after_clock_correction",
-   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_short_bursts_after_renewal_and_truncate_are_quiet"
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_short_bursts_after_renewal_and_truncate_are_quiet",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_sustained_growth_alarms_immediately_after_each_daily_renewal"
   ],
   "source": "tests/requirements/s9.json#S9-HM4-2",
   "statement": "Report ledger and project size at 8 GiB and growth strictly over 1 GiB per day; never refuse runs."
@@ -4443,8 +4445,11 @@
    "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_symlink_is_reported_without_following",
    "codex:tests.test_health_ledger.LedgerHealthTests.test_wal_copy_allows_writer_between_page_slices",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_300_mib_snapshot_and_scan_finish_under_process_writer",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_any_exclusive_maintenance_releases_health_snapshot_on_owner",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_copy_deletion_and_scan_join_are_off_owner",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_copy_never_loads_another_sqlite_library",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_maintenance_releases_snapshot_while_cleanup_is_pending",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_project_deletion_cancels_snapshot_and_later_check_completes",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_typed_bounds_and_no_import_io",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_snapshot_close_preserves_owner_wal_write_lock"
   ],

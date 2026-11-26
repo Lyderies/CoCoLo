@@ -2342,6 +2342,9 @@ class LearningLedger:
         self._capacity_executions = OwnedExecutionRegistry()
         self._capacity_execution_origin = secrets.token_hex(32)
         self._active_readers = 0
+        # Owner-only registry of cancellable health readers. Exclusive maintenance
+        # releases these before checkpointing; unrelated external readers still fail.
+        self._maintenance_readers = set()
         # E1a revision 3: readers are counted under their own lock, so a reader's exit never waits for
         # the ledger. Order: the ledger lock, then this one, never the reverse.
         self._readers_lock = threading.Lock()
@@ -13430,6 +13433,15 @@ class LearningLedger:
     def _begin_exclusive_maintenance(self) -> None:
         """Acquire a rollback-journal exclusive transaction or fail before deletion."""
 
+        # Health copies are lower priority than every exclusive maintenance path.
+        # Signal all workers first, then await connection closure (not thread joins
+        # or scratch deletion). No new copy can start while this owner is occupied.
+        readers = tuple(self._maintenance_readers)
+        for reader in readers:
+            reader.cancel()
+        for reader in readers:
+            reader.done.wait()
+        self._maintenance_readers.difference_update(readers)
         self._connection.execute("PRAGMA busy_timeout = 50")
         try:
             checkpoint = self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()

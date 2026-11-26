@@ -1,4 +1,70 @@
-# S9 — Fix round (040-s9-r1)
+# S9 — Targeted follow-up (040-s9-r2c)
+
+Reviewed baseline: `feat/s9-hm4` at `856c91b7`. The review verdict was **READY
+with one MED**, plus the two LOW findings addressed here. All three requested
+fixes are implemented and the named checks below pass. Changes remain uncommitted
+in this sandboxed worktree. VERSION and runtime-releases.json are unchanged.
+
+## Current requirement → test → evidence
+
+All five new methods below belong to
+`tests.test_health_ledger_fix.LedgerFixTests`.
+
+| Requirement | New regression | Red → green evidence |
+|---|---|---|
+| S9-HM4-5 (MED) | test_project_deletion_cancels_snapshot_and_later_check_completes | Red: deletion raises `maintenance requires all external readers to close`. Green: real owner deletes the project in <750 ms, snapshot release is acknowledged before deletion returns, cancellation does not advance completion, and a newly created copy later completes `ok`. |
+| S9-HM4-5 (MED) | test_any_exclusive_maintenance_releases_health_snapshot_on_owner | Red: the shared maintenance entry point fails at its checkpoint. Green: owner-thread exclusive maintenance succeeds in <750 ms after snapshot release. |
+| S9-HM4-5 (MED) | test_maintenance_releases_snapshot_while_cleanup_is_pending | Red: a detached copy awaiting asynchronous cleanup still blocks maintenance. Green: it stays registered until its reader closes; maintenance cancels it and succeeds in <750 ms without waiting for deferred cleanup. |
+| S9-HM4-2 (LOW) | test_sustained_growth_alarms_immediately_after_each_daily_renewal | Red: sustained growth loses its warning 1 ms after renewal. Green: warnings persist at renewal, +1 ms, +4 min, and immediately before/at six-hour maturity, across three daily renewals. Existing burst/truncate and exact-boundary tests still pass. |
+| S9-HM4-1 (LOW) | test_copy_full_and_io_errors_report_space_or_io_without_damage | Red: injected SQLITE_FULL (13), IOERR (10), and extended IOERR_WRITE (778) all report `store_corrupt`. Green: all report `store_unreadable` with “space or IO”, no damage/private-path text and no completion timestamp. Existing real corruption tests still pass. |
+
+Requirements were recorded before tests and production edits. The initial four
+regressions failed on the untouched baseline runtime in **0.419 s** (two errors,
+four failures including subtests). The cleanup race was separately red before its
+fix (**1.676 s**). After finishing the tests, all five were also run against the
+exact native-package archived from `856c91b7`, with both runtime module paths
+asserted inside that archive: **five red, 0.624 s** (three maintenance errors,
+four failures including subtests). No original assertion was changed or removed.
+
+## Current final verification
+
+- Named runner: `codex:tests.test_health_ledger` (31),
+  `codex:tests.test_health_ledger_fix` (15), `codex:tests.test_health_holds` (33),
+  `codex:tests.test_lifetime_cap_guard` (4): **83 PASS**; workers **4.4 s**,
+  summed workers **11.081 s**, preflight **11.210 s**, discovery **4.153 s**.
+  `metadata_errors: []`, `budget_failures: []`, `failed_units: []`.
+  The existing scenario/integration module registration is retained; the five
+  new tests are reciprocally registered under existing S9 requirement IDs.
+- Additional named unittest selection: **7 PASS, 1 expected FAIL, 0.537 s**.
+  Passing LearningStoreTests:
+  `test_project_delete_requires_closed_readers_and_leaves_only_tombstone`,
+  `test_expiry_fails_before_deletion_while_external_reader_is_open`,
+  `test_expiry_deletes_linked_lineage`,
+  `test_typed_artifact_export_and_backup_are_partitioned_and_deleted`;
+  the socket-free owner-wiring trace case listed below; runtime file-set and
+  version-order checks. Only
+  `test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version`
+  fails, as required while the runtime changes and VERSION/catalogue stay fixed.
+- `git diff --check`: PASS. No schema, learning-record shape, derived observation
+  shape, operation or reason-code changes. The previous growth baseline remains
+  the persisted sample until the in-memory renewal candidate matures; restart
+  retains a usable old sample. Candidates are removed on reset/eviction/pruning.
+  Broader schema/record copier runs are not triggered.
+- No full-suite/affected run, sockets, pty, services, install, push or commit.
+  No tests are left running. The primary socket rerun list and reproducible named
+  command below still apply. Prior-round evidence follows as history.
+
+Current changed files: health_ledger.py, learning_store.py,
+test_health_ledger_fix.py, lifetime_caps.json, scripts/test-requirements.json,
+docs/requirements/s9.md, this STATUS.md and assertions.md.
+
+Maintenance coordination is at `_begin_exclusive_maintenance`, covering deletion
+and expiry alike. Its owner-only registry signals every health worker, awaits
+the connection-release acknowledgement, then uses the existing checkpoint and
+maintenance timeout. Snapshot thread joins and scratch deletion stay on cleanup
+workers. Cancelled copies never reach scanning; a later pass creates a fresh one.
+
+## Historical fix round (040-s9-r1)
 
 Branch `feat/s9-hm4`, starting HEAD `3941c7a0`, base `a737ae9d`.
 One fixed-scope review round; changes left uncommitted because this builder is
@@ -77,7 +143,9 @@ cleanup worker; no scan join or multi-GiB deletion happens in the owner request.
 The next copy waits for cleanup, bounding retained copies/workers. close() joins
 cleanup outside the owner call. Quick/full copy VMs pause and resume rather than
 restart on the live database. WAL writers commit while the snapshot is pinned;
-checkpoint truncation can wait for snapshot release, as with any WAL reader.
+exclusive maintenance cancels the health snapshot and awaits reader release
+before checkpoint truncation. The review correctly identified that the old
+“checkpoint truncation can wait” claim was false: the 50 ms timeout raised instead.
 
 ONE account-state `user-settings.json` and `codex_agents.user_settings.load(root)`
 now own validated defaults and warnings. Typed keys are `store_size_bytes` (8 GiB),
@@ -92,7 +160,9 @@ the unshipped per-feature health-limits.json is needed or introduced.
 Registration/shutdown wiring remains deferred to the primary, as at review HEAD:
 `health_ledger.register(self.health_monitor, self.state)`; retain the check and
 call close() during collector shutdown before closing the ledger owner. No
-primary-owned learning_store.py or collector/service wiring was edited.
+primary-owned learning_store.py or collector/service wiring was edited in that
+prior round. This targeted follow-up now changes the shared learning_store.py
+maintenance entry point as described above; collector/service wiring stays deferred.
 
 ## Primary must rerun (socket restriction / integration gates)
 

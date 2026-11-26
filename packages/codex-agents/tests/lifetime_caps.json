@@ -2164,9 +2164,9 @@
    "test": "test_saved_state_past_byte_limit_is_reported_and_rechecked"
   },
   "health_ledger.py::measure": {
-   "checks": 2,
-   "ends": "Report-only size/rate limits. Growth requires six hours, renews daily, and resets on truncation or backward clock correction; no admission or record is refused.",
-   "test": "test_short_bursts_after_renewal_and_truncate_are_quiet"
+   "checks": 3,
+   "ends": "Report-only size/rate limits. Growth requires six hours; daily renewal keeps the older sample until its replacement matures, then discards it. Truncation or backward clock correction resets both samples; eviction/project pruning drops candidates. No admission or record is refused.",
+   "test": "test_sustained_growth_alarms_immediately_after_each_daily_renewal"
   },
   "health_ledger.py::completion_findings": {
    "checks": 1,

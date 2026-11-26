@@ -1,5 +1,39 @@
 # S9 assertion ledger
 
+## Targeted follow-up (040-s9-r2c)
+
+No assertion present at `856c91b7` was removed, changed or weakened. Five new
+regressions in `test_health_ledger_fix.LedgerFixTests` cover the accepted findings:
+
+- S9-HM4-5: `test_project_deletion_cancels_snapshot_and_later_check_completes`
+  requires successful deletion within 750 ms, read-snapshot release, no false
+  completion, a newly started copy and later full `ok` completion.
+- S9-HM4-5: `test_any_exclusive_maintenance_releases_health_snapshot_on_owner`
+  requires the shared exclusive-maintenance path to succeed on the owner within
+  750 ms after releasing the snapshot.
+- S9-HM4-5: `test_maintenance_releases_snapshot_while_cleanup_is_pending`
+  holds asynchronous cleanup back and still requires maintenance to cancel and
+  release the detached reader within 750 ms.
+- S9-HM4-2: `test_sustained_growth_alarms_immediately_after_each_daily_renewal`
+  requires the warning at renewal and throughout the six-hour replacement window
+  over three daily renewals. Existing short-burst/truncate assertions are retained.
+- S9-HM4-1: `test_copy_full_and_io_errors_report_space_or_io_without_damage`
+  requires FULL, IOERR and extended IOERR_WRITE to report unreadability with
+  “space or IO”, no damaged-data/private-path text and no completion timestamp.
+
+All five are red against the exact `856c91b7` runtime and green after the fixes;
+see STATUS.md for timings. No test module, stage or budget was changed.
+
+The lifetime-cap inventory (not a test assertion) changes
+`health_ledger.py::measure` from **2 → 3** checks to account for candidate maturity.
+Its description now explains retention and disposal of the old/candidate samples;
+its witness changes from `test_short_bursts_after_renewal_and_truncate_are_quiet`
+to `test_sustained_growth_alarms_immediately_after_each_daily_renewal`.
+Both tests still run unchanged/new respectively, and the lifetime-cap guard's
+assertions remain intact.
+
+## Historical assertion changes
+
 The initial S9 round removed or changed no existing assertions. The fixed-scope
 review round below replaces assertions where the accepted requirement changed.
 

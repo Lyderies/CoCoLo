@@ -23,6 +23,123 @@ class LedgerFixTests(unittest.TestCase):
     setUp = fixtures.LedgerHealthTests.setUp
     context = fixtures.LedgerHealthTests.context
 
+    def _paused_owner_copy(self):
+        from tests.test_ledger_owner_wiring import LedgerOwnerWiringTests
+        fixture = LedgerOwnerWiringTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.start_owner()
+        check = hm.LedgerCheck(fixture.state, settings_path=self.settings)
+        self.addCleanup(check.close)
+        def prepare():
+            db = fixture.owner.ledger._connection
+            # A real outstanding WAL frame and more than one backup grant.
+            db.execute('PRAGMA wal_autocheckpoint=0')
+            db.execute('CREATE TABLE health_payload(value BLOB)')
+            db.execute('INSERT INTO health_payload VALUES(zeroblob(?))', (1024 ** 2,))
+            db.commit()
+            with mock.patch.object(check, '_copy_slice', side_effect=lambda deadline: check._job.step(deadline)):
+                check.visit(fixture.state.database, None, self.context())
+            self.assertIsNotNone(check._job)
+            self.assertFalse(check._job.done.is_set())
+        fixture.owner.call(prepare, contain_errors=True)
+        return fixture, check, check._job
+
+    @requirements('S9-HM4-5')
+    def test_project_deletion_cancels_snapshot_and_later_check_completes(self):
+        fixture, check, snapshot = self._paused_owner_copy()
+        started = time.monotonic()
+        deletion = fixture.owner.client.delete_project(fixture.project)
+        self.assertTrue(deletion.startswith('del_'))
+        self.assertLess(time.monotonic() - started, .75)
+        self.assertTrue(snapshot.stopped)
+        self.assertTrue(snapshot.done.is_set(), 'read transaction must close before deletion')
+        self.assertNotIn(None, check._last_full, 'cancellation is not integrity completion')
+        with mock.patch.object(hm, 'Snapshot', wraps=hm.Snapshot) as copies:
+            for n in range(30):
+                check.run(self.context(1000 + n))
+                if None in check._last_full:
+                    break
+            self.assertGreaterEqual(copies.call_count, 1, 'must restart rather than scan the cancelled copy')
+        self.assertIn(None, check._last_full)
+        self.assertEqual('ok', check._full_result[None])
+        self.assertEqual([], fixture.errors)
+
+    @requirements('S9-HM4-5')
+    def test_any_exclusive_maintenance_releases_health_snapshot_on_owner(self):
+        fixture, check, snapshot = self._paused_owner_copy()
+        callers = []
+        def maintenance():
+            callers.append(threading.current_thread())
+            ledger = fixture.owner.ledger
+            ledger._begin_exclusive_maintenance()
+            try:
+                self.assertTrue(snapshot.done.is_set())
+                ledger._connection.rollback()
+            finally:
+                ledger._finish_exclusive_maintenance()
+        started = time.monotonic()
+        fixture.owner.call(maintenance, contain_errors=True)
+        self.assertLess(time.monotonic() - started, .75)
+        self.assertEqual([fixture.thread], callers)
+        self.assertTrue(snapshot.stopped)
+        self.assertNotIn(None, check._last_full)
+
+    @requirements('S9-HM4-5')
+    def test_maintenance_releases_snapshot_while_cleanup_is_pending(self):
+        fixture, check, snapshot = self._paused_owner_copy()
+        cleanup_started, allow_cleanup = threading.Event(), threading.Event()
+        original_close = snapshot.close
+        def delayed_close():
+            cleanup_started.set()
+            allow_cleanup.wait(2)
+            original_close()
+        def maintenance():
+            ledger = fixture.owner.ledger
+            ledger._begin_exclusive_maintenance()
+            try:
+                self.assertTrue(snapshot.done.is_set())
+                ledger._connection.rollback()
+            finally:
+                ledger._finish_exclusive_maintenance()
+        with mock.patch.object(snapshot, 'close', side_effect=delayed_close):
+            try:
+                fixture.owner.call(check._clear_job, contain_errors=True)
+                self.assertTrue(cleanup_started.wait(1))
+                started = time.monotonic()
+                fixture.owner.call(maintenance, contain_errors=True)
+                self.assertLess(time.monotonic() - started, .75)
+            finally:
+                allow_cleanup.set()
+                check._cleanup_thread.join(2)
+        self.assertTrue(snapshot.stopped)
+        self.assertNotIn(None, check._last_full)
+
+    @requirements('S9-HM4-2')
+    def test_sustained_growth_alarms_immediately_after_each_daily_renewal(self):
+        self.check.measure(None, 100, 1000)
+        for day in range(1, 4):
+            for offset in (0, 1, 4 * 60000, hm.GROWTH_WINDOW_MS - 1, hm.GROWTH_WINDOW_MS):
+                elapsed = day * hm.DAY_MS + offset
+                size = 100 + 2 * hm.GIB * elapsed // hm.DAY_MS
+                found = self.check.measure(None, size, 1000 + elapsed)
+                self.assertIn('store_growth', [f.reason_code for f in found], (day, offset))
+
+    @requirements('S9-HM4-1')
+    def test_copy_full_and_io_errors_report_space_or_io_without_damage(self):
+        for code in (sqlite3.SQLITE_FULL, sqlite3.SQLITE_IOERR, sqlite3.SQLITE_IOERR_WRITE):
+            with self.subTest(code=code):
+                error = sqlite3.OperationalError('PRIVATE scratch path')
+                error.sqlite_errorcode = code
+                with mock.patch.object(hm.Snapshot, 'step', side_effect=error):
+                    found = self.check.visit(self.database, None, self.context())
+                self.assertEqual(['store_unreadable'], [f.reason_code for f in found])
+                self.assertIn('space or IO', found[0].text)
+                self.assertNotIn('damaged', found[0].text)
+                self.assertNotIn('PRIVATE', str(found))
+                self.assertNotIn(None, self.check._last_full)
+                self.check.close()  # wait for scratch cleanup before the next injection
+
     @requirements('S9-HM4-5')
     def test_copy_never_loads_another_sqlite_library(self):
         spec = importlib.util.spec_from_file_location('codex_agents._s9_library_probe', hm.__file__)

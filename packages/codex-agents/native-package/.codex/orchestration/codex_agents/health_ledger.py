@@ -129,11 +129,15 @@ class Snapshot:
                 raise self.error
             return self.done.is_set()
 
-    def close(self):
-        """Only cleanup callers join; the ledger owner detaches jobs instead."""
+    def cancel(self):
+        """Owner-safe signal; done acknowledges that both connections are closed."""
         with self.condition:
             self.stopped = True
             self.condition.notify_all()
+
+    def close(self):
+        """Only cleanup callers join; maintenance waits only for reader release."""
+        self.cancel()
         self.thread.join()
 
 
@@ -200,12 +204,14 @@ class LedgerCheck(Check):
         self.limits = dict(DEFAULT_LIMITS)
         self._settings_invalid = False
         self._baseline = {}
+        self._renewal = {}  # candidate samples; keep the persisted older baseline until mature
         self._last_full = {}
         self._first_seen = {}
         self._observed = {}
         self._project_after = ''
         self._next_ledger = True
         self._job = None
+        self._job_readers = None
         self._scan = None
         self._temporary = None
         self._job_project = None
@@ -231,7 +237,7 @@ class LedgerCheck(Check):
             del self._order[deleted]
             self._loaded.discard(deleted)
             self._seen.discard(deleted)
-            for cache in (self._observed, self._baseline, self._last_full, self._first_seen,
+            for cache in (self._observed, self._baseline, self._renewal, self._last_full, self._first_seen,
                           self._loaded_completion, self._full_result):
                 cache.pop(deleted, None)
         self._order[project] = None
@@ -339,14 +345,24 @@ class LedgerCheck(Check):
                                   f'{label} has reached the size warning of {_amount(ceiling)}. New runs are still allowed.'))
         before = self._baseline.get(project)
         if before is not None:
+            candidate = self._renewal.get(project)
+            if (now < before[0] or size < before[1] or
+                    (candidate is not None and (now < candidate[0] or size < candidate[1]))):
+                # Clock corrections and truncation invalidate both samples.
+                before = self._baseline[project] = (now, size)
+                self._renewal.pop(project, None)
+            elif candidate is not None and now - candidate[0] >= GROWTH_WINDOW_MS:
+                before = self._baseline[project] = candidate
+                self._renewal.pop(project, None)
             timestamp, previous = before
             elapsed = now - timestamp
             if elapsed >= GROWTH_WINDOW_MS and (size - previous) * DAY_MS > rate * elapsed:
                 found.append(_finding(project, 'store_growth',
                                       f'{label} is growing faster than {_amount(rate)} per day. New runs are still allowed.'))
-            # A full-day comparison window, rather than a single noisy sweep.
-            if elapsed < 0 or elapsed >= DAY_MS or size < previous:
-                self._baseline[project] = (now, size)
+            # Renew daily, comparing against the old sample for the first six
+            # hours. Persisting the old sample also avoids a blind restart window.
+            if elapsed >= DAY_MS and project not in self._renewal:
+                self._renewal[project] = (now, size)
         else:
             self._baseline[project] = (now, size)
         self._save(project)
@@ -380,6 +396,12 @@ class LedgerCheck(Check):
 
     def _clear_job(self):
         job, scan, temporary = self._job, self._scan, self._temporary
+        if self._job_readers is not None:
+            # Detaching to cleanup is not proof of read-transaction release.
+            # Maintenance must still be able to cancel a worker awaiting cleanup.
+            if job is None or job.done.is_set():
+                self._job_readers.discard(job)
+            self._job_readers = None
         self._job = self._scan = self._temporary = None
         self._job_path = self._job_project = None
         if job is None and scan is None and temporary is None:
@@ -421,10 +443,20 @@ class LedgerCheck(Check):
                 self._temporary = tempfile.TemporaryDirectory(prefix='health-ledger-', dir=scratch)
                 self._job_path, self._job_project = Path(path), project
                 self._job = Snapshot(path, Path(self._temporary.name) / 'copy.sqlite3')
+                owner = vars(self.state).get('_ledger_owner')
+                self._job_readers = getattr(getattr(owner, 'ledger', None), '_maintenance_readers', None)
+                if self._job_readers is not None:
+                    self._job_readers.difference_update(reader for reader in tuple(self._job_readers)
+                                                        if reader.done.is_set())
+                    self._job_readers.add(self._job)
             if self._job is not None and self._job_path == Path(path):
                 self._copy_slice(context.deadline)
-        except sqlite3.DatabaseError:
-            found.append(_finding(project, 'store_corrupt', 'The store copy found damaged data; please review its backup.'))
+        except sqlite3.DatabaseError as error:
+            code = getattr(error, 'sqlite_errorcode', 0) & 255
+            if code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+                found.append(_finding(project, 'store_corrupt', 'The store copy found damaged data; please review its backup.'))
+            else:
+                found.append(_finding(project, 'store_unreadable', 'The store could not be checked (space or IO); the health check will try again.'))
             self._clear_job()
         except OSError:
             found.append(_finding(project, 'store_unreadable', 'The store copy could not be made; the health check will try again.'))
@@ -435,12 +467,20 @@ class LedgerCheck(Check):
         return found
 
     def _copy_slice(self, deadline):
+        if self._job is not None and self._job.stopped:
+            # Maintenance cancelled this snapshot on the owner. Discard the
+            # partial copy, leaving completion unchanged; a later pass restarts.
+            self._clear_job()
+            return
         owner = vars(self.state).get('_ledger_owner')
         queue = getattr(owner, 'queue', None)
         if queue is not None and queue.snapshot()['retained'] > 1:
             deadline = min(deadline, time.monotonic() + BUSY_COPY_SECONDS)
         while self._job is not None and time.monotonic() < deadline:
             if self._job.step(deadline):
+                if self._job_readers is not None:
+                    self._job_readers.discard(self._job)
+                    self._job_readers = None
                 self._job = None
                 self._scan = CopyScan(Path(self._temporary.name) / 'copy.sqlite3')
                 break
@@ -467,7 +507,7 @@ class LedgerCheck(Check):
         if row is None:
             self._project_after = ''
             self._next_ledger = True
-            caches = (self._observed, self._baseline, self._last_full, self._first_seen,
+            caches = (self._observed, self._baseline, self._renewal, self._last_full, self._first_seen,
                       self._loaded_completion, self._full_result)
             for cache in caches:
                 for deleted in set(cache) - self._seen - {None}:
