@@ -641,7 +641,7 @@ class OwnerProofTests(Case):
         unmarked = self.folder(marker=False)
         found = self.run_check()
         self.assertEqual(['owner_unknown'], self.reasons(found))
-        self.assertEqual(('reported', unmarked.name), (found[0].outcome, found[0].subject))
+        self.assertEqual(('reported', 'folders'), (found[0].outcome, found[0].subject))  # PREP-1: was the folder's name
         self.assertTrue((unmarked / 'export' / 'file.txt').is_file())
 
     @requirements('HM2A-1')
@@ -1387,6 +1387,73 @@ class LiveFindingTests(Case):
         server = learning_store.CollectorServer(fixture.ledger)
         check = next(c for c in server.health_monitor._checks if c.name == 'workspaces')
         self.assertTrue(hasattr(check._pending, 'reason'))
+
+class GroupedUnknownOwnerTests(Case):
+    """PREP-1..3 (decision 376): every leftover folder whose owner cannot be proven is ONE finding with a count."""
+
+    def unknown(self, count):
+        return [self.folder(marker=False) for _ in range(count)]
+
+    @requirements('PREP-1')
+    def test_PREP_1_many_unproven_folders_are_one_finding_with_a_count_and_a_safe_step(self):
+        folders = self.unknown(17)
+        found = self.run_check()
+        self.assertEqual(['owner_unknown'], self.reasons(found))
+        text = found[0].text
+        self.assertTrue(text.startswith('17 leftover CoCoLo preparation folders are not in use, but nothing proves '
+                                        'the services that made them have stopped, so they were left alone.'), text)
+        self.assertIn(str(self.container), text)  # where to look
+        self.assertIn('quit', text)  # never delete while a service may run
+        self.assertNotIn(folders[0].name, text)
+        self.assertEqual(('reported', 'machine', 'folders'), (found[0].outcome, found[0].scope, found[0].subject))
+
+    @requirements('PREP-1')
+    def test_PREP_1_one_unproven_folder_uses_singular_wording(self):
+        self.unknown(1)
+        text = self.run_check()[0].text
+        self.assertTrue(text.startswith('1 leftover CoCoLo preparation folder is not in use, but nothing proves the '
+                                        'service that made it has stopped, so it was left alone.'), text)
+
+    @requirements('PREP-1')
+    def test_PREP_1_a_removed_orphan_is_still_its_own_fixed_finding(self):
+        self.unknown(2)
+        orphan = self.folder()
+        found = self.run_check()
+        self.assertEqual(['orphan_removed', 'owner_unknown'], self.reasons(found))
+        self.assertFalse(os.path.lexists(orphan))
+
+    @requirements('PREP-2')
+    def test_PREP_2_the_finding_stays_within_the_text_bound_even_with_many_folders_and_a_long_path(self):
+        self.unknown(40)
+        found = self.run_check()
+        self.assertEqual(1, len(found))
+        self.assertTrue(1 <= len(found[0].text) <= hm.MAX_TEXT)
+        long = self.base / ('d' * 120)
+        long.mkdir(mode=0o700)
+        container = long / 'codex-agents-scratch'
+        container.mkdir(mode=0o700)
+        for index in range(3):
+            path = container / f'prepare-{index:08x}'
+            path.mkdir(mode=0o700)
+            os.utime(path, (time.time() - 2 * DAY_SECONDS,) * 2)
+        found = self.run_check(self.check(container=container))
+        self.assertEqual(1, len(found))
+        self.assertTrue(found[0].text.startswith('3 leftover CoCoLo preparation folders'))
+        self.assertTrue(len(found[0].text) <= hm.MAX_TEXT)
+
+    @requirements('PREP-3')
+    def test_PREP_3_nothing_is_removed_and_young_folders_are_not_counted(self):
+        old = self.unknown(2)
+        young = self.folder(marker=False, age_days=0)
+        found = self.run_check()
+        self.assertTrue(found[0].text.startswith('2 leftover CoCoLo preparation folders'))
+        for path in old + [young]:
+            self.assertTrue((path / 'export' / 'file.txt').is_file())
+
+    @requirements('PREP-3')
+    def test_PREP_3_no_unproven_folder_means_no_finding(self):
+        self.assertEqual([], self.run_check())
+
 
 
 if __name__ == '__main__':

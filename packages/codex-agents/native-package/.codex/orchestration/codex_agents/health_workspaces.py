@@ -209,6 +209,22 @@ def _finding(subject, outcome, reason, text):
     return Finding(CHECK_NAME, 'machine', subject, outcome, reason, _sentence(text))
 
 
+def _unproven_finding(count, container):
+    """PREP-1: all leftover folders whose owner cannot be proven, as ONE finding (a count, never one line each).
+    The step is safe: look in the scratch folder, and delete only once CoCoLo is quit (a folder may belong to a
+    running service, which is why nothing here removes it)."""
+    many = count != 1
+    head = (f'{count} leftover CoCoLo preparation folder{"s are" if many else " is"} not in use, but nothing proves '
+            f'the service{"s that made them have" if many else " that made it has"} stopped, so '
+            f'{"they were" if many else "it was"} left alone.')
+    step = f' Look in {container}; delete {"them" if many else "it"} only after you quit CoCoLo.'
+    short = ' Delete only after you quit CoCoLo; they sit in the CoCoLo scratch folder (prepare-*).'
+    text = head + step
+    if _sentence(text) != text:  # past the finding bound: say where in general words instead of the path
+        text = head + short
+    return _finding('folders', 'reported', 'owner_unknown', text)
+
+
 _UNSAFE = {
     'folder_is_a_link': 'is a link, not a real folder. It was not followed or removed; look at it by hand.',
     'folder_not_a_directory': 'is a file, not a folder. It was left alone; look at it by hand.',
@@ -608,7 +624,7 @@ class WorkspaceCheck(Check):
             error = live_error if live is None else pending_error
             findings.append(self._records_finding(what, error))
         now = context.now_ms / 1000
-        candidates, seen_pending = [], {}
+        candidates, seen_pending, unproven = [], {}, 0
         for name in names:
             path = container / name
             try:
@@ -640,15 +656,14 @@ class WorkspaceCheck(Check):
                 continue
             if owner is None:
                 if now - info.st_mtime >= MIN_ORPHAN_AGE_SECONDS:
-                    findings.append(_finding(_subject(name), 'reported', 'owner_unknown',
-                                             f'A CoCoLo preparation folder ({name}) is not in use, but nothing proves '
-                                             'the service that made it has stopped, so it was left alone. Look at '
-                                             'it by hand.'))
+                    unproven += 1  # PREP-1: reported once, below, with a count
                 continue
             if now - made >= MIN_ORPHAN_AGE_SECONDS:
                 candidates.append((name, ident))
         if pending is not None:
             self.pending_passes = seen_pending
+        if unproven:
+            findings.append(_unproven_finding(unproven, container))
         budget, removed, waiting = _Budget(context), 0, 0
         for name, ident in candidates:
             if removed >= MAX_REMOVALS_PER_PASS or budget.spent():

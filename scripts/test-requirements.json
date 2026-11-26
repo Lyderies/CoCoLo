@@ -1949,6 +1949,30 @@
   "source": "tests/requirements/p9b.json#P9b-3",
   "statement": "### P9b-3 \u2014 Record deletion restores surviving predecessors\n\nDeleting a billing attestation by any record-deletion path rebuilds the derived\nsupersession state for its project/account/provider. Deleting the newest valid\nrow immediately restores the latest surviving verified predecessor as a capture\ncandidate, without restart or re-verification. Other accounts and providers\nremain independent. Deleting superseded rows must preserve bounded sweep work."
  },
+ "PREP-1": {
+  "checks": [
+   "codex:tests.test_health_workspaces.GroupedUnknownOwnerTests.test_PREP_1_a_removed_orphan_is_still_its_own_fixed_finding",
+   "codex:tests.test_health_workspaces.GroupedUnknownOwnerTests.test_PREP_1_many_unproven_folders_are_one_finding_with_a_count_and_a_safe_step",
+   "codex:tests.test_health_workspaces.GroupedUnknownOwnerTests.test_PREP_1_one_unproven_folder_uses_singular_wording"
+  ],
+  "source": "tests/requirements/s11.json#PREP-1",
+  "statement": "All leftover CoCoLo preparation folders whose owner cannot be proven are reported as ONE owner_unknown finding (subject folders) with a count, plain wording and a safe next step (where to look; delete only after quitting CoCoLo); each removed orphan stays its own finding."
+ },
+ "PREP-2": {
+  "checks": [
+   "codex:tests.test_health_workspaces.GroupedUnknownOwnerTests.test_PREP_2_the_finding_stays_within_the_text_bound_even_with_many_folders_and_a_long_path"
+  ],
+  "source": "tests/requirements/s11.json#PREP-2",
+  "statement": "The grouped finding stays within the 240-character finding bound (the path is dropped for a short step when it does not fit); folder names are not in it (the finding has no detail field)."
+ },
+ "PREP-3": {
+  "checks": [
+   "codex:tests.test_health_workspaces.GroupedUnknownOwnerTests.test_PREP_3_no_unproven_folder_means_no_finding",
+   "codex:tests.test_health_workspaces.GroupedUnknownOwnerTests.test_PREP_3_nothing_is_removed_and_young_folders_are_not_counted"
+  ],
+  "source": "tests/requirements/s11.json#PREP-3",
+  "statement": "Behaviour is otherwise unchanged: nothing is removed without owner proof, folders younger than the orphan age are not counted, and no unproven folder means no finding."
+ },
  "PREPCLEAN-1": {
   "checks": [
    "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_missing_child_is_not_workspace_removal",
