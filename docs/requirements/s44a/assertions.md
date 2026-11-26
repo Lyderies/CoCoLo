@@ -26,3 +26,11 @@ Tests of THIS step (new, never merged) reshaped during the fix, old -> new:
 - `..._status_run_usage_is_unknown_not_invented_when_the_project_is_not_known` -> the unavailable test above (unknown is null with a reason).
 - `..._learning_status_carries_the_run_usage_and_stays_read_only`: kept, now asserts the status branch calls `run_usage_client` and never `usage_report(`.
 - Added: partial measurement (MED 4), outcome-only run in the recorded span (MED 2), relative root symlink / `..` / `sub/..` tests (S44A-1; these passed on first run, they pin existing behaviour).
+
+## Review r2c (two MED), no existing assertion changed
+
+`history.run_usage` is bounded in time as well as rows: SQLite progress check, 1 s (below the client's 2 s), then a partial
+reply (`truncated`, `partial_reason`, providers `unknown` with null counts, never zero); the service skips the per-run outcome
+lookups (not needed for coverage). New tests: `..._the_service_reading_stops_at_its_time_bound_and_says_unknown_not_zero`
+(red first: no time bound existed), `..._returns_at_most_its_row_cap_and_says_truncated`. The cap is registered in
+`tests/lifetime_caps.json` (`project_usage_report.py::service_run_usage`) with that second test.

@@ -328,6 +328,36 @@ class StatusRunUsageTests(InstalledUsageCase):
         self.assertNotIn("usage_report(", branch)  # the client reads no store
 
     @requirements('S44A-2')
+    def test_s44a_2_the_service_reading_stops_at_its_time_bound_and_says_unknown_not_zero(self) -> None:
+        # The service's work for status is bounded in time (checked inside SQLite), not only in returned rows: a run
+        # past the bound replies partial with every provider unknown and a plain reason, and leaves the store usable.
+        from codex_agents import project_usage_report as module
+        now = int(time.time() * 1000)
+        for index in range(6):
+            self.finished(now - HOUR - index, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
+        with mock.patch.object(module, "RUN_USAGE_SECONDS", -1.0), mock.patch.object(module, "RUN_USAGE_PROGRESS", 1):
+            reply = module.service_run_usage(self.store, now)
+        module.checked_run_usage(reply)
+        self.assertTrue(reply["truncated"])
+        self.assertIn("unknown", reply["partial_reason"])
+        self.assertEqual({"state": "unknown", "runs": None, "runs_with_complete_usage": None},
+                         reply["child_runs"]["codex"])
+        again = module.service_run_usage(self.store, now)  # the store's connection is as it was
+        self.assertEqual(6, again["child_runs"]["codex"]["runs"])
+        self.assertNotIn("partial_reason", again)
+
+    @requirements('S44A-2')
+    def test_s44a_2_the_service_reading_returns_at_most_its_row_cap_and_says_truncated(self) -> None:
+        from codex_agents import project_usage_report as module
+        now = int(time.time() * 1000)
+        for index in range(5):
+            self.finished(now - HOUR - index, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
+        with mock.patch.object(module, "MAX_ROWS", 3):
+            reply = module.service_run_usage(self.store, now)
+        self.assertTrue(reply["truncated"])
+        self.assertEqual(3, reply["child_runs"]["codex"]["runs"])
+
+    @requirements('S44A-2')
     def test_s44a_2_a_partial_measurement_is_partial_and_its_note_matches_the_values(self) -> None:
         self.finished(T0 + HOUR, model=CLAUDE, role="claude_agents_researcher", usage={"input_tokens": 12})
         report = self.report()

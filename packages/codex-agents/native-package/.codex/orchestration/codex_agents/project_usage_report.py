@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import stat
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -140,7 +141,7 @@ def _text(value):
     return value if type(value) is str and 0 < len(value) <= 128 else None
 
 
-def _rows(connection, project_id, since_ms, until_ms, limit):
+def _rows(connection, project_id, since_ms, until_ms, limit, *, with_outcomes=True):
     """This store's runs of the window as (time, run, provider, model, effort, role, outcome, tokens...)."""
     usage_rows = connection.execute(
         "SELECT content,observed_at_ms FROM records WHERE project_id=? AND record_type IN (?,?) AND source='provider' "
@@ -165,7 +166,7 @@ def _rows(connection, project_id, since_ms, until_ms, limit):
         if value is not None and type(observed) is int and value["run_id"] not in usage:
             windowed.setdefault(value["run_id"], (value, observed))
     stored = _by_run(connection, project_id, _USAGE_TYPES, "provider", windowed) if windowed else {}
-    outcomes = _by_run(connection, project_id, ("outcome",), "host", usage) if usage else {}
+    outcomes = _by_run(connection, project_id, ("outcome",), "host", usage) if usage and with_outcomes else {}
     rows = []
     for run_id, (record, observed) in usage.items():
         outcome = outcomes.get(run_id, (None, None))[0]
@@ -335,13 +336,32 @@ def _coverage(runs):
 STATUS_USAGE_DAYS = 7
 
 
+RUN_USAGE_SECONDS = 1.0  # the service's work for one status reading; the client waits 2 s
+RUN_USAGE_PROGRESS = 1_000  # SQLite VM steps between deadline checks
+RUN_USAGE_UNKNOWN = {"state": "unknown", "runs": None, "runs_with_complete_usage": None}
+
+
 def service_run_usage(history, now_ms: int) -> dict:
     """The last days' child runs of this project's own store, per provider (the service's reading for status).
 
-    Bounded to MAX_ROWS runs; `truncated` says when more were cut. Content-free: counts and states only.
+    Bounded in rows (MAX_ROWS; `truncated` says when more were cut) and in time (RUN_USAGE_SECONDS, checked inside
+    SQLite): when the time runs out the reply says so (`partial_reason`, every provider `unknown`, never zero) and the
+    store is left as it was. Content-free: counts and states only.
     """
-    rows, more = _rows(history._connection, history.project_id, max(0, now_ms - STATUS_USAGE_DAYS * 86_400_000),
-                       now_ms + 1, MAX_ROWS)
+    connection = history._connection
+    deadline = time.monotonic() + RUN_USAGE_SECONDS
+    connection.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, RUN_USAGE_PROGRESS)
+    try:
+        rows, more = _rows(connection, history.project_id, max(0, now_ms - STATUS_USAGE_DAYS * 86_400_000),
+                           now_ms + 1, MAX_ROWS, with_outcomes=False)
+    except sqlite3.OperationalError:
+        return {"window_days": STATUS_USAGE_DAYS, "truncated": True,
+                "child_runs": {"codex": dict(RUN_USAGE_UNKNOWN), "claude": dict(RUN_USAGE_UNKNOWN)},
+                "primary_session": {"state": "not_reported", "note": PRIMARY_SESSION_NOTE},
+                "partial_reason": "Reading this project's stored runs took longer than the service allows for "
+                                  "status, so coverage is unknown (not zero): run learning-usage-report."}
+    finally:
+        connection.set_progress_handler(None, 0)
     runs = []
     for observed, run_id, provider, model, outcome, (complete, inputs, outputs, creation, cached) in rows[:MAX_ROWS]:
         name = _text(outcome.get("model")) if outcome else None
@@ -364,12 +384,19 @@ def checked_run_usage(value) -> None:
         if not condition:
             raise HistoryError("history_invalid_response")
 
-    require(type(value) is dict and value.keys() == {"window_days", "truncated", "child_runs", "primary_session"})
+    base = {"window_days", "truncated", "child_runs", "primary_session"}
+    require(type(value) is dict and value.keys() in (base, base | {"partial_reason"}))
+    partial = "partial_reason" in value
+    require(not partial or (type(value["partial_reason"]) is str and 0 < len(value["partial_reason"]) <= 300
+                            and value["truncated"] is True))
     require(value["window_days"] == STATUS_USAGE_DAYS and type(value["truncated"]) is bool)
     children = value["child_runs"]
     require(type(children) is dict and children.keys() == {"codex", "claude"})
     for entry in children.values():
         require(type(entry) is dict and entry.keys() == {"state", "runs", "runs_with_complete_usage"})
+        if partial:
+            require(entry == RUN_USAGE_UNKNOWN)
+            continue
         require(entry["state"] in ("no_runs", "reported", "partial", "not_reported"))
         require(valid_integer(entry["runs"], maximum=MAX_ROWS) and valid_integer(entry["runs_with_complete_usage"],
                                                                                 maximum=entry["runs"]))
