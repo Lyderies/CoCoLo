@@ -109,3 +109,10 @@ Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-
 Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-run4-timings.json` (output docs/batch-0869-full-run4.txt).
 - Exit 0. 555 units, tests claude 134 / codex 6925 / root 1194. Elapsed 629.3 s, preflight 8.1 s. `failed_units` [], `requirement_failures` [], `metadata_errors` [], not partial. test_runtime_release green; new test_b4t_native_p68 included and passing.
 - Budget failures (2), load flakes; each alone through the runner has no budget failure: test_project_start 194.3 -> 24.0 s, test_run_retention_scale 74.1 -> 33.2 s. No test failures, so no base comparison. Nothing fixed.
+
+## Full run 5 (0.8.69, after merging fix/0869-takeover-proof @9f4573d7 (Codex review corrections) and re-recording the digest; HEAD 13530b19; base e46759a5)
+
+Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-run5-timings.json` (output docs/batch-0869-full-run5.txt).
+- Exit 1. 555 units, tests claude 134 / codex 6926 / root 1194. Elapsed 623.3 s, preflight 7.8 s. `metadata_errors` [], not partial.
+- Failed unit (1): `test_read_growth` U3 (`test_U3_10_open_and_provenance_ignore_released_account_history`: `0 != 2` non-released `run_holds` rows with identity 'e%' after `grow(SMALL)`). INTERMITTENT, not a takeover-proof regression: alone through the runner it failed on HEAD once (first rerun), then passed 3 of 3 reruns; on 77bca2e5 (before the takeover-proof merge) it failed once; on base e46759a5 and on 7186495d it passed once each. The takeover-proof change touches no ledger/run_holds code. Not fixed; needs its own look (likely timing: a hold not yet released when the count runs).
+- Budget failures (2), load flakes; each alone through the runner has no budget failure: test_project_start 191.6 -> 27.4 s, test_run_retention_scale 70.3 -> 33.4 s.
