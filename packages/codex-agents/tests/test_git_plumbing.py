@@ -390,6 +390,13 @@ class GitExecutableTests(unittest.TestCase):
         roots.start()
         self.addCleanup(roots.stop)
 
+    def resolve_git(self, **options):
+        # These cases change installation trust/candidates within one process.
+        # Each represents a fresh process; the production pin is intentionally stable.
+        git_plumbing._trusted_git_candidates.cache_clear()
+        self.addCleanup(git_plumbing._trusted_git_candidates.cache_clear)
+        return git_plumbing.git_executable(**options)
+
     def fake_git(self, name: str) -> str:
         path = self.base / name / "git"
         path.parent.mkdir()
@@ -398,7 +405,7 @@ class GitExecutableTests(unittest.TestCase):
         return str(path)
 
     def test_the_resolved_git_is_real_and_trusted(self) -> None:
-        executable = git_plumbing.git_executable()
+        executable = self.resolve_git()
         if executable is None:
             self.skipTest("no trusted git binary on this machine")
         self.assertEqual(os.path.realpath(executable), executable)
@@ -415,33 +422,33 @@ class GitExecutableTests(unittest.TestCase):
     def test_candidates_in_temporary_or_shim_locations_are_refused(self) -> None:
         temporary = self.fake_git("temporary")
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (temporary,)):
-            self.assertIsNone(git_plumbing.git_executable())
+            self.assertIsNone(self.resolve_git())
         trusted = self.fake_git("trusted")
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (temporary, trusted)), \
                 mock.patch.object(
                     git_plumbing, "temp_roots", lambda: {Path(temporary).parent}
                 ):
-            self.assertEqual(trusted, git_plumbing.git_executable())
+            self.assertEqual(trusted, self.resolve_git())
         # A symlink to a trusted binary is pinned as the binary itself.
         link = self.base / "link-git"
         link.symlink_to(trusted)
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (str(link),)), \
                 mock.patch.object(git_plumbing, "temp_roots", lambda: set()):
-            self.assertEqual(trusted, git_plumbing.git_executable())
+            self.assertEqual(trusted, self.resolve_git())
         if sys.platform == "darwin":
             with mock.patch.object(git_plumbing, "git_candidates", lambda: ("/usr/bin/git",)):
-                self.assertIsNone(git_plumbing.git_executable())
+                self.assertIsNone(self.resolve_git())
         # Outside every trusted installation folder (a sibling of a workspace), never.
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (trusted,)), \
                 mock.patch.object(git_plumbing, "temp_roots", lambda: set()), \
                 mock.patch.object(host_paths, "TRUSTED_INSTALL_ROOTS", ("/usr/bin",)):
-            self.assertIsNone(git_plumbing.git_executable())
+            self.assertIsNone(self.resolve_git())
         # A git inside the repository it would inspect is never run.
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (trusted,)), \
                 mock.patch.object(git_plumbing, "temp_roots", lambda: set()):
-            self.assertEqual(trusted, git_plumbing.git_executable())
+            self.assertEqual(trusted, self.resolve_git())
             self.assertIsNone(
-                git_plumbing.git_executable(untrusted=[Path(trusted).parent.parent])
+                self.resolve_git(untrusted=[Path(trusted).parent.parent])
             )
 
     def test_the_developer_directory_comes_from_the_root_owned_link(self) -> None:

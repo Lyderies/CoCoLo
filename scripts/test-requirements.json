@@ -4304,8 +4304,7 @@
    "codex:tests.test_s12_account_lanes.S12SettlementLimitTests.test_raw_sqlite_busy_and_locked_remain_retryable_past_record_failure_limit",
    "codex:tests.test_s12_account_lanes.S12SettlementLimitTests.test_other_sqlite_operational_errors_still_exhaust_record_budget"
   ]
- }
-,
+ },
  "S14A-1": {
   "statement": "At 774 runs per day (2x the sourced 387 peak), two accounts per provider and the full 16-window payload together, real admission intake fits the unchanged 4096-row/2-MiB slot with at least 20 percent byte margin and remaining row capacity.",
   "source": "tests/requirements/s14a.json#S14A-1",
@@ -4336,5 +4335,46 @@
    "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_real_two_mib_boundary_still_refuses_one_byte_over",
    "codex:tests.test_admission_capture_claim.AdmissionCaptureClaimTests.test_U2_4_a_claim_anchored_at_its_open_is_charged_alike"
   ]
+ },
+ "S13d-1": {
+  "checks": [
+   "codex:tests.test_idle_cpu_budget.IdleCpuBudgetTests.test_S13d_1_idle_collector_and_project_host_stay_within_their_cpu_budgets"
+  ],
+  "source": "tests/requirements/s13d.json#S13d-1",
+  "statement": "Measure real idle host CPU before setting a regression budget or changing waits; preserve queue and latency contracts."
+ },
+ "S13d-2": {
+  "checks": [
+   "codex:tests.test_s13d_regressions.GitPinTests.test_repeated_git_resolution_validates_candidates_once",
+   "codex:tests.test_s13d_regressions.GitPinTests.test_cached_git_still_excludes_each_callers_root_and_its_symlink",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_removed_binary_is_dropped_and_the_fallback_selected",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_replaced_binary_is_trust_checked_again",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_trusted_replacement_is_revalidated_once_then_cached_again",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_retargeted_symlink_selects_its_new_trusted_target",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_retargeted_symlink_to_an_untrusted_target_falls_back",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_permission_change_is_revalidated",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_every_candidate_gone_fails_closed",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_an_unchanged_pin_is_trust_checked_once_and_stays_fast"
+  ],
+  "source": "tests/requirements/s13d.json#S13d-2",
+  "statement": "Cache trusted git resolution per process without caching caller repository exclusions or doing import-time I/O."
+ },
+ "S13d-3": {
+  "checks": [
+   "codex:tests.test_s13d_regressions.HostCloseTests.test_host_lock_stays_held_until_writer_drain_and_final_settlement",
+   "codex:tests.test_s13d_regressions.HostCloseTests.test_faulted_host_keeps_lock_until_threads_stop_then_relinquishes_without_settling",
+   "codex:tests.test_s13d_regressions.FailedStartupTests.test_failed_startup_drains_writer_before_releasing_its_host_lock"
+  ],
+  "source": "tests/requirements/s13d.json#S13d-3",
+  "statement": "Retain the project host lock through history writer drain and final settlement before acknowledging stopped."
+ },
+ "S13d-4": {
+  "checks": [
+   "codex:tests.test_project_start.BackoffTests.test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks",
+   "codex:tests.test_project_start.BudgetTests.test_E2c_3_claim_batches_are_short_indexed_and_flat_at_100000_settled_rows",
+   "codex:tests.test_s13d_regressions.HostCleanupTests.test_stop_hosts_tolerates_a_pid_that_exits_after_enumeration"
+  ],
+  "source": "tests/requirements/s13d.json#S13d-4",
+  "statement": "Diagnose claim and crash-loop timing flakes and tolerate an already-exited enumerated host without weakening existing guarantees."
  }
 }

@@ -5,6 +5,7 @@ the detached host it starts, their enrollment and the project history are the
 product paths, with no fixture context, hint or capability supplied by the test.
 """
 import json
+import contextlib
 import os
 from pathlib import Path
 import signal
@@ -55,7 +56,8 @@ class ProjectServiceStartupTests(unittest.TestCase):
 
     def stop_hosts(self):
         for pid in self.hosts():
-            os.kill(pid, signal.SIGTERM)
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGTERM)
         end = time.monotonic() + 15
         while self.hosts():
             self.assertLess(time.monotonic(), end, 'project host did not stop on SIGTERM')

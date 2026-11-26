@@ -323,6 +323,9 @@ class AccountServiceHost:
         # Contexts belong to connections the frontend still holds.
         for token in [key for key in self._contexts if self._frontend.context(key) is None]:
             del self._contexts[token]
+        # S13d-1: True while a client is connecting or attached or a request is in flight, so the caller keeps
+        # its short pass interval; False lets it wait longer between passes.
+        return self._frontend.engaged() or self._ingress.engaged()
 
     def close(self):
         """Withdraw the key first, then stop intake and every owned worker."""
