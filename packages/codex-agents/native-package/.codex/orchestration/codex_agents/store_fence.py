@@ -6,7 +6,6 @@ exclusion additionally requires the lifetime flock and a newer store version.
 """
 from __future__ import annotations
 
-import contextlib
 import fcntl
 import functools
 import os
@@ -112,11 +111,25 @@ class StoreFence:
         if full:
             self.lock()
         if self.epoch is not None:
+            # TORN-1: the connection is shared between threads; read under its lock (RLock, re-entrant). The wait
+            # is bounded like every ledger-lock wait (E1a-1) and a wait that runs out is today's busy refusal.
+            lock, acquired = getattr(connection, '_sql_owner_lock', None), False
+            if lock is not None:
+                from .ledger_waits import wait_seconds
+                from .sql_read_budget import SQLReadError
+                acquired = lock.acquire(timeout=wait_seconds())
+                if not acquired:
+                    waits = getattr(connection, '_sql_lock_waits', None)
+                    if waits is not None:
+                        waits.refused('fence_check')
+                    raise SQLReadError('sql_read_busy')
             try:
-                # TORN-1: the connection is shared between threads; read under its lock (RLock, re-entrant).
-                with getattr(connection, '_sql_owner_lock', None) or contextlib.nullcontext():
+                try:
                     row = sqlite3.Connection.execute(connection,
                         'SELECT epoch,new_digest FROM runtime_takeover WHERE singleton=1').fetchone()
+                finally:
+                    if acquired:
+                        lock.release()
                 valid = row is not None and tuple(row) == (self.epoch, self.digest)
             except sqlite3.Error as error:
                 if isinstance(error, sqlite3.OperationalError) and str(error) == 'interrupted':
