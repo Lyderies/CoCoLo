@@ -207,6 +207,16 @@ another program still holds its records lock. Nothing was taken over yet.
 Inspect the lock with `lsof` as above, let that program finish, then run
 `./setup.sh --update` again. Do not signal a guessed PID.
 
+A run the update ended can sometimes not be re-checked by the new version (its
+records were written by an older one and cannot be proven unchanged). Health then
+says: "A run ended by the last update is still counted because its records could
+not be checked. It is harmless, takes no run slot, and will not clear by itself."
+This is `hold_unverified_takeover`. Nothing needs doing: the update never frees
+such a record by guessing, the service tries its settlement once and then leaves it
+unchanged, and it does not delay later runs or updates. It is not the
+`hold_overdue` warning, which still means a held resource is genuinely late.
+Do not edit the project's history file to remove it.
+
 An installer failure after hand-over rolls managed files back where possible;
 the records already belong to the successor, and its journal names the next
 step. Run the update again to finish. A record reported as "could not be

@@ -1190,7 +1190,7 @@ class ResultPersistenceLane:
         return self._queue_counted(_EarlierLeases('open_binding', arguments=(operation, arguments, options)),
                                    '_earlier_held', EARLIER_SLOTS)
 
-    SETTLEMENT_STEPS = frozenset({'open_account_settlement', 'record_account_settlement'})
+    SETTLEMENT_STEPS = frozenset({'open_account_settlement', 'record_account_settlement', 'takeover_unverified'})
 
     def account_settlement(self, operation, *arguments, **options):
         """B4s (RS-B-B4-2/-3): one step of a lost run's settlement on the writer, the outbox (`releasing` with the

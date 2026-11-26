@@ -522,6 +522,33 @@ class MachineRestartTests(RecoveryCase):
         self.assertEqual(sorted(tokens), sorted(self.settled_tokens()))
 
 
+class UnverifiedTakeoverRecoveryTests(RecoveryCase):
+    """0.8.70 UH-3, review r1 MED (decision 367): the container recovery path stops too."""
+
+    @__import__('test_framework').requirements('UH-3', why_not_scenario=(
+        'The real launch journal, launcher and recovery over a fake podman; the project writer answers by stub.'))
+    def test_UH_3_container_recovery_stops_settling_a_run_the_takeover_left_unverified(self):
+        """An earlier instance's container run whose hold the update left unverified: its settlement meets
+        history_conflict, the writer's durable marker says unverified, and no later pass settles it again (no
+        release, no account change); the run stays held."""
+        from codex_agents.history_contracts import HistoryError
+        token = self.started()
+        self.vanish(token)
+        self.crash_earlier()
+        self.later()
+        self.driver._settle_entry.side_effect = HistoryError('history_conflict')
+        asked = []
+        self.driver._settlement_step = lambda operation, *arguments, **options: (asked.append(operation), True)[1]
+        lost = None
+        for _ in range(5):
+            lost = self.sweep()
+            self.clock.now += container_launch.STOP_RETRY_MAX_SECONDS + 1
+        self.assertEqual(1, self.driver._settle_entry.call_count)
+        self.assertEqual(['takeover_unverified'], asked)
+        self.assertNotEqual('settled', self.entry(token)['state'])
+        self.assertEqual({HANDLE: ('codex-host-v1', 'held')}, lost)
+
+
 class RecoveryReportBoundTests(RecoveryCase):
     """The recovery report is one file, replaced whole on each pass: its size and orphan list are bounded."""
 
@@ -872,7 +899,8 @@ def load_tests(loader, tests, pattern):
     """Only this module's own tests: the inherited lost-run ones run in their own module."""
     suite = unittest.TestSuite()
     for case in (RecoveryByStateTests, StopFailedRecoveryTests, OrphanRecoveryTests, UnreachablePodmanRecoveryTests,
-                 NeverTouchedTests, MachineRestartTests, RecoveryReportBoundTests, StatusTokenTests, NetworkLabelTests,
+                 NeverTouchedTests, MachineRestartTests, UnverifiedTakeoverRecoveryTests, RecoveryReportBoundTests,
+                 StatusTokenTests, NetworkLabelTests,
                  ContainerRecoveryHoldTests, RealRecoveryTests):
         for name in loader.getTestCaseNames(case):
             if name in case.__dict__:

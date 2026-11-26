@@ -1045,6 +1045,41 @@ finally:owner.close()
             self.primary_record(corrupt=True)
         self.assertEqual(rows, (self.rows('records'), self.rows('project_result_recorders')))
 
+    @requirements('UH-5')
+    def test_UH_5_a_run_still_held_at_adoption_that_later_goes_releasing_is_not_taken_for_unverified(self):
+        """Review r1 HIGH 2 (decision 367): a valid listed run still `held` when B adopts, later `releasing` through
+        the successor's own arbitration and outbox, has no obligation row; it is never 'unverified', its conflict is
+        retried and, when late, it is reported `hold_overdue`."""
+        import time
+        from codex_agents import health_holds
+        from codex_agents.health_monitor import CheckContext
+        from codex_agents.lost_run_contracts import SettleLostInput
+        self.open()
+        state = "SELECT state FROM project_holds WHERE kind='reservation' AND identity=?"
+        self.assertEqual('held', self.store._connection.execute(state, (self.running.claim_id,)).fetchone()[0])
+        lease = self.store.result_lease(self.scope)
+        self.store.arbitrate_publication(self.running.run_handle, self.running.attempt, 'b4t-lost')
+        payload = SettleLostInput(self.running.run_handle, 'd' * 64, self.scope.claim_request_id,
+                                  self.running.claim_id, lease.lease_digest).payload()
+        self.store.open_account_settlement(self.running.run_handle, self.running.attempt, 'b4t-lost', payload,
+                                           runtime_digest=self.store._fence.digest)
+        self.assertEqual('releasing', self.store._connection.execute(state, (self.running.claim_id,)).fetchone()[0])
+        self.assertIs(False, self.store.takeover_unverified(self.running.run_handle, self.running.attempt,
+                                                            self.running.claim_id))
+        with self.store._transaction():
+            self.store._connection.execute(
+                "UPDATE project_holds SET due_at_ms=NULL,next_check_ms=9000000000000 WHERE NOT "
+                "(kind='reservation' AND identity=?)", (self.running.claim_id,))
+            self.store._connection.execute(
+                "UPDATE project_holds SET due_at_ms=1000,next_check_ms=1000 WHERE kind='reservation' AND identity=?",
+                (self.running.claim_id,))
+        check = health_holds.HoldsCheck(None, sweep_interval_seconds=60)
+        with closing(health_holds.open_reader(self.case / 'history/history.sqlite3')) as reader:
+            found = {f.reason_code for f in check.check_project(
+                reader, self.data['project'], CheckContext(time.monotonic() + 5, 61_001, 60_000), self.key)}
+        self.assertIn('hold_overdue', found)
+        self.assertNotIn('hold_unverified_takeover', found)
+
     @requirements('RS-B-B4t-5', 'RS-B-B4t-10')
     def test_B4t_5_cross_digest_outbox_replay(self):
         from codex_agents.lost_run_contracts import SettleLostInput
@@ -2550,6 +2585,120 @@ class ChainedOutboxTests(unittest.TestCase):
                 history.open_account_settlement(scope.run_handle, scope.attempt, run['request_id'],
                                                 run['payload'], runtime_digest=B)
             self.assertEqual(before, [tuple(r) for r in history._connection.execute('SELECT * FROM project_holds ORDER BY rowid')])
+
+    def unverified_case(self, *, corrupt):
+        """0.8.70 UH: the corrupt-original fixture above (or the intact one), adopted by B, with only the first run's
+        holds made due so the holds check would look at them."""
+        from codex_agents import learning_store
+        root = Path(tempfile.mkdtemp(dir=self.root))
+        shutil.copytree(self.source / 'history', root / 'history')
+        shutil.copytree(self.source / 'state', root / 'state')
+        run = self.data['runs'][0]
+        if corrupt:
+            with closing(sqlite3.connect(root / 'history/history.sqlite3')) as db:
+                db.execute("UPDATE project_holds SET request_digest=? WHERE kind='reservation' AND identity=?",
+                           ('f' * 64, run['binding']['claim_id']))
+                db.commit()
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(self.build_identity(B, '0.8.68'))
+        stack.enter_context(mock.patch.object(learning_store.LearningLedger, '_clock_ms', return_value=self.data['now']))
+        stack.enter_context(mock.patch.object(learning_store.LearningLedger, '_capacity_clock_reference',
+                                              return_value=self.data['clock_reference_ns']))
+        history, _ = self.owners(root, dict(version=self.data['version'], digest=self.data['runtime_digest']),
+                                 dict(version='0.8.68', digest=B), 3)
+        with history._transaction():
+            history._connection.execute(
+                "UPDATE project_holds SET due_at_ms=1000,next_check_ms=1000 WHERE state='releasing' AND "
+                "((kind='reservation' AND identity=?) OR (kind='lease' AND identity=?))",
+                (run['binding']['claim_id'], run['binding']['run_handle'] + ':' + str(run['binding']['attempt'])))
+            history._connection.execute(
+                "UPDATE project_holds SET due_at_ms=NULL,next_check_ms=9000000000000 WHERE NOT "
+                "((kind='reservation' AND identity=?) OR (kind='lease' AND identity=?))",
+                (run['binding']['claim_id'], run['binding']['run_handle'] + ':' + str(run['binding']['attempt'])))
+        return history, root, run
+
+    def holds_codes(self, root, now=61_001):
+        import time
+        from codex_agents import health_holds
+        from codex_agents.health_monitor import CheckContext
+        check = health_holds.HoldsCheck(None, sweep_interval_seconds=60)
+        with closing(health_holds.open_reader(root / 'history/history.sqlite3')) as reader:
+            found = check.check_project(reader, self.data['project'], CheckContext(time.monotonic() + 5, now, 60_000),
+                                        bytes.fromhex(self.data['key']))
+        return {f.reason_code: f for f in found}
+
+    @requirements('UH-1', 'UH-2')
+    def test_UH_a_hold_the_takeover_left_unverified_is_its_own_plain_finding_not_overdue(self):
+        history, root, run = self.unverified_case(corrupt=True)
+        self.assertEqual('releasing', history._connection.execute(
+            "SELECT state FROM project_holds WHERE kind='reservation' AND identity=?",
+            (run['binding']['claim_id'],)).fetchone()[0])
+        self.assertEqual('unverified', history._connection.execute(
+            "SELECT original_request_digest FROM takeover_obligations WHERE kind='reservation' AND identity=?",
+            (run['binding']['claim_id'],)).fetchone()[0])
+        found = self.holds_codes(root)
+        self.assertNotIn('hold_overdue', found)
+        self.assertIn('hold_unverified_takeover', found)
+        text = found['hold_unverified_takeover'].text
+        for words in ('could not be checked', 'harmless', 'no run slot', 'will not clear by itself'):
+            self.assertIn(words, text)
+
+    @requirements('UH-5')
+    def test_UH_a_verified_takeover_hold_that_is_overdue_is_still_reported_overdue(self):
+        history, root, run = self.unverified_case(corrupt=False)
+        found = self.holds_codes(root)
+        self.assertIn('hold_overdue', found)
+        self.assertNotIn('hold_unverified_takeover', found)
+
+    @requirements('UH-3')
+    def test_UH_the_writer_says_which_runs_the_takeover_left_unverified(self):
+        corrupt, _, run = self.unverified_case(corrupt=True)
+        scope = run['scope']
+        self.assertIs(True, corrupt.takeover_unverified(scope['run_handle'], scope['attempt'], run['binding']['claim_id']))
+        other = self.data['runs'][1]
+        self.assertIs(False, corrupt.takeover_unverified(other['scope']['run_handle'], other['scope']['attempt'],
+                                                         other['binding']['claim_id']))
+        intact, _, run = self.unverified_case(corrupt=False)
+        self.assertIs(False, intact.takeover_unverified(scope['run_handle'], scope['attempt'], run['binding']['claim_id']))
+
+    def reopen(self, root):
+        """A later start of the same build: no takeover intent, the store as it was left."""
+        from codex_agents.project_history import ProjectHistory
+        from codex_agents.result_contracts import ResultCapacity, MAX_RESULT_BODY_BYTES
+        data = self.data
+        history = ProjectHistory(root / 'history', data['project'], result_key=bytes.fromhex(data['key']),
+            result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000),
+            result_clock_ms=lambda: data['now'], allow_legacy_orchestration_reference=True)
+        self.addCleanup(history.close)
+        return history
+
+    @requirements('UH-1', 'UH-2', 'UH-6')
+    def test_UH_6_the_unverified_fact_written_at_adoption_survives_completion_maintenance_restart_and_a_copy(self):
+        """Review r1 HIGH 1 (decision 367): the takeover records the hold it refused in its own adoption transaction;
+        completing the journal, the ordinary maintenance pass, a restart and a copied (backed-up, restored or moved)
+        store all keep it, so health keeps the plain finding and the writer keeps answering 'unverified'."""
+        from codex_agents.project_takeover import complete_takeovers
+        history, root, run = self.unverified_case(corrupt=True)
+        claim, scope = run['binding']['claim_id'], run['scope']
+
+        def still_unverified(store, where):
+            self.assertIs(True, store.takeover_unverified(scope['run_handle'], scope['attempt'], claim))
+            found = self.holds_codes(where)
+            self.assertNotIn('hold_overdue', found)
+            self.assertIn('hold_unverified_takeover', found)
+        complete_takeovers(history)
+        self.assertEqual({'complete'}, {row[0] for row in history._connection.execute('SELECT state FROM takeover_record')})
+        still_unverified(history, root)
+        history.expire_results(limit=10)
+        still_unverified(history, root)
+        history.close()
+        restarted = self.reopen(root)
+        still_unverified(restarted, root)
+        restarted.close()
+        copy = Path(tempfile.mkdtemp(dir=self.root))
+        shutil.copytree(root / 'history', copy / 'history')
+        still_unverified(self.reopen(copy), copy)
 
     @requirements('RS-B-B4t-4', 'RS-B-B4t-5', 'RS-B-B4t-9', 'RS-B-B4t-10')
     def test_two_archived_outboxes_survive_A_B_C_with_one_effect_and_immutable_originals(self):
