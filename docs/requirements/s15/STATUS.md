@@ -1,5 +1,17 @@
 # Decision 382 continuation — STOP: expired repeat-probe generation returned again
 
+## S15-O0C-REPEAT-EXPIRY: FIXED (product)
+
+Root cause: `_reserve_repeat` returned its existing same-key generation before cleanup without checking
+either deadline. Requirement (RS-A F6, decision 382, `_forget_closed`: a repeat "ends at its deadline"; no
+conflicting requirement found): an expired generation is never live. Fix: when the existing generation is
+expired on either clock, ordinary cleanup runs first; a dropped one is followed by a fresh generation; one
+cleanup must keep (permit or held job) is refused `probe_conflict`, as `prepare` would. Witness now green (2 ms and
+60 s); new regression `test_expired_repeat_generation_that_cleanup_must_keep_is_refused_not_returned`.
+Modules run (probe_caps, contract_caps, lifetime_cap_guard, billing_gate, account_billing_admission): 257 tests,
+metadata_errors [], only S15-O0C-GUARD red (197 unbound entries, unchanged). Matrix and bindings still open.
+
+
 **INCOMPLETE. Do not merge as finished S15.** No commit, socket, or product
 code change was made. The first-record defect is fixed at HEAD `e2ae020d`;
 this stop is a separate defect, **S15-O0C-REPEAT-EXPIRY**.

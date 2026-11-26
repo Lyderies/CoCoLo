@@ -74,6 +74,20 @@ class RepeatProbeCapTests(unittest.TestCase):
             with self.subTest(timeout_ms=timeout_ms):
                 self.same_request_row(timeout_ms)
 
+    def test_expired_repeat_generation_that_cleanup_must_keep_is_refused_not_returned(self):
+        case = self.fixture(60_000)
+        origin = admission.time.monotonic_ns()
+        with mock.patch.object(admission.time, 'monotonic_ns', return_value=origin):
+            first = case.reserve('first')
+        case.owner._permits[first] = object()  # custody cleanup must keep (a running job)
+        case.clock = first.deadline + 1
+        for clock_ns, wall in ((first.deadline_ns + 1, first.deadline + 1), (origin, first.deadline + 1)):
+            case.clock = wall
+            with mock.patch.object(admission.time, 'monotonic_ns', return_value=clock_ns):
+                with self.assertRaisesRegex(admission.ProbeAdmissionError, 'probe_conflict'):
+                    case.reserve('first')
+            self.assertIs(first, case.owner._pending[(first.project, first.key)])
+
     def test_expired_repeat_generations_release_quota_when_a_different_request_retries(self):
         case = self.fixture(60_000)
         origin = admission.time.monotonic_ns()

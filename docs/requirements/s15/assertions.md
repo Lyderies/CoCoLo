@@ -145,3 +145,6 @@
 - New wire draft referenced nonexistent `SignatureInputError` -> the product's
   actual `SignatureWireError`; the exact-limit/one-more-byte expectations are
   unchanged. No product behavior or baseline assertion was adjusted.
+
+## S15-O0C-REPEAT-EXPIRY fix
+No existing assertion changed or removed. Added test (new): an expired repeat generation that cleanup must keep is refused `probe_conflict`, never returned.

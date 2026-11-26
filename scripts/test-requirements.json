@@ -5254,6 +5254,7 @@
  },
  "S15-O0C-REPEAT-EXPIRY": {
   "checks": [
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generation_that_cleanup_must_keep_is_refused_not_returned",
    "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_free_the_count_cap_for_the_same_request",
    "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_release_quota_when_a_different_request_retries"
   ],
