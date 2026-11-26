@@ -89,6 +89,13 @@ def check_cleanup_reservation(store, lease):
         return None
     if row is None:
         raise HistoryError('history_incompatible')
+    # The crypto below is a pure function of the lease and these two rows: unchanged content is verified once.
+    seen = store.__dict__.setdefault('_verified_cleanups', {})
+    fingerprint = (lease, tuple(row), None if receipt is None else tuple(receipt))
+    if seen.get(identity) == fingerprint:
+        from .project_release_ack import check_release_ack_companion
+        check_release_ack_companion(store, lease, row)
+        return row
     digest = row['cleanup_digest']
     if (store._stored_blob(row['binding'], maximum=4096) != canonical_json(lease.binding.as_data())
             or row['lease_digest'] != lease.lease_digest
@@ -109,6 +116,7 @@ def check_cleanup_reservation(store, lease):
             raise HistoryError('history_incompatible')
     from .project_release_ack import check_release_ack_companion
     check_release_ack_companion(store, lease, row)
+    seen[identity] = fingerprint
     return row
 
 

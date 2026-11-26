@@ -294,6 +294,29 @@ class ResultLeaseTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, "history_conflict"):
             self.bind(hard_deadline_at_ms=2001)
 
+    def test_reserving_verifies_a_live_lease_once_not_again_on_every_later_reserve(self):
+        """The capacity check re-read and re-verified every live lease on each reserve (quadratic over a pass). A lease
+        whose stored rows are unchanged is verified once; any changed row is verified again (the corruption tests)."""
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES
+        self.fixture.capacity = ResultCapacity(2048, 2048 * MAX_RESULT_BODY_BYTES, 60_000, 120_000)
+        self.reopen(result_capacity=self.fixture.capacity)
+        count = 60
+        digests = []
+        original = ProjectHistory._lease_digest
+        def counted(self, *args, **kwargs):
+            digests.append(1)
+            return original(self, *args, **kwargs)
+        with mock.patch.object(ProjectHistory, "_lease_digest", counted):
+            for number in range(1, count + 1):
+                self.reserve(number)
+        self.assertLessEqual(len(digests), 10 * count, len(digests))  # was about 2 * count * count / 2 = 3,600
+        # Same capacity answer at the cap, and a changed row is still refused.
+        self.assertEqual(count, self.store._result_counts()[0])
+        self.store._connection.execute("UPDATE result_leases SET state='expired' WHERE run_handle=?",
+                                       (lease_binding(7).run_handle,))
+        with self.assertRaisesRegex(HistoryError, "history_incompatible"):
+            self.store._result_counts()
+
     def test_state_or_scope_corruption_cannot_free_lease_capacity(self):
         self.reserve()
         self.store.arm_result_lease(lease_binding())
