@@ -1,0 +1,235 @@
+{
+  "B1": {
+    "commit_delta": {
+      "a_commit_ms": [
+        0.020125,
+        0.01975,
+        0.019959,
+        0.021666,
+        0.019792,
+        0.0195,
+        0.032708,
+        0.02025,
+        0.019583
+      ],
+      "b_commit_ms": [
+        0.084875,
+        0.083958,
+        0.092709,
+        0.087916,
+        0.079667,
+        0.08025,
+        0.13425,
+        0.08375,
+        0.082042
+      ],
+      "commit_delta_ms": 0.064208,
+      "delta_samples_ms": [
+        0.06475,
+        0.064208,
+        0.07275,
+        0.06624999999999999,
+        0.059875,
+        0.06075,
+        0.10154200000000001,
+        0.0635,
+        0.062459
+      ],
+      "pairs": 9
+    },
+    "commit_ms": 0.064208,
+    "limit_ms": 5,
+    "memory_transactions_samples_ms": [
+      [
+        0.343917,
+        0.240208,
+        0.222,
+        0.181208
+      ],
+      [
+        0.335209,
+        0.277958,
+        0.246459,
+        0.213917
+      ],
+      [
+        0.299542,
+        0.303333,
+        0.24275,
+        0.192458
+      ]
+    ],
+    "memory_writer_ms": 1.0380829999999999,
+    "register_calls": {
+      "_release_obligation": 1,
+      "arm_hold": 1,
+      "release_hold": 1,
+      "take_hold": 3,
+      "wake_before": 1,
+      "wake_settled": 6
+    },
+    "register_ms": 0.121917,
+    "register_samples_ms": [
+      0.123876,
+      0.120959,
+      0.121917,
+      0.122419,
+      0.118836
+    ],
+    "reservations_released_completed": 6,
+    "run_commit_ms": 0.734041,
+    "run_commit_samples_ms": [
+      0.756459,
+      0.727459,
+      0.734041,
+      0.747875,
+      0.706751
+    ],
+    "runs": 5,
+    "total_ms": 1.224208,
+    "warmup_runs": 1
+  },
+  "B6": [
+    {
+      "arrivals_per_batch": 50,
+      "batch_backed_off": [
+        0
+      ],
+      "batch_ms": [
+        0.70775
+      ],
+      "batch_ms_samples": [
+        [
+          0.73925
+        ],
+        [
+          0.70775
+        ],
+        [
+          0.657125
+        ]
+      ],
+      "batch_released": [
+        1
+      ],
+      "batch_selected": [
+        179
+      ],
+      "batch_vm_steps": [
+        3067
+      ],
+      "batches": 1,
+      "blocked": 128,
+      "repeats": 3,
+      "target_state": "expired",
+      "tombstones": 0
+    },
+    {
+      "arrivals_per_batch": 50,
+      "batch_backed_off": [
+        0
+      ],
+      "batch_ms": [
+        0.803083
+      ],
+      "batch_ms_samples": [
+        [
+          0.796334
+        ],
+        [
+          0.803083
+        ],
+        [
+          0.815333
+        ]
+      ],
+      "batch_released": [
+        1
+      ],
+      "batch_selected": [
+        179
+      ],
+      "batch_vm_steps": [
+        3067
+      ],
+      "batches": 1,
+      "blocked": 128,
+      "repeats": 3,
+      "target_state": "expired",
+      "tombstones": 100000
+    }
+  ],
+  "B6_start_pass_work_flat": true,
+  "due_holds": {
+    "batch_limit_ms": 50,
+    "batch_ms": [
+      16.255417,
+      14.769375,
+      14.993167,
+      13.953625,
+      14.491583,
+      14.649875,
+      15.136042,
+      14.905666,
+      14.27475,
+      14.214125,
+      14.906583,
+      14.394834,
+      14.12225,
+      14.470375,
+      13.931458,
+      9.34825
+    ],
+    "batch_released": [
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      40
+    ],
+    "batches": 16,
+    "due": 1000,
+    "limit_seconds": 60,
+    "maximum_batch_ms": 16.255417,
+    "released": 1000,
+    "repeats": 3,
+    "total_seconds": 0.228817375
+  },
+  "due_holds_production": {
+    "cadence_seconds": 10.0,
+    "due": 1000,
+    "limit_seconds": 60,
+    "pass_limit": 10,
+    "pass_ms_median": 4.520271031651646,
+    "passes": 100,
+    "released": 1000,
+    "released_by_pass": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120
+    ],
+    "released_within_60_s": 60,
+    "seconds_elapsed": 991.0120740467682,
+    "seconds_until_drained": 991.0120740467682
+  }
+}
