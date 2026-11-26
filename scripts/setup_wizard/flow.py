@@ -26,16 +26,10 @@ GIT_READ_ONLY = {("--version",), ("rev-parse", "--show-toplevel"), ("rev-parse",
 GIT_ENV = {"xcrun_nocache": "1", "GIT_ALLOW_PROTOCOL": "", "GIT_NO_LAZY_FETCH": "1"}
 CLAUDE_MODELS_ALL = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
 FAIL_HINT_DEFAULT = "Press ? to see what ran in this step and why it stopped."
-# UPDFIX-3: the words of the collector's own refusal, said before anything is installed.
-CHILD_REFUSAL = "a child run is active; nothing was changed, try again when none is running"
 # UPDFIX-3 (decision 265): the check could not tell, so the update does not go ahead.
 UPDATE_CHECK_UNKNOWN = ("the update could not tell whether a child run is active; nothing was changed. Close any running "
                         "child, check that the learning state folder and its database can be read by this account, then "
                         "try again")
-# UPDFIX-4: a child that started after that check and was refused at the collector step, when step 4 had already run.
-CHILD_STARTED_LATER = ("A child run started while this update was running. Setup had already updated this project's "
-                       "files in step 4: run the update again when no child is running.")
-CHILD_STARTED_LATER_WHY = "a child run started after step 2's check (child_run_active)"
 COMMIT_MSG_1 = "Install COCOLO"
 COMMIT_MSG_2 = "Adds the managed Codex and Claude agent packages and the provider routing configuration."
 PROFILE_CONTENT = 'sandbox_mode = "workspace-write"\n\n[sandbox_workspace_write]\nnetwork_access = true'
@@ -148,6 +142,8 @@ class Wizard:
         self.accept_pending: str | None = None  # an accepted installed project not yet remembered (UPDFIX-3)
         self.projects_undo: tuple | None = None  # the list as it was before an interactive open remembered a project
         self.install_applied = False  # UPDFIX-4: the installer has written during this run
+        self.takeover_plan = {}
+        self.takeover_active = self.ledger_upgrade_approved = False
         self.profile_wanted = self.profile_ready = self.codex_primary = False
         self.rule_file = self.rule_copy = self.rule_status = self.rule_reason = ""
         self.rule_ready = self.rule_exists = self.temp_project = False
@@ -592,11 +588,63 @@ class Wizard:
             reply = None
         if done.returncode != 0 or not isinstance(reply, dict) or not isinstance(reply.get("refused"), bool):
             return "update_check_unavailable", UPDATE_CHECK_UNKNOWN
+        self.takeover_plan = reply.get('takeover') if isinstance(reply.get('takeover'), dict) else {}
         if not reply["refused"]:
             return None
         if reply.get("unreadable") is True or reply.get("reason") == "ledger_unreadable":
             return "update_check_unavailable", UPDATE_CHECK_UNKNOWN
-        return "child_run_active", CHILD_REFUSAL
+        if reply.get('reason') in {'predecessor_unverified', 'predecessor_unproven', 'takeover_unfinished',
+                                     'project_store_busy', 'update_busy', 'collector_unresponsive'}:
+            return reply['reason'], steps.plain(reply.get('message') or 'The update pre-check did not pass; nothing was changed')
+        return "update_check_unavailable", UPDATE_CHECK_UNKNOWN
+
+    def prepare_update_takeover(self) -> bool:
+        """Owner choices and the hand-over both finish before installer --apply."""
+        plan = self.takeover_plan
+        if plan.get('records_upgrade') and not self.ledger_upgrade_approved:
+            if not self.approve_ledger_upgrade():
+                self.forget_refused()
+                return False
+            self.ledger_upgrade_approved = True
+            self.begin_step(4)
+        if plan.get('takeover') not in {'planned', 'resume'}:
+            return True
+        count, version = plan.get('children', 0), plan.get('service_version')
+        if type(count) is int and count > 0 and isinstance(version, str):
+            self.t.list_add('warn', f"This project's service (CoCoLo {version}) is running {count} child "
+                            + ('run. The update stops it now: that run ends as lost. ' if count == 1 else
+                               'runs. The update stops it now: those runs end as lost. ')
+                            + 'Finished results are kept and can still be recorded.')
+        options = ['--upgrade-ledger'] if self.ledger_upgrade_approved else []
+        if self.run_owner_cli('Handing over the earlier runtime', 'learning-update-takeover', '--project-root',
+                              self.project, '--action', 'run', *options, draw=self.t.render) != 0:
+            self.forget_refused()
+            self.t.list_add('fail', steps.get(self.last_reply, 'error') or
+                            'The hand-over did not finish. Run ./setup.sh --update to finish.')
+            return False
+        self.takeover_active = self.last_reply.get('takeover') is True
+        if self.takeover_active:
+            old, new = steps.get(self.last_reply, 'predecessor_version'), steps.get(self.last_reply, 'successor_version')
+            lost, kept = self.last_reply.get('lost', 0), self.last_reply.get('finished_kept', 0)
+            self.takeover_outcome = dict(version=new, lost=lost)
+            self.t.list_add('ok', f'Handed over from CoCoLo {old} to {new}. {lost} child '
+                            + ('run ended' if lost == 1 else 'runs ended')
+                            + f' (lost, ended by the update). {kept} finished results kept.')
+            for other in (self.last_reply.get('other_projects') or {}).get('updates', []):
+                children, version = other['children'], other['version'] or '(number unavailable)'
+                self.t.list_add('warn', f"1 other project still runs CoCoLo {version} and has {children} child "
+                    + ('run. ' if children == 1 else 'runs. ')
+                    + 'It keeps running. To record it, update that project: ' + other['update_message'])
+            if self.last_reply.get('killed') is True:
+                self.t.list_add('warn', 'The old service did not stop in time and was ended. Its child run may still '
+                                'be running. Its slot stays held until it is proven gone, at most until its deadline.')
+        return True
+
+    def takeover_checkpoint(self, action):
+        if not self.takeover_active:
+            return True
+        return self.run_owner_cli('Finishing the update hand-over', 'learning-update-takeover', '--project-root',
+                                  self.project, '--action', action, draw=self.t.render) == 0
 
     def prepare_project_inputs(self, folder: str) -> None:
         self.install_opts = []
@@ -980,6 +1028,13 @@ class Wizard:
             self.fail_reason = code
             self.failure_menu()
             return False
+        if not self.prepare_update_takeover():
+            self.mark_step(4, 'fail', 'update hand-over not finished')
+            self.fail_reason = 'update hand-over not finished'
+            if self.update:
+                raise Stop(1, 'The update hand-over did not finish. Run ./setup.sh --update to finish.')
+            self.failure_menu()
+            return False
         self.remember_accepted()  # the last check that can refuse has passed
         if self.run_installer("Installing", "install", "--target", project, *self.install_opts, "--apply",
                               draw=t.render) != 0:
@@ -987,12 +1042,23 @@ class Wizard:
             self.begin_step(4)
             self.explain_installer("The install failed", self.manual_installer("install", project, apply=True))
             t.list_sub("The installer rolls back a partial install where it can.")
+            if self.takeover_active:
+                outcome = self.takeover_outcome
+                lost = outcome['lost']
+                t.list_sub("The update stopped at step 4. The hand-over was done: the old service was stopped and "
+                           f"{lost} child " + ('run ended' if lost == 1 else 'runs ended') + " as lost. "
+                           f"This project's records now belong to CoCoLo {outcome['version']}. "
+                           "Run the update again to finish: ./setup.sh --update.")
             self.mark_step(4, "fail", "install failed")
             self.fail_reason = "install failed"
             self.failure_menu()
             return False
         applied = self.last_reply
         self.install_applied = True  # UPDFIX-4: from here the project's files are the new version's
+        if not self.takeover_checkpoint('installed'):
+            self.mark_step(4, 'fail', 'update hand-over not finished')
+            self.fail_reason = 'update hand-over not finished'
+            return False
         t.screen_reset()
         self.begin_step(4)
         t.list_add("ok", "Packages installed")
@@ -1228,9 +1294,8 @@ class Wizard:
         t.list_add("warn", "Your orchestrator records were written by an earlier version of the orchestrator.")
         t.list_sub("Setup can upgrade them now. It first keeps a checked copy of everything as it is, in the same "
                    "protected folder.")
-        t.list_sub("Every project on this machine shares these records. After the upgrade the other projects stop "
-                   "working with the orchestrator until you run this setup for each of them.")
-        t.list_sub("Do this while no child agent is running in any project.")
+        t.list_sub("Every project on this machine shares these records. The update hands over this project's service. "
+                   "Other projects keep running. Their results cannot be recorded until you run this setup for each of them.")
         t.body("Upgrade the records now? [Y/n]")
         choice = self.choice_needed("upgrade_records", "records_need_owner_choice: the earlier records can be "
                                     "upgraded only when you choose to", ["Yes, upgrade them", "No, leave them as they are"])
@@ -1297,8 +1362,9 @@ class Wizard:
             self.mark_step(5, "skip", "old records not moved")
             t.pause()
             return
+        approval = ['--upgrade-ledger'] if self.ledger_upgrade_approved else []
         status = self.run_owner_cli("Registering the collector", "learning-register", "--project-root", self.project,
-                                    *legacy, draw=self.t.render)
+                                    *approval, *legacy, draw=self.t.render)
         moved = steps.get(self.last_reply, "state_moved")
         if status != 0 and steps.get(self.last_reply, "reason_code") == "ledger_upgrade_required":
             if not self.approve_ledger_upgrade():
@@ -1314,15 +1380,8 @@ class Wizard:
         reply = {**(self.last_reply if isinstance(self.last_reply, dict) else {}), "ready": status == 0}
         _, lines = steps.registration_outcome(reply, moved if moved.startswith("/") else None)
         if status != 0:
-            later = (self.install_applied and (
-                steps.get(self.last_reply, "reason_code") == "collector_busy"
-                or "a child run is active" in steps.raw(self.last_reply)))
-            # UPDFIX-4: a child that started after the checks; step 4 has already updated the project, so the
-            # collector's own "nothing was changed" is replaced, never shown for the project.
-            self.failure_detail("Collector registration failed", why=CHILD_STARTED_LATER_WHY if later else None)
+            self.failure_detail("Collector registration failed")
             self.version_hint()
-            if later:
-                t.list_sub(CHILD_STARTED_LATER)
             for line in lines[1:]:
                 t.list_sub(line)
             self.mark_step(5, "fail", "registration failed")
@@ -1344,6 +1403,11 @@ class Wizard:
                 return
             t.list_add("ok", "This project's service: running")
             self.login_start_step()
+            if not self.takeover_checkpoint('complete'):
+                t.list_add('fail', 'Update hand-over not finished. Run ./setup.sh --update to finish.')
+                self.mark_step(5, 'fail', 'update hand-over not finished')
+                t.pause()
+                return
             self.mark_step(5, "ok", "registered, ready")
         else:
             self.failure_detail("Collector status: not ready")

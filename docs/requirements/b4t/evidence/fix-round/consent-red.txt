@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_registration_without_owner_consent_never_enables_records_upgrade (tests.test_b4t_takeover.AmendmentA1Tests.test_registration_without_owner_consent_never_enables_records_upgrade)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2877, in test_registration_without_owner_consent_never_enables_records_upgrade
+    self.assertIs(False, ledger.call_args.kwargs['allow_schema_upgrade'])
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not True
+
+----------------------------------------------------------------------
+Ran 1 test in 0.157s
+
+FAILED (failures=1)

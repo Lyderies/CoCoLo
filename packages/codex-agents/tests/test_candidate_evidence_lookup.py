@@ -1,8 +1,10 @@
 """AP slice 4: real candidate checks, VM work, order and previous-release reopen."""
 from copy import deepcopy
+import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,7 +18,7 @@ from tests.support import REPOSITORY_ROOT
 from tests.test_append_lookup import AppendLookupTests
 from tests.learning_support import candidate, event_record, verification_outcome
 from codex_agents.learning_contracts import canonical_json, content_digest
-from codex_agents.learning_store import LearningLedger, LearningState, LedgerError
+from codex_agents.learning_store import LEDGER_SCHEMA_VERSION, LearningLedger, LearningState, LedgerError
 
 
 OLD_LOOKUP = 'SELECT record_type,content,content_digest FROM records WHERE project_id=?'
@@ -251,16 +253,52 @@ class CandidateEvidenceLookupTests(AppendLookupTests):
     def test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release(self):
         root = REPOSITORY_ROOT.parents[1]
         releases = json.loads((root / 'packages/claude-agents/previous-releases.json').read_text())['releases']
-        previous = next(r for r in releases if r['release'] == '0.8.61')
+        baseline = next(r for r in releases if r['release'] == '0.8.61')
+        current_schema = LEDGER_SCHEMA_VERSION
+
+        def unavailable(release):
+            return self.failureException(
+                f"AP3 compatibility needs previous Codex release {release['release']} "
+                f"source commit {release['source_commit']}; make that Git object available "
+                "(fetch release history in shallow CI) and rerun this check")
+
+        def schema_of(release):
+            # Decision 348: derive each release's ledger schema from its archived source; never guess.
+            try:
+                source = subprocess.run(
+                    ['git', 'show', f"{release['source_commit']}:packages/codex-agents/native-package/"
+                     '.codex/orchestration/codex_agents/collector_contracts.py'],
+                    cwd=root, capture_output=True, check=True, timeout=20, text=True).stdout
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                raise unavailable(release) from None
+            found = re.findall(r'^LEDGER_SCHEMA_VERSION\s*=\s*(\d+)\b', source, re.MULTILINE)
+            if len(found) != 1:
+                raise self.failureException(
+                    f"AP3 cannot derive the ledger schema of release {release['release']} "
+                    f"(source commit {release['source_commit']}): expected exactly one LEDGER_SCHEMA_VERSION")
+            return int(found[0])
+
         try:
-            archive = subprocess.run(['git', 'archive', '--format=zip', previous['source_commit'],
+            archive = subprocess.run(['git', 'archive', '--format=zip', baseline['source_commit'],
                                       'packages/codex-agents/native-package'], cwd=root,
                                      capture_output=True, check=True, timeout=20)
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            raise self.failureException(
-                f"AP3 compatibility needs previous Codex release {previous['release']} "
-                f"source commit {previous['source_commit']}; make that Git object available "
-                "(fetch release history in shallow CI) and rerun this check") from None
+            raise unavailable(baseline) from None
+        schemas = {r['release']: schema_of(r) for r in releases}
+        same_schema = [r for r in releases if schemas[r['release']] == current_schema]
+        if same_schema:
+            previous = same_schema[-1]  # newest recorded release with the same ledger schema
+            try:
+                archive = subprocess.run(['git', 'archive', '--format=zip', previous['source_commit'],
+                                          'packages/codex-agents/native-package'], cwd=root,
+                                         capture_output=True, check=True, timeout=20)
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                raise unavailable(previous) from None
+        else:
+            # B4t H1d / T-5: no released build has the current schema, so every one must refuse it.
+            self.assertGreater(current_schema, max(schemas.values()))
+            self.assertEqual(17, schemas[baseline['release']])
+            previous = baseline
         extracted = Path(self.store.temporary.name) / 'previous-source'
         with zipfile.ZipFile(io.BytesIO(archive.stdout)) as bundle:
             bundle.extractall(extracted)
@@ -275,6 +313,37 @@ class CandidateEvidenceLookupTests(AppendLookupTests):
         copied = Path(self.store.temporary.name) / 'indexed-copy'
         shutil.copytree(self.store.state.root, copied)
         self.reopen()
+        if not same_schema:
+            self.assertEqual(current_schema, version)
+
+            def snapshot():
+                return {str(f.relative_to(copied)): hashlib.sha256(f.read_bytes()).hexdigest()
+                        for f in sorted(copied.rglob('*')) if f.is_file()}
+
+            before = snapshot()
+            refuse = '''
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from codex_agents import learning_store
+assert Path(learning_store.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve())
+assert learning_store.PACKAGE_VERSION == sys.argv[3]
+learning_store.LearningLedger(learning_store.LearningState(Path(sys.argv[2])))
+'''
+            result = subprocess.run([sys.executable, '-B', '-I', '-c', refuse,
+                                     str(old_bundle / '.codex/orchestration'), str(copied), previous['release']],
+                                    capture_output=True, text=True, timeout=30,
+                                    env={k: v for k, v in os.environ.items() if not k.startswith('PYTHON')})
+            self.assertNotEqual(0, result.returncode, 'released build must refuse a newer ledger schema')
+            self.assertIn('LedgerError', result.stderr)
+            after = snapshot()
+            # The old build's writer fence stamps the lock file before it reads the schema version, so
+            # collector.lock may change; every ledger and artifact file must stay byte-identical (T-5).
+            ledger_files = {k for k in before.keys() | after.keys() if k != 'collector.lock'}
+            self.assertIn('learning.sqlite3', ledger_files)
+            self.assertEqual({k: before.get(k) for k in ledger_files}, {k: after.get(k) for k in ledger_files},
+                             'refusal must leave the ledger store byte-identical (zero writes)')
+            return
         script = '''
 import json, sys
 from pathlib import Path
@@ -282,7 +351,7 @@ sys.path.insert(0, sys.argv[1])
 from codex_agents import learning_store
 data = json.load(sys.stdin)
 assert Path(learning_store.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve())
-assert learning_store.PACKAGE_VERSION == '0.8.61'
+assert learning_store.PACKAGE_VERSION == sys.argv[3]
 assert learning_store.LEDGER_SCHEMA_VERSION == data['version']
 state = learning_store.LearningState(Path(sys.argv[2]))
 ledger = learning_store.LearningLedger(state)
@@ -302,13 +371,13 @@ print(json.dumps({'release': learning_store.PACKAGE_VERSION, 'reply': reply}))
 '''
         event = event_record('previous-release-write', observed_at_ms=2)
         result = subprocess.run([sys.executable, '-B', '-I', '-c', script,
-                                 str(old_bundle / '.codex/orchestration'), str(copied)],
+                                 str(old_bundle / '.codex/orchestration'), str(copied), previous['release']],
                                 input=json.dumps({'project': self.project, 'version': version,
                                                   'expected': expected, 'candidate': proposed, 'event': event}),
                                 capture_output=True, text=True, timeout=30,
                                 env={k: v for k, v in os.environ.items() if not k.startswith('PYTHON')})
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual('0.8.61', json.loads(result.stdout)['release'])
+        self.assertEqual(previous['release'], json.loads(result.stdout)['release'])
         with_copy = LearningLedger(LearningState(copied))
         try:
             records = with_copy._records_for_project(self.project, None)

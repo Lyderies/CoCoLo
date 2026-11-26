@@ -661,15 +661,105 @@ def _update_check_children(database):
 
 
 def _update_check_result(children, replace, *, unreadable):
-    refused = unreadable or (children and replace)
+    refused = unreadable
     report = {"ready": True, "children_running": children, "would_replace": replace, "unreadable": unreadable,
               "refused": refused, "reason": None, "message": None}
     if unreadable:
         report["reason"], report["message"] = "ledger_unreadable", UPDATE_CHECK_UNREADABLE
-    elif refused:
-        report["reason"] = "child_run_active"
-        report["message"] = "a child run is active; nothing was changed, try again when none is running"
     return report
+
+
+def _takeover_check_report(args):
+    """Existing write-free UPDFIX evaluation plus B4t's trusted read-only plan."""
+    from codex_agents.takeover_preflight import read_plan
+    from codex_agents.update_takeover import TakeoverError
+    report = _update_check_report(args.state_root, args.project_root)
+    if report['refused']:
+        return report
+    root = Path(args.state_root).expanduser() if args.state_root is not None else default_state_root()
+    try:
+        if not (root / 'learning.sqlite3').exists():
+            report['takeover'] = {'takeover': 'none', 'records_upgrade': False}
+        else:
+            plan = read_plan(LearningState(args.state_root, create=False), args.project_root)
+            report['takeover'] = plan['report']
+    except TakeoverError as error:
+        report.update(refused=True, reason=error.code, message=str(error))
+    except (CollectorError, StateError, OSError, ValueError):
+        report.update(refused=True, reason='update_check_unavailable', message=UPDATE_CHECK_UNREADABLE)
+    return report
+
+
+def _run_update_takeover(args):
+    from codex_agents.collector_client import PACKAGE_VERSION
+    from codex_agents.takeover_journal import TakeoverJournal, JournalError
+    from codex_agents.takeover_owner import OwnerOperations, run_owner_takeover
+    from codex_agents.takeover_preflight import read_plan
+    from codex_agents.update_takeover import TakeoverError
+    root = Path(args.state_root).expanduser() if args.state_root is not None else default_state_root()
+    try:
+        os.lstat(root / 'learning.sqlite3')
+    except FileNotFoundError:
+        return {'ready': True, 'takeover': False, 'phase': None}
+    except OSError:
+        return {'ready': False, 'takeover': False, 'phase': None,
+                'reason_code': 'ledger_unreadable', 'error': UPDATE_CHECK_UNREADABLE}
+    try:
+        state = LearningState(args.state_root, create=False)
+    except (StateError, OSError):
+        return {'ready': False, 'takeover': False, 'phase': None,
+                'reason_code': 'update_check_unavailable', 'error': UPDATE_CHECK_UNREADABLE}
+    try:
+        validate_collector_runtime(ORCHESTRATION_ROOT / 'cli.py')
+        plan = read_plan(state, args.project_root)
+        if not plan['needed']:
+            return {'ready': True, 'takeover': False, 'phase': None}
+        if plan['report']['records_upgrade'] and not args.upgrade_ledger:
+            raise TakeoverError('records_upgrade_declined')
+        def checked():
+            fresh = read_plan(state, args.project_root, runtime_locked=operations.descriptor is not None)
+            if fresh['report']['records_upgrade'] and not args.upgrade_ledger:
+                raise TakeoverError('records_upgrade_declined')
+            if not fresh['needed']:
+                raise TakeoverError('predecessor_unverified')
+            return fresh['intent']
+        operations = OwnerOperations(state, ORCHESTRATION_ROOT / 'cli.py', args.project_root, checked)
+        document = run_owner_takeover(operations, action=args.action)
+        predecessor = next((identity for identity in (plan['intent']['predecessor_service'],
+            plan['intent']['predecessor_collector']) if identity and identity['digest'] != COLLECTOR_RUNTIME_DIGEST), {})
+        outcomes = (plan['intent'] if document is None else document).get('outcomes', {})
+        stopped = (plan['intent'] if document is None else document).get('stopped_children',
+                            outcomes.get('lost', 0) + outcomes.get('lost_held', 0))
+        from codex_agents.client_runtime import account_takeover_report_client
+        from codex_agents.hosts import OWNER_CLIENT
+        account = account_takeover_report_client(args.state_root, args.project_root, host_client=OWNER_CLIENT,
+                                                 predecessor_version=predecessor.get('version'), await_start=True)
+        return {'ready': True, 'takeover': True, 'phase': args.action if document is None else document['phase'],
+                'predecessor_version': predecessor.get('version'),
+                'successor_version': PACKAGE_VERSION, 'killed': operations.killed,
+                'lost': stopped,
+                'finished_kept': outcomes.get('finished_kept', 0),
+                'other_projects': account,
+                'runs': len(plan['intent'].get('runs', [])) if document is None else len(document['runs'])}
+    except (TakeoverError, JournalError) as error:
+        phase = getattr(error, 'phase', None)
+        if phase is None and isinstance(error, JournalError):
+            try:
+                pending = TakeoverJournal(state.root).read()
+                phase = None if pending is None else pending['phase']
+            except JournalError:
+                phase = 'unreadable intent'
+        return {'ready': False, 'takeover': phase is not None, 'phase': phase,
+                'reason_code': getattr(error, 'code', 'takeover_unfinished'), 'error': str(error)}
+    except (CollectorError, StateError, OSError, ValueError) as error:
+        try:
+            pending = TakeoverJournal(state.root).read()
+            phase = None if pending is None else pending['phase']
+        except JournalError:
+            phase = 'unreadable intent'
+        failure = TakeoverError('takeover_unfinished' if phase else 'update_check_unavailable', phase=phase)
+        return {'ready': False, 'takeover': phase is not None, 'phase': phase,
+                'reason_code': failure.code, 'error': str(failure)}
 
 
 from codex_agents.learning_migration import START_REASONS, clear_start_failure, record_start_failure  # noqa: E402
@@ -1966,6 +2056,12 @@ def build_parser() -> argparse.ArgumentParser:
     learning_update_check.add_argument("--state-root", type=Path)
     learning_update_check.add_argument("--project-root", required=True, type=Path)
 
+    takeover = subparsers.add_parser("learning-update-takeover", help="hand this project's earlier runtime to this build")
+    takeover.add_argument("--state-root", type=Path)
+    takeover.add_argument("--project-root", required=True, type=Path)
+    takeover.add_argument("--upgrade-ledger", action="store_true")
+    takeover.add_argument("--action", choices=("run", "installed", "complete"), default="run")
+
     learning_status = subparsers.add_parser(
         "learning-status", help="report persistent collector and redacted client health"
     )
@@ -2908,7 +3004,11 @@ def main() -> int:
                 _print(report)
                 return 2
         elif args.command == "learning-update-check":
-            report = _update_check_report(args.state_root, args.project_root)
+            report = _takeover_check_report(args)
+        elif args.command == "learning-update-takeover":
+            report = _run_update_takeover(args)
+            _print(report)
+            return 0 if report['ready'] else 2
         elif args.command == "learning-status":
             _start_collector_quietly(args)
             report = status_client(args.state_root, args.project_root)
@@ -2951,6 +3051,20 @@ def main() -> int:
             slots = (report['project_capacity'] or {}).pop('run_slots', None)
             if slots is not None:
                 report['project_service'] = _service_slots(slots)
+            from codex_agents.client_runtime import takeover_report_client, account_takeover_report_client
+            from codex_agents.project_takeover import takeover_lines, journal_notice
+            takeover = takeover_report_client(args.state_root, args.project_root, host_client=label)
+            predecessor = None if takeover is None or not takeover['records'] else takeover['records'][0]['predecessor_version']
+            # The account pages are read only for takeover_lines, which needs the project's own report: without it
+            # no extra account exchange is made, so the status account exchange stays exactly as on 0.8.67.
+            account = None if takeover is None else account_takeover_report_client(
+                args.state_root, args.project_root, host_client=label, predecessor_version=predecessor)
+            notices = journal_notice(args.state_root, args.project_root)
+            if takeover is not None:
+                notices.extend(takeover_lines(takeover, account=account))
+            if notices:
+                service = report.setdefault('project_service', {'summary': 'Project service status is unavailable.', 'warnings': []})
+                service['warnings'].extend(notices)
             if report.get('reason_code') == 'status_collector_transport_unavailable':
                 _COLLECTOR_UNREACHED = True
                 report = _with_codex_hint(args.command, report)
@@ -3371,6 +3485,13 @@ def main() -> int:
             report = run_control_client(args.state_root, args.project_root,
                 'project.status' if args.command == 'learning-run-status' else 'project.cancel',
                 args.orchestration_handle, args.run_handle, args.attempt, host_client=_host_client())
+            if args.command == 'learning-run-status' and report.get('reason_code') == 'run_lost':
+                from codex_agents.client_runtime import takeover_report_client
+                takeover = takeover_report_client(args.state_root, args.project_root, host_client=_host_client(),
+                                                   run_handle=args.run_handle)
+                if takeover is not None and takeover['records'] and (takeover['lost'] or takeover['lost_held']):
+                    version = takeover['records'][0]['successor_version']
+                    report['error'] += f' Ended by the update to CoCoLo {version}.'
             _print_command_report(args, report)
             return 0 if report['ready'] else 2
         elif args.command == "learning-orchestration-report":

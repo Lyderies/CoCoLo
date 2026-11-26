@@ -164,7 +164,7 @@ class FaultTests(unittest.TestCase):
         normal = doc(["g6_first_update_ok", "g6_retry_after_refusal_failed"])
         fault = doc(["g6_first_update_failed", "g6_retry_after_refusal_failed"])
         fault["requirements"].update({k: {"passed": False, "reasons": []} for k in ("L11.2", "L12.4", "L12.5")})
-        self.assertTrue(us.fault_isolated(normal, fault, "update_handover_broken", expected_ids=ids)["isolated"])
+        self.assertFalse(us.fault_isolated(normal, fault, "update_handover_broken", expected_ids=ids)["isolated"])
         same = doc(["g6_first_update_ok", "g6_retry_after_refusal_failed"])
         same["requirements"].update({k: {"passed": False, "reasons": []} for k in ("L11.2", "L12.4", "L12.5")})
         result = us.fault_isolated(normal, same, "update_handover_broken", expected_ids=ids)
@@ -194,10 +194,10 @@ class FaultTests(unittest.TestCase):
 
         def isolated(normal, fault):
             return us.fault_isolated(doc(normal), doc(fault), "update_handover_broken", expected_ids=ids)["isolated"]
-        self.assertTrue(isolated(["g6_first_update_ok", *base], ["g6_first_update_failed", *base]))
+        self.assertFalse(isolated(["g6_first_update_ok", *base], ["g6_first_update_failed", *base]))
         for name in us.G6_UPDATES:
             if name != "retry_after_refusal":
-                self.assertTrue(isolated([f"g6_{name}_ok", *base], [f"g6_{name}_failed", *base]), name)
+                self.assertFalse(isolated([f"g6_{name}_ok", *base], [f"g6_{name}_failed", *base]), name)
         # an unrelated pair is no proof
         self.assertFalse(isolated(["unrelated_ok", *base], ["unrelated_failed", *base]))
         self.assertFalse(isolated(["g6_first_update_ok", "unrelated_ok", *base], ["g6_first_update_ok", "unrelated_failed", *base]))
@@ -250,7 +250,7 @@ class NoHandStopTests(unittest.TestCase):
             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "do_update":
                 flag = {k.arg: k.value for k in node.keywords}.get("refuses")
                 refusing.append(isinstance(flag, ast.Constant) and flag.value is True)
-        self.assertEqual(3, sum(refusing))  # the child refusal, the uncommitted refusal and the forced failure
+        self.assertEqual(2, sum(refusing))  # only the uncommitted refusal and the forced failure
 
     def test_update_run_defaults_to_an_update_that_must_succeed(self):
         function = next(n for n in ast.parse(SOURCE).body if isinstance(n, ast.FunctionDef) and n.name == "update_run")
@@ -425,7 +425,7 @@ class RegistryTests(unittest.TestCase):
         function = next(n for n in ast.parse(SOURCE).body if isinstance(n, ast.FunctionDef)
                         and n.name.startswith("g6_update_never_needs"))
         text = ast.get_source_segment(SOURCE, function)
-        for needle in ("main.u1", "main.u2", "child.final", "dirty.final", "fail.nxt", "child_scene()", "dirty_scene()",
+        for needle in ("main.u1", "main.u2", "child.updated", "dirty.final", "fail.nxt", "child_scene()", "dirty_scene()",
                        "fail_scene()", "main_scene()"):
             self.assertIn(needle, text, needle)
 
@@ -438,8 +438,30 @@ class RegistryTests(unittest.TestCase):
             self.assertIn(needle, text)
         check = next(n for n in ast.parse(SOURCE).body if isinstance(n, ast.FunctionDef) and n.name.startswith("l11_2_"))
         body = ast.get_source_segment(SOURCE, check)
-        self.assertIn("history_kept(scene.history_before, scene.history_failed, exact=True)", body)
-        self.assertIn("history_kept(scene.history_before, scene.history_next, exact=False)", body)
+        self.assertIn("handover_history_kept(scene.history_before, scene.history_failed)", body)
+        self.assertIn("handover_history_kept(scene.history_before, scene.history_next)", body)
+        self.assertIn('account_done', body)
+        self.assertIn('update-takeover.json', text)
+
+    def test_handover_keeps_every_original_row_except_the_explicit_writer_epoch(self):
+        before = dict(rows={'outcome:1': 'a', 'project_holds:1': 'b', 'runtime_takeover:1': 'old'},
+                      schema='559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af', integrity='ok', floors={'result_identity:1:last_observed_at_ms': 5})
+        after = dict(rows={**before['rows'], 'runtime_takeover:1': 'new', 'takeover_record:1': 'intent'},
+                     schema='559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af', integrity='ok', floors={'result_identity:1:last_observed_at_ms': 6})
+        self.assertTrue(us.handover_history_kept(before, after))
+        for key in ('outcome:1', 'project_holds:1'):
+            self.assertFalse(us.handover_history_kept(before, {**after, 'rows': {**after['rows'], key: 'changed'}}))
+
+    def test_failed_handover_rejects_added_business_rows_and_changed_schema(self):
+        before = dict(rows={'outcome:1': 'original', 'runtime_takeover:1': 'old'},
+                      schema='559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af', integrity='ok')
+        after = dict(rows={**before['rows'], 'runtime_takeover:1': 'new',
+                           'takeover_record:1': 'authority'}, schema='559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af', integrity='ok')
+        self.assertTrue(us.handover_history_kept(before, after))
+        for key in ('outcome:2', 'project_holds:2', 'dispatch_result:2', 'unknown:1', 'runtime_takeover:2'):
+            self.assertFalse(us.handover_history_kept(before, {**after, 'rows': {**after['rows'], key: 'invented'}}), key)
+        self.assertFalse(us.handover_history_kept(before, {**after, 'schema': 'unexpected DDL'}))
+        self.assertFalse(us.handover_history_kept(before, {**after, 'rows': {**after['rows'], 'outcome:1': 'edited'}}))
 
     def test_the_module_declares_only_s5_ids(self):
         for name in us.CHECK_NAMES:
@@ -450,9 +472,24 @@ class RegistryTests(unittest.TestCase):
         for name in us.CHECK_NAMES:
             self.assertIn(lifecycle.CHECK_GROUPS[name], lifecycle.GROUP_SECONDS, name)
 
-    def test_the_previous_build_is_a_copy_with_only_its_version_changed(self):
-        self.assertIn("VERSION", SOURCE)
-        self.assertRegex(SOURCE, r"ls-files")  # copied from the tracked files, not from a Git history that may be shallow
+    def test_the_predecessor_is_an_unmodified_catalogue_listed_archive(self):
+        self.assertIn("tests/fixtures/b4t/0.8.66.tar.gz", SOURCE)
+        self.assertIn('hashlib.sha256(raw).hexdigest() != PREDECESSOR_ARCHIVE_SHA256', SOURCE)
+        self.assertIn("PREDECESSOR_REVISION = 'afb6f610'", SOURCE)
+        self.assertNotIn('write_text(previous_version', SOURCE)
+        self.assertNotIn('handle.write(PREVIOUS_BUILD_MARK)', SOURCE)
+
+    def test_predecessor_archive_needs_no_git_history_and_checks_its_digest(self):
+        import unittest.mock as mock
+        with tempfile.TemporaryDirectory() as folder:
+            world = SimpleNamespace(base=Path(folder))
+            with mock.patch.object(us.subprocess, 'run', side_effect=AssertionError('git history dependency')):
+                clone = us.previous_clone(world)
+            self.assertEqual('0.8.66', (clone/'packages/codex-agents/native-package/VERSION').read_text().strip())
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(Path, 'read_bytes', return_value=b'bad artifact'):
+                with self.assertRaisesRegex(us.e2e_support.HarnessError, 'digest'):
+                    us.previous_clone(SimpleNamespace(base=Path(folder)))
 
     def test_the_module_reads_no_value_from_the_command_that_made_it(self):
         """The refusal text is judged for plainness, but what changed is read from the snapshots, the process table and

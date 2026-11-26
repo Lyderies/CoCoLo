@@ -277,7 +277,7 @@ class HoldsReportTests(dr.LeaseBackedFixture):
 
 
 class HoldsUpdateTests(unittest.TestCase):
-    def test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release(self):
+    def test_B4t_runtime_change_creates_no_legacy_update_close_count(self):
         from dataclasses import replace
         from tests import test_project_orchestration as orchestration
         from codex_agents.project_holds_report import holds_report
@@ -286,7 +286,7 @@ class HoldsUpdateTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         opened = fixture.opened()
         owner = fixture.store._orchestration_owner()
-        self.assertEqual(1, owner.end_earlier(replace(fixture.scope, runtime_digest='b' * 64), 10))
+        self.assertEqual(0, owner.end_earlier(replace(fixture.scope, runtime_digest='b' * 64), 10))
         db = fixture.store._connection
         for number, outcome in ((1, None), (2, 'a' * 64)):
             run = f'hrn_{number:048x}'
@@ -298,7 +298,7 @@ class HoldsUpdateTests(unittest.TestCase):
                        "orchestration_handle,binding,assignment_digest,created_at_ms,hard_deadline_at_ms,"
                        "reserved_until_ms,expires_at_ms,state) VALUES(?,?,?,1,?,?,x'00','a',0,0,0,0,'expired')",
                        (PROJECT_A, f'claim-{number}', run, f'{number:064x}', opened['orchestration_handle']))
-        self.assertEqual(1, holds_report(fixture.store, runtime_digest='b' * 64)['result_custody']['ended_by_update_unrecorded'])
+        self.assertEqual(0, holds_report(fixture.store, runtime_digest='b' * 64)['result_custody']['ended_by_update_unrecorded'])
         self.assertEqual(0, holds_report(fixture.store, runtime_digest='a' * 64)['result_custody']['ended_by_update_unrecorded'])
         db.execute("UPDATE project_holds SET release_kind='retention' WHERE kind='result_custody'")
         self.assertEqual(0, holds_report(fixture.store, runtime_digest='b' * 64)['result_custody']['ended_by_update_unrecorded'])

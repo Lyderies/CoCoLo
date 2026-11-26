@@ -191,6 +191,9 @@ LOCAL_TABLE_COLUMNS = {
 # Decision 249: those other tables by exact columns too (the runtime derives them from its own CREATE statements as
 # learning_store.OTHER_TABLE_COLUMNS; a test pins this copy equal to it).
 OTHER_TABLE_COLUMNS = {
+    'runtime_floor': ('singleton', 'floor_version'),
+    'runtime_lineage': ('predecessor_digest', 'predecessor_version', 'successor_digest',
+                        'successor_version', 'epoch', 'takeover_id', 'recorded_at_ms'),
     "runtime_takeover": ("singleton", "epoch", "old_digest", "new_digest"),
     "additive_migrations": ("feature_key",),
     "owner_key_history": ("sequence", "signer_line", "reason", "recorded_at_ms"),
@@ -349,7 +352,7 @@ def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
 
 
 def _tables(schema_version: int) -> tuple[str, ...]:
-    if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
+    if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}:
         raise RuntimeError("installed ledger schema does not support this backup")
     return tuple(table for table in _TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
@@ -770,7 +773,7 @@ def _main() -> int:
             project_id = ledger.project_for_root(target)
             connection = ledger._connection
             schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
+            if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}:
                 raise RuntimeError("installed ledger schema does not support this backup")
             check_inventory(connection, schema_version)
             project = connection.execute(

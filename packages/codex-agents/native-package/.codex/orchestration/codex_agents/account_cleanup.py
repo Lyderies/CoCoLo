@@ -193,13 +193,19 @@ def release_capacity(ledger, project_id, *, runtime_digest, caller_scope, submis
     if (grant.registration_digest != submission.registration_digest or delivery.record_id != submission.terminal_record_id
             or delivery.record_content_digest != submission.terminal_content_digest or delivery.result_digest != submission.result_digest):
         raise ClaimError('claim_cleanup_invalid')
+    from .runtime_lineage import successor_custody
+    from .collector_client import COLLECTOR_RUNTIME_DIGEST
+    custody = storage_binding.runtime_digest
+    if not successor_custody(ledger, custody, runtime_digest):
+        raise ClaimError('claim_cleanup_invalid')
     launch = LaunchClaimInput(registration.run_handle, registration.identity_digest)
     original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', registration.claim_request_id,
-        project_id, runtime_digest, launch.payload())
+        project_id, custody, launch.payload())
     if storage_binding.claim_request_digest != account_request_digest(original):
         raise ClaimError('claim_cleanup_invalid')
-    context, known_claim, _, _ = ledger._claim_preflight(project_id, runtime_digest=runtime_digest,
-        caller_scope=caller_scope, request_id=registration.claim_request_id, launch=launch, storage_binding=storage_binding)
+    context, known_claim, _, _ = ledger._claim_preflight(project_id, runtime_digest=custody,
+        caller_scope=caller_scope, request_id=registration.claim_request_id, launch=launch, storage_binding=storage_binding,
+        earlier_runtime=custody != COLLECTOR_RUNTIME_DIGEST)
     if known_claim is None or known_claim['receipt_digest'] != registration.claim_digest:
         raise ClaimError('claim_cleanup_unavailable')
     key = OwnedExecutionKey(project_id, grant.handle_digest, grant.binding.run_id, grant.binding.claim_id)

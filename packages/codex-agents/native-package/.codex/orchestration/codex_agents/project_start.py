@@ -87,7 +87,9 @@ def recovery_line(record, root, now_ms):
     if outcome == 'install_changed':
         return 'recovery pending: install changed'
     if outcome == 'handover':
-        return f'recovery: needs update handover: {command}'
+        from .compatibility_message import compatibility_message
+        return 'recovery: needs update hand-over: ' + compatibility_message(
+            None, project_root=root, state_name='project service')
     if outcome == 'migration':
         return f'recovery pending: learning migration: {command}'
     if outcome == 'serving':

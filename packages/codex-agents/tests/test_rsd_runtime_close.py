@@ -42,17 +42,17 @@ class RuntimeCloseFixture(rc.RecordedContextFixture):
 
 class RuntimeCloseTests(RuntimeCloseFixture):
     @__import__('test_framework').requirements('RS-D-2-N1', why_not_scenario=WHY)
-    def test_N1_recorded_closes_and_releases_custody_without_counting_unrecorded(self):
+    def test_N1_recorded_custody_stays_held_after_runtime_change(self):
         self.recorded()
         owner = self.store._orchestration_owner()
+        before = self.store._result_counts(), rc.context_files(self.directory)
         self.assertEqual(0, owner.end_earlier(scope(self.binding), 10))
         self.assertEqual(0, owner.end_earlier(replace(self.changed(), supervisor_generation=2), 10))
-        self.assertEqual(1, owner.end_earlier(self.changed(), 10))
-        self.assertEqual('interrupted', owner.metadata_for(self.binding)['snapshot']['status'])
-        self.assertEqual(1, self.store.expire_results())
-        self.assertEqual(('released', 'orchestration_closed'), rc.custody(self.store, *self.attempt)[:2])
-        self.assertEqual([], rc.context_files(self.directory))
-        self.assertEqual((0, 0, 0), self.store._result_counts())
+        self.assertEqual(0, owner.end_earlier(self.changed(), 10))
+        self.assertEqual('active', owner.metadata_for(self.binding)['snapshot']['status'])
+        self.assertEqual(0, self.store.expire_results())
+        self.assertEqual(('held', None), rc.custody(self.store, *self.attempt)[:2])
+        self.assertEqual(before, (self.store._result_counts(), rc.context_files(self.directory)))
         self.assertEqual({'ended_by_update_unrecorded': 0}, self.status())
         self.assertEqual(0, owner.end_earlier(self.changed(), 10))
         self.consistent()
@@ -85,7 +85,7 @@ class RuntimeCloseTests(RuntimeCloseFixture):
 
 class RuntimeCloseServiceTests(RuntimeCloseFixture):
     @__import__('test_framework').requirements('RS-D-2-N1', 'RS-D-2-N2', why_not_scenario=WHY)
-    def test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart(self):
+    def test_N1_N2_real_release_then_update_keeps_unrecorded_custody_until_retention(self):
         self.open_and_consume()
         self.publish()
         execution = self.base.base
@@ -158,20 +158,34 @@ class RuntimeCloseServiceTests(RuntimeCloseFixture):
         self.assertEqual('active', owner.metadata_for(self.binding)['snapshot']['status'])
         self.assertEqual({'ended_by_update_unrecorded': 0}, store.runtime_close_status())
         db.execute('DROP TRIGGER refuse_update_close')
-        self.assertEqual(1, owner.end_earlier(self.changed(), 10))
-        self.assertEqual('interrupted', owner.metadata_for(self.binding)['snapshot']['status'])
-        self.assertEqual(1, store.expire_results())
-        self.assertEqual(('released', 'orchestration_closed'), rc.custody(store, *self.attempt)[:2])
-        self.assertEqual({'ended_by_update_unrecorded': 1}, store.runtime_close_status())
         self.assertEqual(0, owner.end_earlier(self.changed(), 10))
+        self.assertEqual('active', owner.metadata_for(self.binding)['snapshot']['status'])
+        self.assertEqual(0, store.expire_results())
+        self.assertEqual(('held', None), rc.custody(store, *self.attempt)[:2])
+        self.assertEqual({'ended_by_update_unrecorded': 0}, store.runtime_close_status())
+        self.assertEqual(0, owner.end_earlier(self.changed(), 10))
+        due = store.result_reservation(self.binding).retained_until_ms
+        self.fixture.base.stamp = due + 1
+        self.assertEqual(1, store.expire_results())
+        self.assertEqual(('released', 'retention'), rc.custody(store, *self.attempt)[:2])
         self.assertEqual([], rc.context_files(self.directory))
         self.assertEqual((0, 0, 0), store._result_counts())
         self.reopen()
-        self.assertEqual({'ended_by_update_unrecorded': 1}, self.status())
-        now = self.base.grant.deadline_at_ms + RESULT_PURGE_GRACE_MS + 1
+        self.assertEqual({'ended_by_update_unrecorded': 0}, self.status())
+        now = max(due, self.base.grant.deadline_at_ms) + RESULT_PURGE_GRACE_MS + 1
         self.fixture.base.stamp = now
+        self.assertEqual(0, self.store._purge_finished_results(now, 10))
+        from codex_agents.orchestration_api import OrchestrationRequest
+        from codex_agents.orchestration_api import OrchestrationLimits
+        self.store._orchestration_limits = OrchestrationLimits(8, 16)
+        owner = self.store._orchestration_owner()
+        current = owner.metadata_for(self.binding)['snapshot']
+        owner.apply(OrchestrationRequest(1, 'orchestration.close', 'primary-close-after-update', scope(self.binding),
+            dict(orchestration_handle=current['orchestration_handle'], expected_sequence=current['sequence'],
+                 status='completed', goal_tokens_used=None, goal_time_used_seconds=None)),
+            client_version=current['client_version'], before_commit=lambda: None)
         self.assertEqual(1, self.store._purge_finished_results(now, 10))
-        self.assertEqual({'ended_by_update_unrecorded': 1}, self.status())
+        self.assertEqual({'ended_by_update_unrecorded': 0}, self.status())
         self.consistent()
 
 

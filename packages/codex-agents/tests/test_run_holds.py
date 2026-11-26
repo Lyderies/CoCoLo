@@ -256,6 +256,8 @@ class RunHoldTests(ActiveRunCapacityTests):
     def schema_fourteen(self, *, backup):
         """The ledger as 0.8.38 leaves it (schema 14): no register, no release kinds."""
         with self.ledger._account_transaction():
+            from tests.test_account_launch_claims import drop_runtime_authority_for_legacy_fixture
+            drop_runtime_authority_for_legacy_fixture(self.ledger._connection)
             from codex_agents.run_holds_schema import RUN_HOLDS_OBJECTS
             for kind, name, _ in RUN_HOLDS_OBJECTS:  # a 0.8.38 ledger has none of them
                 if kind == "trigger":

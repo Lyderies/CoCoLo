@@ -1428,7 +1428,7 @@
   "project_holds_report.py::_ended_by_update": {
    "checks": 1,
    "ends": "B7a snapshot aggregation only: COUNT of unrecorded contexts ended by an update, no admission bound; source rows retain their existing purge rules.",
-   "test": "test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release"
+   "test": "test_B4t_runtime_change_creates_no_legacy_update_close_count"
   },
   "project_holds_report.py::_holds": {
    "checks": 1,
@@ -2247,6 +2247,146 @@
    "checks": 1,
    "ends": "The bounded recursive page ends at batch+1; oversized linked groups stay full and later candidates advance. No admission capacity limit.",
    "test": "test_oversize_linked_group_stays_atomic_without_starving_later_work"
+  },
+  "runtime_lineage.py::release_versions": {
+   "checks": 1,
+   "test": "test_release_catalogue_past_the_byte_limit_is_not_trusted",
+   "ends": "One bounded read of the shipped catalogue; excess bytes refuse trust and retain custody."
+  },
+  "runtime_lineage.py::successor_custody": {
+   "checks": 1,
+   "test": "test_lineage_cycles_and_past_sixteen_links_are_refused_without_writes",
+   "ends": "At most 16 immutable lineage links per verification, not a lifetime record cap; longer or cyclic paths keep custody."
+  },
+  "takeover_journal.py::validate": {
+   "checks": 7,
+   "test": "test_prior_authorization_past_the_byte_limit_changes_nothing",
+   "ends": "A1: fixed integer, version, path, authorization and at-most-64 listed-run widths; one journal ends at completion or pre-stop undo."
+  },
+  "takeover_journal.py::read": {
+   "checks": 1,
+   "test": "test_journal_rejects_symlink_oversize_duplicate_keys_and_wrong_project",
+   "ends": "One journal is at most 16 KiB, removed after completion or pre-stop undo; an oversized file is retained and refused."
+  },
+  "takeover_journal.py::write": {
+   "checks": 1,
+   "test": "test_journal_past_the_run_and_byte_limits_changes_nothing",
+   "ends": "Bounded intent bytes, not a lifetime run count; no replacement is made when it cannot fit."
+  },
+  "takeover_journal.py::create": {
+   "checks": 1,
+   "test": "test_prior_authorization_past_the_byte_limit_changes_nothing",
+   "ends": "Prior authorization cannot exceed 1 KiB; refused before intent and any stop."
+  },
+  "takeover_process.py::identity": {
+   "checks": 1,
+   "test": "test_process_arguments_past_byte_limit_are_unproven",
+   "ends": "One kernel argument read is bounded to 4 MiB; uninspectable or oversized arguments never authorize a signal."
+  },
+  "update_takeover.py::stop_until_excluded": {
+   "checks": 1,
+   "test": "test_B4t_3_a_straggler_that_passed_its_check_is_caught",
+   "ends": "At most three stop/probe rounds after the start barrier; an inherited lock leaves a resumable failure, never adoption."
+  },
+  "update_takeover.py::run": {
+   "checks": 2,
+   "test": "test_B4t_10_crash_at_each_phase_then_resume",
+   "ends": "Phase-index comparisons only, not admission counts; the finite intent is removed on completion or pre-stop undo."
+  },
+  "update_takeover.py::installed": {
+   "checks": 1,
+   "test": "test_B4t_10_crash_at_each_phase_then_resume",
+   "ends": "Phase ordering only; the installed phase cannot precede account completion."
+  },
+  "update_takeover.py::complete": {
+   "checks": 1,
+   "test": "test_B4t_10_crash_at_each_phase_then_resume",
+   "ends": "Phase ordering only; successful completion removes the journal."
+  },
+  "takeover_owner.py::stop_collector": {
+   "checks": 1,
+   "test": "test_wrong_identity_sends_nothing_and_the_stop_past_thirty_seconds_is_resumable",
+   "ends": "A finite protocol-version split and one 30-second authenticated collector stop, never a lifetime count; an exceeded stop budget remains resumable."
+  },
+  "takeover_preflight.py::_registry": {
+   "checks": 2,
+   "test": "test_update_check_replaces_only_the_running_child_refusal",
+   "ends": "COUNT(*) is a read-only diagnostic of live, unreleased child slots. It imposes no limit and refuses no update; normal authenticated settlement or crash grace ends each slot."
+  },
+  "takeover_preflight.py::read_plan": {
+   "checks": 1,
+   "test": "test_B4t_A1_held_store_lock_without_a_service",
+   "ends": "Five seconds for a starting service to publish a hint or release history/host flocks; absent service then project_store_busy. Authorization read remains capped at 1 KiB."
+  },
+  "account_takeover.py::takeover_report": {
+   "checks": 4,
+   "test": "test_past_the_reply_byte_budget_continues_on_the_next_page_and_old_senders_stay_refused",
+   "ends": "At most eight rows and 14 KiB per read-only diagnostic page, with a continuation offset. More projects/bytes continue on the next page, never refuse a run or release any custody. COUNT(*) supplies diagnostic totals only."
+  },
+  "takeover_process.py::_darwin_argv": {
+   "checks": 1,
+   "test": "test_a_kernel_argument_limit_past_four_MiB_is_unproven_before_reading_arguments",
+   "ends": "One kernel-declared argument buffer, capped at 4 MiB before allocation or reading. Excess or an unreadable kernel limit refuses proof without a signal."
+  },
+  "takeover_journal.py::reconcile": {
+   "checks": 2,
+   "test": "test_B4t_A1_journal_stays_bounded_on_a_busy_project",
+   "ends": "Complete widest serialized journal <=16384 bytes; excess unsettled runs are counted durably, never dropped from totals."
+  },
+  "takeover_journal.py::widest": {
+   "checks": 0,
+   "test": "test_B4t_A1_journal_stays_bounded_on_a_busy_project",
+   "ends": "Reserves all future fields at 2^63-1 before selecting runs; at most 64 copied rows per takeover."
+  },
+  "takeover_owner.py::stop_service": {
+   "checks": 0,
+   "test": "test_a_new_service_that_ignores_its_stop_operation_has_one_thirty_second_bound",
+   "ends": "Unproven hint: 30-second stop wait, never a signal. Proven idle candidate first gets that withdrawal opportunity; if still live it uses the same 30-second TERM plus 5-second KILL pin as a busy predecessor. New stop-op services have one 30-second lock/ack wait. Held locks always prevent adoption."
+  },
+  "takeover_process.py::stop": {
+   "checks": 0,
+   "test": "test_B4t_3_bounded_stop_then_kill_the_same_process",
+   "ends": "One TERM, 30 seconds; then same pinned target KILL, five seconds. No signal without last identity check."
+  },
+  "takeover_owner.py::withdraw_hint": {
+   "checks": 0,
+   "test": "test_withdraw_hint_past_five_seconds_and_owner_lock_past_twenty_seconds",
+   "ends": "hint.lock is held briefly by a service; after five seconds return service_stop_failed, preserving resumable intent."
+  },
+  "takeover_owner.py::run_owner_takeover": {
+   "checks": 0,
+   "test": "test_withdraw_hint_past_five_seconds_and_owner_lock_past_twenty_seconds",
+   "ends": "collector-runtime.lock wait ends at 20 seconds with write-free update_busy. Descriptor is retained through owner restart."
+  },
+  "client_runtime.py::account_takeover_report_client": {
+   "checks": 0,
+   "test": "test_account_report_page_offsets_and_page_count_are_bounded",
+   "ends": "At most ceil(64/PAGE_SIZE)+1 pages; offsets must strictly increase; failure returns no diagnostic."
+  },
+  "project_takeover.py::purge_takeover": {
+   "checks": 0,
+   "test": "test_B4t_A1_takeover_tables_have_retention_and_caps",
+   "ends": "takeover_runs drain with attempt replay retention (<=64 per update); orphan run rows expire by recorded_at_ms. Obligations end with hold/settlement evidence. Newest record and references stay, every complete unreferenced record except the newest 16 is removed in one separate atomic pass."
+  },
+  "runtime_lineage.py::prune_lineage": {
+   "checks": 0,
+   "test": "test_lineage_retention_keeps_65_live_branches_and_18_successive_links",
+   "ends": "Every edge on a live or replayable custody path stays, without fixed/per-digest cap. No-live-custody paths are removed at owner open and maintenance. Bound: updates since oldest unreleased digest; unprotected rows <=64 (actually zero after a pass)."
+  },
+  "runtime_lineage.py::lineage_status": {
+   "checks": 1,
+   "test": "test_lineage_retention_keeps_65_live_branches_and_18_successive_links",
+   "ends": "Over64 is diagnostic only, never update refusal or protected-row eviction."
+  },
+  "takeover_process.py::wait": {
+   "checks": 0,
+   "test": "test_native_exec_before_and_after_I4_reaches_only_the_same_process",
+   "ends": "Both birth fallback and kqueue waits end at their passed deadline (30 seconds TERM / 5 seconds KILL). NOTE_EXEC is retained for I4 and never mistaken for exit or timeout."
+  },
+  "takeover_owner.py::_service_answers": {
+   "checks": 0,
+   "test": "test_withdrawn_hint_does_not_hide_an_endpoint_that_still_answers",
+   "ends": "A single scope-endpoint connect waits at most 0.2 seconds. An unreadable or timed-out endpoint remains live; only ENOENT/ECONNREFUSED proves it no longer answers. The enclosing stop deadline ends the loop."
   }
  }
 }

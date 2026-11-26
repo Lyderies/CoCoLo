@@ -422,7 +422,9 @@ class AuthorityTests(unittest.TestCase):
         # T7 S2 (L14.1): learning-status reads this project's orchestrations from its store (s2fix, assertions.md).
         'history.orchestration_counts',
         # S44a: learning-status reads each provider's run-usage coverage from the project's service.
-        'history.run_usage'})
+        'history.run_usage',
+        # B4t (DESIGN-0.4.0-B4-takeover D2.9, D2.8, H4b): the one new read and the owner stop for an update.
+        'history.takeover_report', 'service.stop_for_update'})
 
     def test_operation_set_unchanged(self):
         self.assertEqual(self.OPERATIONS, history_api.HISTORY_OPERATIONS)
@@ -786,7 +788,7 @@ class SchemaStepTests(B2Fixture):
     """Owner decision 92.3 A: one schema step, 19 -> 20, for the recorder table, with its upgrade path."""
 
     def test_schema_is_20_and_the_table_is_exactly_as_designed(self):
-        self.assertEqual(22, project_history._SCHEMA_VERSION)  # B6: schema 21 (decision 131)
+        self.assertEqual(23, project_history._SCHEMA_VERSION)  # B6: schema 21 (decision 131)
         columns = [row[1] for row in self.store._connection.execute('PRAGMA table_info(project_result_recorders)')]
         self.assertEqual(['project_id', 'record_id', 'recorded_by', 'recorded_at_ms'], columns)
         with self.assertRaises(sqlite3.IntegrityError):
@@ -806,11 +808,11 @@ class SchemaStepTests(B2Fixture):
             rc.seven_day_store(self.fixture)
         self.fixture.store = upgrading_store(self.fixture)
         db = self.store._connection
-        self.assertEqual(22, db.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
+        self.assertEqual(23, db.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
         self.assertEqual(0, db.execute('SELECT COUNT(*) FROM project_result_recorders').fetchone()[0])
         for name, kept in rows.items():
             self.assertEqual(kept, sorted(tuple(row) for row in db.execute(f'SELECT * FROM {name}')), name)
-        self.assertEqual(1, len(list(self.directory.glob('history.sqlite3.before-22.*'))))  # the copy made for it
+        self.assertEqual(1, len(list(self.directory.glob('history.sqlite3.before-23.*'))))  # the copy made for it
 
     def test_a_failed_validator_rolls_the_step_back_and_removes_its_copy(self):
         db = self.store._connection
@@ -825,9 +827,9 @@ class SchemaStepTests(B2Fixture):
         self.assertEqual(19, connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual([], connection.execute("SELECT name FROM sqlite_master WHERE name='project_result_recorders'").fetchall())
         connection.close()
-        self.assertEqual([], list(self.directory.glob('history.sqlite3.before-22.*')))  # B6: schema 21 (decision 131)
+        self.assertEqual([], list(self.directory.glob('history.sqlite3.before-23.*')))  # B6: schema 21 (decision 131)
         self.fixture.store = upgrading_store(self.fixture)  # and a later honest upgrade succeeds
-        self.assertEqual(22, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
+        self.assertEqual(23, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
 
 
 if __name__ == '__main__':

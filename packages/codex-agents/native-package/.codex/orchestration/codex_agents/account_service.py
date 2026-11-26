@@ -1486,6 +1486,9 @@ class AccountService:
                                                    withdrawal=withdrawal, request_digest=digest)
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
+            elif request.operation == 'account.takeover_report':
+                from .account_takeover import takeover_report
+                result = takeover_report(self._views, project, request.payload)
             elif request.operation == "account.provider_state_snapshot":
                 self._views._guard()
                 result = self._views._ledger.provider_state_snapshot(project).audit()

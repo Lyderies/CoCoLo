@@ -3177,5 +3177,10 @@
  "codex:tests.test_s44a_usage_install": 17.0,
  "codex:tests.test_run_retention": 3.0,
  "codex:tests.test_run_retention_integration": 15.0,
- "codex:tests.test_run_retention_scale": 30.0
+ "codex:tests.test_run_retention_scale": 30.0,
+ "codex:tests.test_b4t_takeover": 32.4,
+ "codex:tests.test_b4t_native": 20.0,
+ "codex:tests.test_b4t_native_kill": 36.0,
+ "codex:tests.test_b4t_native_audit_p66": 41.0,
+ "codex:tests.test_b4t_native_audit_v34": 26.0
 }

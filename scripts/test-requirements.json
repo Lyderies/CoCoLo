@@ -3,12 +3,12 @@
   "checks": [
    "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_digest_index_is_additive_on_first_open",
    "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release",
-   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers",
    "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_missing_previous_source_has_actionable_failure",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers",
    "codex:tests.test_candidate_index_build.CandidateIndexBuildTests.test_AP3_first_open_builds_index_used_by_candidate_lookups"
   ],
   "source": "tests/requirements/ap5-lookup.json#AP3",
-  "statement": "No schema version change and no owner step: an older same-schema release still opens, reads and appends to an indexed account-ledger copy."
+  "statement": "No schema version change and no owner step: an older release with the same ledger schema still opens, reads and appends to an indexed account-ledger copy; while none exists, older releases refuse with zero writes (B4t H1d; decision 348)."
  },
  "AP5-2": {
   "checks": [
@@ -19,10 +19,10 @@
  },
  "AP5-3": {
   "checks": [
-   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_mixed_evidence_answers_and_link_order_match_former_scan",
-   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_public_admission_duplicates_and_history_order_match",
    "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers",
-   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_missing_digest_index_gives_plain_ledger_error"
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_missing_digest_index_gives_plain_ledger_error",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_mixed_evidence_answers_and_link_order_match_former_scan",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_public_admission_duplicates_and_history_order_match"
   ],
   "source": "tests/requirements/ap5-lookup.json#AP5-3",
   "statement": "Preserve candidate evidence results, linked-evidence and history order, and admission checks exactly as before the indexed replacement."
@@ -498,8 +498,8 @@
  "E1a-T3": {
   "checks": [
    "codex:tests.test_e1a_evidence.OpenContentionTests.test_exhausted_deferred_publication_restores_next_request_and_owner_pump",
-   "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_real_handle_and_begin_share_successive_waits_and_refresh",
    "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_raising_collector_frame_restores_deadline_and_next_frame_budget",
+   "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_real_handle_and_begin_share_successive_waits_and_refresh",
    "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_slow_collector_receipt_and_next_frame_get_fresh_budgets"
   ],
   "source": "tests/requirements/e1a-evidence.json#E1a-T3",
@@ -521,14 +521,14 @@
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_abandonment_keeps_global_and_project_custody",
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_project_keeps_project_count_slot",
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_timeout_keeps_custody_until_whole_completion",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_offer_wakes_waiting_owner_without_polling",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_wakes_waiting_owner_and_timeout_is_bounded",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_refusal_caller_buckets_are_bounded_and_preserve_totals",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_documented_owner_binding_and_deadline_precedence",
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_offer_wakes_waiting_owner_without_polling",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_overflow_refusal_counters_are_bounded_without_close",
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_refusal_caller_buckets_are_bounded_and_preserve_totals",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerHostProcessTests.test_review_host_loop_drains_ready_requests_each_pass",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_full_queue_returns_existing_account_busy_and_retry_succeeds",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_measured_queue_defaults",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerHostProcessTests.test_review_host_loop_drains_ready_requests_each_pass"
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_measured_queue_defaults"
   ],
   "source": "tests/requirements/e1b-queue.json#E1b-3",
   "statement": "The standalone ledger owner queue bounds queued and running custody through completion, including abandonment and expiry, schedules projects fairly, and immediately returns named, counted existing busy refusals on overflow. Queue limits are configurable; decision 304 fixes measured defaults at 12 retained requests, 8 projects, 6 per project and an 800 ms wait."
@@ -555,49 +555,49 @@
   "statement": "A caller waits only until the earlier of its absolute deadline and the configured maximum of 800 ms. Expired queued work is skipped; running work completes whole, retains custody until handled, and answers busy after its deadline."
  },
  "E1b-5": {
-  "statement": "Operation Exceptions become plain operation_rejected error results without sharing exception objects or tracebacks; the owner continues serving. KeyboardInterrupt and SystemExit remain on the owner thread and requests are acknowledged.",
-  "source": "tests/requirements/e1b-queue.json#E1b-5",
   "checks": [
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_operation_error_is_plain_result_and_owner_serves_next_request",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_base_exceptions_stay_on_owner_and_are_acknowledged",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_handler_refusal_preserves_answer_and_next_request_runs",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sweep_failure_keeps_existing_containment_and_owner_serves_next",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_fatal_sql_error_reaches_owner",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_account_handler_keeps_failure_answer_and_processes_next_request",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_full_queue_returns_existing_account_busy_and_retry_succeeds",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_owner_thread_request_that_runs_late_keeps_its_answer",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_late_deferred_claim_publication_is_delivered_not_lost",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_late_deferred_begin_keeps_its_ticket",
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_operation_error_is_plain_result_and_owner_serves_next_request",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_display_read_failure_never_fails_a_committed_write",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_handed_back_errors_keep_their_attributes",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_late_deferred_begin_keeps_its_ticket",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_late_deferred_claim_publication_is_delivered_not_lost",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_owner_key_report_fails_closed_when_the_owner_is_busy",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_handed_back_errors_keep_their_attributes"
-  ]
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_owner_thread_request_that_runs_late_keeps_its_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_fatal_sql_error_reaches_owner",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_full_queue_returns_existing_account_busy_and_retry_succeeds",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_handler_refusal_preserves_answer_and_next_request_runs",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_account_handler_keeps_failure_answer_and_processes_next_request",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sweep_failure_keeps_existing_containment_and_owner_serves_next"
+  ],
+  "source": "tests/requirements/e1b-queue.json#E1b-5",
+  "statement": "Operation Exceptions become plain operation_rejected error results without sharing exception objects or tracebacks; the owner continues serving. KeyboardInterrupt and SystemExit remain on the owner thread and requests are acknowledged."
  },
  "E1b-6": {
-  "statement": "Close stops admission immediately with a counted closed cause and an existing caller busy reason, finishes running work whole, then refuses and acknowledges queued work and releases custody. Close is idempotent and nonblocking; drain has a finite timeout.",
-  "source": "tests/requirements/e1b-queue.json#E1b-6",
   "checks": [
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_idle_refuses_and_acknowledges_queued_work_idempotently",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_is_bounded_while_running_and_drains_after_whole_completion",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_wakes_waiting_owner_and_timeout_is_bounded",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_drain_waiter_wakes_after_final_acknowledgement",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_paused_owner_leaves_project_health_responsive",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_exit_is_recorded_after_final_handled_request",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_published_health_evicts_past_project_limit",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_display_read_failure_never_fails_a_committed_write",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_write_is_acknowledged_without_rereading_published_health",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_cold_project_answers_while_another_refresh_is_outstanding",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_outstanding_health_refreshes_are_bounded_and_end_when_handled",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_published_health_ages_an_idle_project_at_read_time",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_published_health_counts_a_run_slot_that_passed_its_deadline_since_publication",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_write_is_acknowledged_without_rereading_published_health",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_display_read_failure_never_fails_a_committed_write",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_cold_project_answers_while_another_refresh_is_outstanding",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_outstanding_health_refreshes_are_bounded_and_end_when_handled"
-  ]
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_exit_is_recorded_after_final_handled_request",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_paused_owner_leaves_project_health_responsive",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_published_health_evicts_past_project_limit",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close"
+  ],
+  "source": "tests/requirements/e1b-queue.json#E1b-6",
+  "statement": "Close stops admission immediately with a counted closed cause and an existing caller busy reason, finishes running work whole, then refuses and acknowledges queued work and releases custody. Close is idempotent and nonblocking; drain has a finite timeout."
  },
  "E1b-7": {
   "checks": [
@@ -606,16 +606,16 @@
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_late_execution_commits_whole_and_answers_busy",
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_abandonment_keeps_global_and_project_custody",
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_timeout_keeps_custody_until_whole_completion",
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_base_exceptions_stay_on_owner_and_are_acknowledged",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_idle_refuses_and_acknowledges_queued_work_idempotently",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_is_bounded_while_running_and_drains_after_whole_completion",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_operation_error_is_plain_result_and_owner_serves_next_request",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_base_exceptions_stay_on_owner_and_are_acknowledged",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_drain_waiter_wakes_after_final_acknowledgement",
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_operation_error_is_plain_result_and_owner_serves_next_request",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_all_sql_from_open_through_close_has_one_owner",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_transaction_rechecks_are_one_request_and_revocation_rolls_back",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_exit_is_recorded_after_final_handled_request",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_paused_owner_leaves_project_health_responsive",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_exit_is_recorded_after_final_handled_request"
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_transaction_rechecks_are_one_request_and_revocation_rolls_back"
   ],
   "source": "tests/requirements/e1b-queue.json#E1b-7",
   "statement": "Accepted requests provide a handled acknowledgement after owner execution or skipping, outcome publication and custody release. Unit tests coordinate on events and controlled clocks without sleeps or timed polling."
@@ -682,8 +682,8 @@
   "checks": [
    "codex:tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_additive_columns_and_wake_table_keep_the_schema_version",
    "codex:tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_backup_keeps_its_format_and_restore_has_no_launch_record",
-   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build",
-   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade"
+   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade",
+   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build"
   ],
   "source": "docs/requirements/e2a.md#E2a-1",
   "statement": "**E2a-1 \u2014 Additive ledger schema.** (D:21, D:35, D:40, D:127) Opening the collector ledger adds, without changing\n`PRAGMA user_version` (16), the nullable columns `launch_copy` and `launch_digest` to `projects` and the table\n`project_wake` (one row per project: allocated epoch, published generation epoch + seq, state\n`pending|exact|clean_stop` or null when only reconciled, next due, a body digest, the collector's `due_at_ms`, a\nrefused count, the update time) with an index on `due_at_ms` for due rows. Reopening is idempotent. The launch columns are\nmachine-local: a project backup snapshot keeps its exact earlier format (the six original project columns) and a\nrestored row has no launch record. Tests: tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_additive_columns_and_wake_table_keep_the_schema_version,\ntests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_backup_keeps_its_format_and_restore_has_no_launch_record.\nReview round 1: also the additive table `project_wake_instances` (per project, the service instance its last epoch was allocated to; machine-local, never in a backup)."
@@ -804,26 +804,26 @@
  },
  "E2c-1": {
   "checks": [
-   "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client",
-   "codex:tests.test_project_start.ProductionIntervalTests.test_E2c_3_1000_due_projects_with_launch_records_drain_within_60_seconds"
+   "codex:tests.test_project_start.ProductionIntervalTests.test_E2c_3_1000_due_projects_with_launch_records_drain_within_60_seconds",
+   "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client"
   ],
   "source": "tests/requirements/e2c.json#E2c-1",
   "statement": "### E2c-1 - A stopped project with due holds starts by itself (E2-1, T1)\nA registered project with a launch record, no live host and a due wake row (`project_wake.due_at_ms <= now`:\npublished by its last service, or marked due by E2a-9's reconcile because its state is unknown) is started by the\ncollector within one sweep interval (`STARTER_CHECK_SECONDS` apart), with no owner or client action. A project that\nis not due is not started. **Acceptance (real collector and project host processes):** a project that never ran\n(unknown: due at collector start) and one whose service published `clean_stop` with a past next due are both\nserving within the interval, without any client command."
  },
  "E2c-10": {
   "checks": [
-   "codex:tests.test_project_start.StrandedTests.test_E2c_10_claims_left_by_a_dead_collector_are_reconciled",
-   "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_host_that_does_not_serve_in_time_is_killed_at_twice_the_timeout",
-   "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_killed_service_starts_and_a_restart_keeps_the_backoff",
    "codex:tests.test_project_start.BudgetTests.test_E2c_10_the_stranded_pass_reaches_every_claim_past_one_page",
    "codex:tests.test_project_start.OwnershipTests.test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped",
+   "codex:tests.test_project_start.ProbationDeadlineTests.test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline",
    "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_probation_is_kept_across_a_collector_restart",
-   "codex:tests.test_project_start.SlotTests.test_E2c_2_surviving_stranded_children_hold_their_slots",
    "codex:tests.test_project_start.RecordRefusedTests.test_E2c_10_a_clean_stop_never_releases_an_unrecorded_live_child_s_claim",
    "codex:tests.test_project_start.RecordRefusedTests.test_E2c_10_after_the_collector_s_loss_an_unrecorded_child_keeps_its_claim_until_it_is_gone",
-   "codex:tests.test_project_start.TimeoutSlotTests.test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone",
-   "codex:tests.test_project_start.ProbationDeadlineTests.test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline",
-   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build"
+   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build",
+   "codex:tests.test_project_start.SlotTests.test_E2c_2_surviving_stranded_children_hold_their_slots",
+   "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_host_that_does_not_serve_in_time_is_killed_at_twice_the_timeout",
+   "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_killed_service_starts_and_a_restart_keeps_the_backoff",
+   "codex:tests.test_project_start.StrandedTests.test_E2c_10_claims_left_by_a_dead_collector_are_reconciled",
+   "codex:tests.test_project_start.TimeoutSlotTests.test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone"
   ],
   "source": "tests/requirements/e2c.json#E2c-10",
   "statement": "### E2c-10 - Stranded claims, timeouts and restarts (T11, T14; decision 150)\nA claim carries its attempt id, claim time and, once spawned, the child's pid. At collector start (on the\nstarter's thread, before its first claim) and once per sweep interval, every outstanding claim that is not one of\nthis starter's own is reconciled: no child, or a child gone, releases it (a child gone without serving counts\nfailed); a surviving child keeps it until it serves or ends, and past twice the start timeout its own process group (the\nchild leads it: spawned with setsid) gets SIGKILL and the claim ends as failed only once that group is gone, so\nnever more than `START_SLOTS` started children live (decision 243). A spawned child is never left unowned\n(decision 243): a pid record the ledger refuses is tried again for as long as the child lives; a clean stop before\nit lands kills and reaps the child before its claim is released; a claim left without a pid is released only when\nno process group led by that project's host exists. A claim never stays outstanding after a collector crash\nlonger than its child lives. The starter's own child still alive at twice `START_TIMEOUT_SECONDS` gets SIGKILL to its\nprocess group and counts failed. A service killed between its pending acknowledgement and its commit, or between\nits commit and `exact`, is started within one interval; a collector restart keeps a project's failures and\nbackoff and reconciles unknown projects as due. **Acceptance:** a claim left by a dead collector with a dead child\nis released and the project started; one with a live child is kept until that child ends; a host that never serves\nis killed at twice the timeout; E2a's killed service is started; the backoff survives a collector restart."
@@ -837,13 +837,13 @@
  },
  "E2c-2": {
   "checks": [
-   "codex:tests.test_project_start.StartTests.test_E2c_2_limits_and_round_robin_with_two_projects_ending_at_once",
-   "codex:tests.test_project_start.StartTests.test_E2c_2_a_start_blocked_in_its_spawn_holds_no_ledger_lock",
-   "codex:tests.test_project_start.LedgerStartTests.test_E2c_2_a_claim_is_one_per_project_until_it_ends",
    "codex:tests.test_project_start.FairnessTests.test_E2c_2_a_retry_never_goes_ahead_of_a_project_not_yet_tried",
    "codex:tests.test_project_start.FairnessTests.test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started",
+   "codex:tests.test_project_start.LedgerStartTests.test_E2c_2_a_claim_is_one_per_project_until_it_ends",
    "codex:tests.test_project_start.OwnershipTests.test_E2c_2_refused_ledger_steps_are_retried_and_no_worker_ends",
    "codex:tests.test_project_start.SlotTests.test_E2c_2_surviving_stranded_children_hold_their_slots",
+   "codex:tests.test_project_start.StartTests.test_E2c_2_a_start_blocked_in_its_spawn_holds_no_ledger_lock",
+   "codex:tests.test_project_start.StartTests.test_E2c_2_limits_and_round_robin_with_two_projects_ending_at_once",
    "codex:tests.test_project_start.TimeoutSlotTests.test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone"
   ],
   "source": "tests/requirements/e2c.json#E2c-2",
@@ -851,8 +851,8 @@
  },
  "E2c-3": {
   "checks": [
-   "codex:tests.test_project_start.BudgetTests.test_E2c_3_claim_batches_are_short_indexed_and_flat_at_100000_settled_rows",
    "codex:tests.test_project_start.BudgetTests.test_E2c_3_a_collector_drains_1000_due_projects_within_60_seconds_and_starts_no_later",
+   "codex:tests.test_project_start.BudgetTests.test_E2c_3_claim_batches_are_short_indexed_and_flat_at_100000_settled_rows",
    "codex:tests.test_project_start.ProductionIntervalTests.test_E2c_3_1000_due_projects_with_launch_records_drain_within_60_seconds"
   ],
   "source": "tests/requirements/e2c.json#E2c-3",
@@ -862,13 +862,13 @@
   "checks": [
    "codex:tests.test_project_start.BackoffTests.test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks",
    "codex:tests.test_project_start.BackoffTests.test_E2c_4_an_early_exit_counts_failed_and_a_lasting_start_ends_the_streak",
+   "codex:tests.test_project_start.BudgetTests.test_E2c_4_the_probation_pass_reaches_every_probation_past_one_page",
    "codex:tests.test_project_start.LedgerStartTests.test_E2c_4_backoff_doubles_to_its_cap_and_parks_once_the_streak_is_an_hour_old",
    "codex:tests.test_project_start.LedgerStartTests.test_E2c_4_the_owner_unpark_and_a_lasting_start_end_the_streak",
-   "codex:tests.test_project_start.BudgetTests.test_E2c_4_the_probation_pass_reaches_every_probation_past_one_page",
    "codex:tests.test_project_start.OwnerCommandTests.test_E2c_4_the_owner_start_command_unparks_with_the_collector_down",
+   "codex:tests.test_project_start.ProbationDeadlineTests.test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline",
    "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_probation_is_kept_across_a_collector_restart",
-   "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_serving_recheck_never_replaces_an_active_probation",
-   "codex:tests.test_project_start.ProbationDeadlineTests.test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline"
+   "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_serving_recheck_never_replaces_an_active_probation"
   ],
   "source": "tests/requirements/e2c.json#E2c-4",
   "statement": "### E2c-4 - Backoff and the crash-loop park (E2-2, owner decision 143, T2)\nA failed start (the host ended without serving, did not serve by twice `START_TIMEOUT_SECONDS`, or served but\nended within `START_PROBATION_SECONDS`) counts one failure of the project's streak; the first failure starts the\nstreak. The next attempt waits `START_BACKOFF_FIRST_SECONDS * 2^(failures-1)`, at most\n`START_BACKOFF_MAX_SECONDS`. Failures and the streak are kept in the ledger (`project_starts`), so a collector\nrestart keeps them, and a publish never resets them. Once a start fails while the streak's first failure is\n`START_PARK_AFTER_SECONDS` old, the project parks: `recovery failed: <reason_code>` and no further attempt. Only a\nuser action unparks: a new launch digest (setup ran again: a new install or update) or the owner's\n`learning-start-project-service --project-root <root>` (owner-signed collector operation `start_unpark`, which also\nends the streak). A project reporting again (a publish) does not unpark it. A start that serves for\n`START_PROBATION_SECONDS` ends the streak. **Acceptance:** a broken project backs off with growing waits; once\nits streak is old enough it parks after its next failure; a republish leaves it parked; the owner command unparks;\na project that is fixed and serves ends its streak; a host killed within probation counts as failed. A probation\nends its streak only when its host is seen alive at or after the probation's end; a host found gone, however late\na restarted collector looks, counts failed (decision 243)."
@@ -890,8 +890,8 @@
  },
  "E2c-7": {
   "checks": [
-   "codex:tests.test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced",
-   "codex:tests.test_project_start.OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced"
+   "codex:tests.test_project_start.OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced",
+   "codex:tests.test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced"
   ],
   "source": "tests/requirements/e2c.json#E2c-7",
   "statement": "### E2c-7 - Another version's live service (E2-5, T5)\nWhen a live host of another runtime serves the project, nothing starts, no maintenance is taken and the collector\ndoes not stop; the status is `recovery: needs update handover: run learning-start-project-service --project-root\n<root>`, checked again every `START_RECHECK_SECONDS`. **Acceptance:** with another runtime's live host, the line\nand command shown, no spawn, the same collector process still serving and no maintenance marker."
@@ -938,7 +938,7 @@
  "G6": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "An update never needs the collector stopped by hand, and finishes with the collector healthy on the new build."
+  "statement": "An update never needs the collector stopped by hand, also with a child running, and finishes with the collector healthy on the new build."
  },
  "G7": {
   "checks": [],
@@ -1003,7 +1003,7 @@
  "L12.3": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "An update with a child really running refuses plainly and changes nothing."
+  "statement": "An update with a child really running goes ahead: the old child ends lost, status names the hand-over, finished results stay recordable, and nothing is half-installed at any step."
  },
  "L12.4": {
   "checks": [],
@@ -1196,20 +1196,20 @@
  },
  "LOCKHOLD-1": {
   "checks": [
+   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_appends_between_batches_match_unbounded_drain",
    "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_backlog_drains_across_bounded_holds_with_identical_final_state",
    "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_failed_batch_rolls_back_and_restarts",
-   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_persistent_batch_failure_waits_for_full_interval",
-   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_appends_between_batches_match_unbounded_drain",
-   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_loop_resumes_batches_and_stop_cancels_the_gap"
+   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_loop_resumes_batches_and_stop_cancels_the_gap",
+   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_persistent_batch_failure_waits_for_full_interval"
   ],
   "source": "tests/requirements/lockhold.json#LOCKHOLD-1",
   "statement": "Collector event-retention backlogs drain automatically in transactional batches of at most 500 events, one batch per lock hold and cycle, with identical final records and resumability."
  },
  "LOCKHOLD-2": {
   "checks": [
+   "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_pinned_lookup_classifies_only_index_errors",
    "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_and_project_health_have_flat_vm_work",
-   "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_answers_match_former_lookup",
-   "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_pinned_lookup_classifies_only_index_errors"
+   "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_answers_match_former_lookup"
   ],
   "source": "tests/requirements/lockhold.json#LOCKHOLD-2",
   "statement": "Provider attestation status and project health have flat SQLite VM work with fixed provider evidence as unrelated history grows, preserving answers and owner verification."
@@ -1849,8 +1849,8 @@
  "O0C-U4-1": {
   "checks": [
    "codex:tests.test_u4_probe_capacity.ProbeCapacityTests.test_expired_reservations_past_the_cap_release_once_with_a_live_control",
-   "codex:tests.test_u4_probe_execution_capacity.DeniedProbeCapacityTests.test_denials_past_the_cap_keep_the_admitted_control_and_replay",
-   "codex:tests.test_u4_probe_execution_capacity.CompletedProbeCapacityTests.test_completed_history_past_the_cap_still_replays"
+   "codex:tests.test_u4_probe_execution_capacity.CompletedProbeCapacityTests.test_completed_history_past_the_cap_still_replays",
+   "codex:tests.test_u4_probe_execution_capacity.DeniedProbeCapacityTests.test_denials_past_the_cap_keep_the_admitted_control_and_replay"
   ],
   "source": "tests/requirements/u4.json#O0C-U4-1",
   "statement": "Completed, denied and expired-reserved probe histories beyond a reduced MAX_PROBE_REQUESTS preserve sealed history and replay without exhausting capacity."
@@ -1950,53 +1950,53 @@
   "statement": "### P9b-3 \u2014 Record deletion restores surviving predecessors\n\nDeleting a billing attestation by any record-deletion path rebuilds the derived\nsupersession state for its project/account/provider. Deleting the newest valid\nrow immediately restores the latest surviving verified predecessor as a capture\ncandidate, without restart or re-verification. Other accounts and providers\nremain independent. Deleting superseded rows must preserve bounded sweep work."
  },
  "PREPCLEAN-1": {
-  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-1",
-  "statement": "Twelve failed physical preparation-folder removals retain the folder, slot, byte reservations and live memory holds; attempt thirteen observes actual removal before retirement. A missing child exception is not workspace removal proof.",
   "checks": [
-   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_twelve_physical_failures_then_observed_removal",
    "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_missing_child_is_not_workspace_removal",
-   "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_pending_cleanup_defers_idle_replacement_then_removes_and_replaces",
-   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_real_cleanup_keeps_host_and_slot_until_thirteenth_removal"
-  ]
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_twelve_physical_failures_then_observed_removal",
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_real_cleanup_keeps_host_and_slot_until_thirteenth_removal",
+   "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_pending_cleanup_defers_idle_replacement_then_removes_and_replaces"
+  ],
+  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-1",
+  "statement": "Twelve failed physical preparation-folder removals retain the folder, slot, byte reservations and live memory holds; attempt thirteen observes actual removal before retirement. A missing child exception is not workspace removal proof."
  },
  "PREPCLEAN-2": {
-  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-2",
-  "statement": "Preparation cleanup retries continue indefinitely with monotone one-to-sixty-second capped backoff, no early requests and bounded retry state. Pending cleanup retains its live custodian across the automatic idle replacement boundary; replacement resumes after observed removal.",
   "checks": [
-   "codex:tests.test_run_driver_retries.GivenBackPreparationTests.test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff",
-   "codex:tests.test_run_driver_retries.StuckSlotTests.test_M4_pending_cleanup_keeps_custody_and_defers_replacement",
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_real_cleanup_keeps_host_and_slot_until_thirteenth_removal",
    "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_pending_cleanup_defers_idle_replacement_then_removes_and_replaces",
-   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_real_cleanup_keeps_host_and_slot_until_thirteenth_removal"
-  ]
+   "codex:tests.test_run_driver_retries.GivenBackPreparationTests.test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff",
+   "codex:tests.test_run_driver_retries.StuckSlotTests.test_M4_pending_cleanup_keeps_custody_and_defers_replacement"
+  ],
+  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-2",
+  "statement": "Preparation cleanup retries continue indefinitely with monotone one-to-sixty-second capped backoff, no early requests and bounded retry state. Pending cleanup retains its live custodian across the automatic idle replacement boundary; replacement resumes after observed removal."
  },
  "PREPCLEAN-3": {
-  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-3",
-  "statement": "Status and the terminal warning list plainly say a preparation folder could not be removed, background retries continue and its slot remains held. Clear the warning after removal and expose no private path or exception text. The summary never promises automatic replacement while a removal is pending; a pending folder whose location the service never learned says so and says what can be done.",
   "checks": [
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_capacity_transport_warning_and_clear",
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_lane_says_whether_a_pending_folder_is_located",
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_unlocated_count_transport",
+   "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_pending_cleanup_defers_idle_replacement_then_removes_and_replaces",
+   "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_a_folder_without_a_known_location_is_named_in_the_warning",
    "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_plain_warning_and_clear",
    "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_summary_never_promises_replacement_while_cleanup_is_pending",
-   "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_a_folder_without_a_known_location_is_named_in_the_warning",
-   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_unlocated_count_transport",
-   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_lane_says_whether_a_pending_folder_is_located",
    "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_list",
-   "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_pending_cleanup_defers_idle_replacement_then_removes_and_replaces",
-   "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_reaches_terminal_list",
-   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_capacity_transport_warning_and_clear"
-  ]
+   "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_reaches_terminal_list"
+  ],
+  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-3",
+  "statement": "Status and the terminal warning list plainly say a preparation folder could not be removed, background retries continue and its slot remains held. Clear the warning after removal and expose no private path or exception text. The summary never promises automatic replacement while a removal is pending; a pending folder whose location the service never learned says so and says what can be done."
  },
  "PREPCLEAN-4": {
-  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-4",
-  "statement": "A pending folder removal never blocks service replacement or an update: it is recorded durably in the preparation hold row (folder path, removal pending) and survives the stop, release or crash of the service that owned it. The successor loads the records, keeps retrying with the same capped backoff and keeps the warning until the folder is observed absent, then records the removal as proven. Only this host's own preparation folders are ever removed.",
   "checks": [
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_4_recorded_folder_removal_checks_ownership_and_proves_by_absence",
    "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_4_a_refused_removal_never_keeps_a_withdrawn_host_alive",
    "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_4_replacement_proceeds_and_the_successor_resumes_the_removal",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_PREPCLEAN_4_a_successor_reads_at_most_the_pending_removal_bound_at_a_time",
    "codex:tests.test_memory_holds.DriverMemoryTests.test_PREPCLEAN_4_pending_removal_is_recorded_in_the_preparation_row_and_outlives_its_release",
    "codex:tests.test_memory_holds.DriverMemoryTests.test_PREPCLEAN_4_stop_records_a_removal_whose_note_had_not_landed_and_retirement_clears_it",
-   "codex:tests.test_memory_holds.DriverMemoryTests.test_PREPCLEAN_4_a_successor_reads_at_most_the_pending_removal_bound_at_a_time",
-   "codex:tests.test_run_driver_retries.InheritedRemovalTests.test_PREPCLEAN_4_inherited_removal_retries_with_capped_backoff_until_proven",
    "codex:tests.test_run_driver_retries.InheritedRemovalTests.test_PREPCLEAN_4_a_full_read_is_asked_again_once_every_record_is_done",
-   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_4_recorded_folder_removal_checks_ownership_and_proves_by_absence"
-  ]
+   "codex:tests.test_run_driver_retries.InheritedRemovalTests.test_PREPCLEAN_4_inherited_removal_retries_with_capped_backoff_until_proven"
+  ],
+  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-4",
+  "statement": "A pending folder removal never blocks service replacement or an update: it is recorded durably in the preparation hold row (folder path, removal pending) and survives the stop, release or crash of the service that owned it. The successor loads the records, keeps retrying with the same capped backoff and keeps the warning until the folder is observed absent, then records the removal as proven. Only this host's own preparation folders are ever removed."
  },
  "RECOV-1": {
   "checks": [
@@ -2152,6 +2152,8 @@
  },
  "RS-B-B4": {
   "checks": [
+   "codex:tests.test_account_settlement.ConfirmFixStoreTests.test_c_M3_a_settlement_row_with_its_hold_absent_is_a_conflict_not_nothing_to_settle",
+   "codex:tests.test_account_settlement.ConfirmFixStoreTests.test_c_M4_the_second_stored_size_guard_is_not_hidden_by_a_broad_handler",
    "codex:tests.test_account_settlement.KeyIdentityTests.test_9_a_closure_the_account_keys_verifies_at_a_project_store_of_the_same_state",
    "codex:tests.test_account_settlement.KeyIdentityTests.test_9_project_service_and_offline_tool_give_the_store_that_key",
    "codex:tests.test_account_settlement.KeyIdentityTests.test_9_the_account_key_and_the_project_result_key_are_the_same_key",
@@ -2174,13 +2176,22 @@
    "codex:tests.test_account_settlement.RetryAndPurgeTests.test_B4_5_a_verified_settlement_releases_the_attempt_for_the_purge_only",
    "codex:tests.test_account_settlement.RetryAndPurgeTests.test_B4_6_after_the_purge_an_identical_retry_gets_the_tombstones_receipt",
    "codex:tests.test_account_settlement.RetryAndPurgeTests.test_B4_6_another_project_cannot_present_the_closure",
+   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_H2_an_admitted_unbound_settlement_releases_the_open_binding_as_claimed",
+   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_M3_a_settlement_row_that_does_not_verify_is_never_answered_settled",
+   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_M3_a_verified_closure_whose_hold_is_not_released_does_not_end_the_attempt",
+   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_M3_the_validator_refuses_a_settlement_naming_an_absent_hold",
+   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_M4_a_stored_closure_that_is_not_bytes_is_refused_before_any_coercion",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_a_held_reservation_with_a_settlement_row_is_refused",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_a_lease_only_settlement_needs_its_lease_released_lost_unbound",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_a_settlement_row_whose_hold_has_another_kind_is_refused",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_releasing_without_a_settlement_row_and_a_matching_one_are_accepted",
-   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
    "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_L14_1_an_old_settled_entry_is_released_in_run_status_only_once_its_recovery_is_done",
-   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_M2_a_symlink_at_the_workspace_path_is_not_reported_removed",
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_M2_a_wrong_owner_or_non_folder_entry_is_not_reported_removed",
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_a_long_failing_recovery_backs_off_at_the_cap_without_overflow",
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_one_entry_failing_never_aborts_the_sweep_for_later_entries",
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_prune_removes_only_entries_recovery_inspected_in_the_same_pass",
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_settled_checked_drops_pruned_keys_and_is_capped",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A1_a_run_lost_after_its_claim_is_settled_in_the_project_store",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A2_a_claim_admitted_but_never_bound_releases_its_lease_lost_unbound",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A3_the_orchestration_of_a_settled_run_closes_and_the_run_reads_lost",
@@ -2190,29 +2201,8 @@
    "codex:tests.test_account_settlement_driver.StepBoundaryTests.test_B4_4_a_stop_after_the_workspace_removal_before_the_journal_is_replayed",
    "codex:tests.test_account_settlement_driver.StepBoundaryTests.test_B4_4_every_caller_reaches_the_account_only_through_the_one_settlement_sequence",
    "codex:tests.test_account_settlement_driver.StepBoundaryTests.test_B4_4_the_container_recovery_writes_its_journal_only_after_the_settlement_returned",
-   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_a_closure_for_another_project_handle_claim_or_request_is_refused",
-   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_a_matching_closure_decodes",
-   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_settle_lost_runs_reply_shape_is_unchanged",
-   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_the_closure_is_bounded",
-   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_the_operation_is_new_and_offered_to_the_project_role_only",
-   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_the_request_encodes_and_a_malformed_payload_is_refused",
-   "codex:tests.test_batch2_b4s_integration.LostRunClosureReplyTableTests.test_settle_lost_runs_row_is_unchanged",
-   "codex:tests.test_batch2_b4s_integration.LostRunClosureReplyTableTests.test_the_table_row_is_exactly_the_producers_closure_fields",
-   "codex:tests.test_batch2_b4s_integration.LostRunClosureRuntimeGateTests.test_a_missing_or_wrong_runtime_is_refused_before_the_authorizer_with_nothing_written",
-   "codex:tests.test_batch2_b4s_integration.LostRunClosureRuntimeGateTests.test_the_closure_is_a_gated_account_mutation",
-   "codex:tests.test_account_settlement.ConfirmFixStoreTests.test_c_M3_a_settlement_row_with_its_hold_absent_is_a_conflict_not_nothing_to_settle",
-   "codex:tests.test_account_settlement.ConfirmFixStoreTests.test_c_M4_the_second_stored_size_guard_is_not_hidden_by_a_broad_handler",
-   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_H2_an_admitted_unbound_settlement_releases_the_open_binding_as_claimed",
-   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_M3_a_settlement_row_that_does_not_verify_is_never_answered_settled",
-   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_M3_a_verified_closure_whose_hold_is_not_released_does_not_end_the_attempt",
-   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_M3_the_validator_refuses_a_settlement_naming_an_absent_hold",
-   "codex:tests.test_account_settlement.ReviewRoundOneStoreTests.test_r1_M4_a_stored_closure_that_is_not_bytes_is_refused_before_any_coercion",
-   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_M2_a_symlink_at_the_workspace_path_is_not_reported_removed",
-   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_M2_a_wrong_owner_or_non_folder_entry_is_not_reported_removed",
-   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_a_long_failing_recovery_backs_off_at_the_cap_without_overflow",
-   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_one_entry_failing_never_aborts_the_sweep_for_later_entries",
-   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_prune_removes_only_entries_recovery_inspected_in_the_same_pass",
-   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_settled_checked_drops_pruned_keys_and_is_capped",
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_an_intent_whose_claimed_entry_exists_is_taken_over_by_that_entry",
@@ -2224,7 +2214,17 @@
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M1_a_slot_released_as_crashed_has_no_released_unacknowledged_closure",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M2_a_workspace_that_could_not_be_removed_keeps_the_journal_unsettled",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M2_the_container_recovery_writes_no_journal_while_the_workspace_remains",
-   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M2_the_live_container_path_settles_its_journal_only_after_the_workspace_is_gone"
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M2_the_live_container_path_settles_its_journal_only_after_the_workspace_is_gone",
+   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_a_closure_for_another_project_handle_claim_or_request_is_refused",
+   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_a_matching_closure_decodes",
+   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_settle_lost_runs_reply_shape_is_unchanged",
+   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_the_closure_is_bounded",
+   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_the_operation_is_new_and_offered_to_the_project_role_only",
+   "codex:tests.test_account_settlement_wire.LostRunClosureWireTests.test_B4_1_the_request_encodes_and_a_malformed_payload_is_refused",
+   "codex:tests.test_batch2_b4s_integration.LostRunClosureReplyTableTests.test_settle_lost_runs_row_is_unchanged",
+   "codex:tests.test_batch2_b4s_integration.LostRunClosureReplyTableTests.test_the_table_row_is_exactly_the_producers_closure_fields",
+   "codex:tests.test_batch2_b4s_integration.LostRunClosureRuntimeGateTests.test_a_missing_or_wrong_runtime_is_refused_before_the_authorizer_with_nothing_written",
+   "codex:tests.test_batch2_b4s_integration.LostRunClosureRuntimeGateTests.test_the_closure_is_a_gated_account_mutation"
   ],
   "source": "REQUIREMENTS-account-settlement.md#RS-B-B4",
   "statement": "**RS-B-B4 \u2014 Lost-run settlement reaches the project store.**\nA run whose service was lost after its claim was admitted is settled at the account (`account.settle_lost_run`, reply\nshape unchanged) and its settlement then reaches the project store as a closure the project writer verifies with its own\nresult key: a NEW account operation, `account.lost_run_closure`, answers a settled (`lost`) or released\n(`released_unacknowledged`) run with a closure bound to the project, run handle, attempt, lease digest, assignment digest,\nbridge run id (the claim id), release kind, the account's release time and the outbox request's digest (RS-B-B4-1).\nBefore any account call the attempt's register row (its reservation hold, or its lease hold when the claim was never bound)\nis `releasing` with the request id and request digest; after any crash the identical request is re-sent until the closure\nis stored, and a closure naming another request digest is refused with nothing written; account calls stay one at a time\non the driver's helper thread (RS-B-B4-2). `record_account_settlement(lease_binding, closure)` verifies the closure and, in\none writer transaction, inserts the settlement row, expires a `claim_pending` lease and releases its hold `lost_unbound`,\nmoves a `reserved` reservation to `retiring` (a committed body is left to retention), releases the reservation hold with\nthe closure's kind and receipt, and releases unfinished custody `lost_with_reservation`; it writes nothing to the terminal\noutbox, execution consumptions, cleanup receipts or admission records, and its two register writes are the ones D2/D4\nplanted (RS-B-B4-3). At every driver caller the order is: account reply, settlement committed, workspace removed, journal\n`settled`; a stop between steps leaves the journal entry unsettled and the next sweep replays the identical request\n(RS-B-B4-4). A reservation with a verified settlement row is finished for `_unfinished` (checked before the consumption\ncheck) and released for the purge (`_attempt_released`); no reader counts it as a successful run (RS-B-B4-5). An\nidentical retry after settlement returns the stored receipt, also from the register tombstone after the purge; another\nproject, lease digest, claim id or attempt is refused with every table unchanged; a purged identity can never be taken\nagain (RS-B-B4-6). The register validator refuses a settlement row whose hold is not released with the same kind, and a\nheld reservation with a settlement row; `releasing` without one is legal (RS-B-B4-7). With every bound set to 2, three\nruns lost after their claim are settled, their orchestrations close, their rows purge, and a fourth run dispatches,\nrecords and closes (RS-B-B4-8). RC-3 runs un-skipped (RS-B-B4-9).\nPrerequisite (\u00a79): the account's digest key and the project writer's result key are the same file\n(`<state root>/digest.key`) in every install path, and a run can only be claimed after the account verified the\nproject's sealed lease with its key, so every closure is verifiable at the project.\nSource: ANALYSIS-0.4.0-rsb-b4-b7.md \u00a70, \u00a72, \u00a79; DESIGN-0.4.0-RS-B.md draft 2 \u00a74, draft 3 \u00a76, \u00a714; DESIGN-0.4.0-RS-BD-shared.md SH-3, SH-5, SH-7; docs/requirements/b4s.md."
@@ -2292,8 +2292,8 @@
  },
  "RS-B-B6-1": {
   "checks": [
+   "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B4t_keeps_open_rows_and_unattended_close_still_uses_its_own_rule",
    "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_a_failed_release_write_rolls_the_close_back",
-   "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_end_earlier_releases_the_row_taken_at_open_closed_and_the_unattended_close_interrupted_unattended",
    "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_open_takes_a_held_row_activity_moves_its_due_time_and_the_primary_close_releases_it_closed",
    "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_the_validator_refuses_an_open_orchestration_without_its_held_row_and_a_held_row_of_a_closed_one",
    "codex:tests.test_b6_unattended_close.ReviewStateValidationTests.test_B6_8_a_closed_state_and_released_row_of_an_active_orchestration_is_refused_at_open"
@@ -2421,15 +2421,15 @@
  },
  "RS-D-2-N1": {
   "checks": [
-   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart",
-   "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N1_recorded_closes_and_releases_custody_without_counting_unrecorded"
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_keeps_unrecorded_custody_until_retention",
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N1_recorded_custody_stays_held_after_runtime_change"
   ],
   "source": "docs/requirements/rsd-runtime-close.md#RS-D-2-N1",
-  "statement": "**RS-D-2-N1 \u2014 Eligible changed-runtime closure.**\nAfter a runtime change, the real `end_earlier` sweep closes an eligible orchestration as\ninterrupted. Recorded results and verified account releases permit closure. The ordinary\nexpiry pass releases committed custody `orchestration_closed`. Count each update-ended\norchestration with any unrecorded result once as `ended_by_update_unrecorded`, including\nafter restart and result retirement/purge. Expose only a count, never result content.\nSame-runtime and other-service sweeps do nothing. The close and its count commit atomically."
+  "statement": "**RS-D-2-N1 \u2014 Changed-runtime custody after B4t.**\nAccepted B4t Draft 2 D2.11 supersedes the interim runtime-only close. A runtime\nchange does not close an open or paused orchestration or release its committed\ncustody. Verified predecessor custody stays recordable under current authority;\nunknown or newer custody stays held. Ordinary primary close, rollover, idle and\nretention rules still apply. Existing legacy `ended_by_update_unrecorded` counts\nremain readable without adding a new update-only close or changing reply fields."
  },
  "RS-D-2-N2": {
   "checks": [
-   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart",
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_keeps_unrecorded_custody_until_retention",
    "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N2_unrecorded_without_verified_release_stays_open_until_custody_deadline"
   ],
   "source": "docs/requirements/rsd-runtime-close.md#RS-D-2-N2",
@@ -2657,12 +2657,12 @@
  },
  "RSF-S2-1": {
   "checks": [
+   "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_ledger_writer_cannot_resume_after_successor",
-   "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_project_process_cannot_resume_after_takeover",
-   "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp",
+   "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
   ],
   "source": "tests/requirements/rsf-s2.json#RSF-S2-1",
@@ -2670,48 +2670,48 @@
  },
  "RSF-S2-2": {
   "checks": [
-   "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged",
-   "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_current_format_missing_epoch_refuses_without_recreating_it",
+   "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_is_inside_the_schema_step_before_each_legacy_adoption_and_rolls_back_with_it",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent",
+   "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade"
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
   ],
   "source": "tests/requirements/rsf-s2.json#RSF-S2-2",
   "statement": "**RSF-S2-2 \u2014 Atomic epoch before adoption.** Each successful owner acquisition\nadvances one durable singleton `runtime_takeover` epoch, retaining the preceding\nand current loaded runtime digest. Install it in the schema transaction before\nany historical hold adoption; roll it back with a failed migration. A successor\nopening the same build also advances the epoch. Publish no owner/admission\ninterface until initialization and validation succeed. Supported historical\nrecords still upgrade through the existing authorization and backup gates."
  },
  "RSF-S2-3": {
   "checks": [
-   "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance",
+   "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back",
+   "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_ledger_writer_cannot_resume_after_successor",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_project_process_cannot_resume_after_takeover",
-   "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_500_statement_transaction_uses_two_full_probes_and_checks_epoch_between",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_executescript_does_not_implicitly_commit_owner_transaction",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_interrupted_epoch_read_preserves_sqlite_error_for_read_budget",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_maintenance_rechecks_after_epoch_transaction_before_durable_operation",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_maintenance_still_checks_after_operation",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_other_sqlite_epoch_read_error_keeps_ownership_refusal",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_history_reads_skip_fence_probe_and_epoch_queries",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_script_commit_and_outermost_release_probe_lock_before_commit",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_commit_error_preserves_deferred_foreign_key_transaction",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_release_error_preserves_outer_transaction_and_earlier_writes",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_script_commit_and_outermost_release_probe_lock_before_commit",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_with_select_reports_read_budget_without_checking_fence",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_with_write_keywords_stay_fenced_after_takeover",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_interrupted_epoch_read_preserves_sqlite_error_for_read_budget",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_other_sqlite_epoch_read_error_keeps_ownership_refusal"
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_with_write_keywords_stay_fenced_after_takeover"
   ],
   "source": "tests/requirements/rsf-s2.json#RSF-S2-3",
   "statement": "**RSF-S2-3 \u2014 Every current write.** A central connection boundary checks the\ncaptured epoch and lifetime ownership inside every write transaction and again\nbefore commit. Cover account/project admissions, direct writes, autocommit,\ncursor/batch/script writes, explicit transactions, sweeps, backup registration,\ndeletion and VACUUM/journal maintenance. Transactional writes by a paused stale\nwriter must refuse with zero committed changes after takeover, even if it\nretains a connection. VACUUM/journal-mode maintenance checks immediately before\nand after the operation while retaining the lifetime flock. SQLite cannot wrap\nthese operations in the epoch transaction: a revocation during maintenance can\nbe detected afterwards but cannot undo its already durable changes.\nRollback and connection close must remain possible after revocation."
  },
  "RSF-S2-4": {
   "checks": [
-   "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
    "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_old_offline_cli_cannot_reopen_migrated_ledger",
+   "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
   ],
   "source": "tests/requirements/rsf-s2.json#RSF-S2-4",
@@ -2719,8 +2719,8 @@
  },
  "RSF-S2-5": {
   "checks": [
-   "codex:tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance",
+   "codex:tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp"
   ],
   "source": "tests/requirements/rsf-s2.json#RSF-S2-5",
@@ -2728,16 +2728,16 @@
  },
  "RSF-S2-6": {
   "checks": [
-   "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged",
-   "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_current_format_missing_epoch_refuses_without_recreating_it",
+   "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_is_inside_the_schema_step_before_each_legacy_adoption_and_rolls_back_with_it",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade",
+   "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_epoch_is_exact_global_metadata_not_project_partitioned_local_data",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_history_reads_skip_fence_probe_and_epoch_queries",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences"
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
   ],
   "source": "tests/requirements/rsf-s2.json#RSF-S2-6",
   "statement": "**RSF-S2-6 \u2014 Preservation and validation.** Preserve signed/historical records,\nexisting backup formats and project partitions. The machine-local epoch never\ntravels in a per-project learning backup or source image. Register new tests,\nrun them red before code then green, and prove `metadata_errors: []`. Run only\nnamed modules, including every copier/backup/restore/move/enumeration module\naffected by the schema step. Record evidence and unrun checks in\n[STATUS.md](rsf-s2/STATUS.md). Existing assertions may change only with an\nold\u2192new entry in [assertions.md](rsf-s2/assertions.md)."
@@ -3176,9 +3176,9 @@
  },
  "TESTSPEED2-1": {
   "checks": [
-   "root:test_setup_straight.SetupStraightTests.test_S4_3_update_skips_billing_when_attested_and_runs_it_otherwise",
+   "root:test_setup_straight.SetupStraightTests.test_S4_3_an_answers_file_skips_a_current_signature_signs_when_not_current_or_when_asked",
    "root:test_setup_straight.SetupStraightTests.test_S4_3_an_answers_rerun_signs_for_every_signature_that_is_not_current_and_shows_no_private_value",
-   "root:test_setup_straight.SetupStraightTests.test_S4_3_an_answers_file_skips_a_current_signature_signs_when_not_current_or_when_asked"
+   "root:test_setup_straight.SetupStraightTests.test_S4_3_update_skips_billing_when_attested_and_runs_it_otherwise"
   ],
   "source": "tests/requirements/testspeed2.json#TESTSPEED2-1",
   "statement": "`root:test_setup_straight` (4 fragments) totals at most 230 s, measured as the sum of its fragments' seconds (what the budget check counts), with full-run parallelism (`--jobs 16` beside `codex:tests.test_project_driver` and `root:test_install`)."
@@ -3874,27 +3874,27 @@
   ]
  },
  "E1b-2": {
-  "statement": "Whole ledger operations including account transactions and their authority rechecks execute as one owner request.",
-  "source": "tests/requirements/e1b-wiring.json#E1b-2",
   "checks": [
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_transaction_rechecks_are_one_request_and_revocation_rolls_back",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_preparation_does_not_occupy_owner_and_commit_rechecks_authority",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_signature_preparation_yields_owner_and_changed_generation_refuses_commit",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_account_handler_keeps_failure_answer_and_processes_next_request",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_original_open_rechecks_and_rolls_back_within_one_request",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape"
-  ]
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_signature_preparation_yields_owner_and_changed_generation_refuses_commit",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_transaction_rechecks_are_one_request_and_revocation_rolls_back"
+  ],
+  "source": "tests/requirements/e1b-wiring.json#E1b-2",
+  "statement": "Whole ledger operations including account transactions and their authority rechecks execute as one owner request."
  },
  "E1b-8": {
-  "statement": "Preparation runs before owner requests where existing checks permit, and current authority is rechecked before commit.",
-  "source": "tests/requirements/e1b-wiring.json#E1b-8",
   "checks": [
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_preparation_does_not_occupy_owner_and_commit_rechecks_authority",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_signature_preparation_yields_owner_and_changed_generation_refuses_commit",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_original_open_rechecks_and_rolls_back_within_one_request"
-  ]
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_original_open_rechecks_and_rolls_back_within_one_request",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_signature_preparation_yields_owner_and_changed_generation_refuses_commit"
+  ],
+  "source": "tests/requirements/e1b-wiring.json#E1b-8",
+  "statement": "Preparation runs before owner requests where existing checks permit, and current authority is rechecked before commit."
  },
  "O0C-U1-1": {
   "checks": [
@@ -4595,5 +4595,313 @@
   ],
   "source": "tests/requirements/s14b.json#S14b-5",
   "statement": "Retention summaries survive backup, upgrade, source imaging and transfer."
+ },
+ "RS-B-B4t-0": {
+  "checks": [
+   "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
+   "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_with_native_identity_updates_without_a_signal",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_busy_predecessor_without_identity_refuses_write_free",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_held_store_lock_without_a_service",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_idle_predecessor_with_readable_identity_also_receives_no_signal",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_registration_without_owner_consent_never_enables_records_upgrade",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_released_0859_owner_upgrade_preserves_project_local_enumeration",
+   "codex:tests.test_b4t_takeover.CollectorStopTests.test_drained_stop_forces_only_a_running_child_refusal_without_any_signal",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_0_every_write_free_refusal_still_writes_nothing",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_0_no_half_installed_file_at_any_step",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_0_update_with_a_running_child_goes_ahead",
+   "codex:tests.test_b4t_takeover.JournalTests.test_installed_and_complete_phase_cuts_resume_without_reinstalling_or_repeating_a_stop",
+   "codex:tests.test_b4t_takeover.JournalTests.test_published_phase_names_follow_exit_authorization_and_the_completed_run_reads",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_newer_ledger_floor_is_refused_by_T0_before_intent_or_epoch_writes",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_additive_17_to_18_does_not_ask_for_records_upgrade_consent",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_another_projects_unfinished_takeover_names_its_verified_B4m_command",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_declined_upgrade_or_failed_takeover_does_not_start_an_install",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_owner_command_does_not_report_an_uninspectable_ledger_as_absent",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_owner_command_exposes_run_installed_and_complete_without_a_second_install",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_preflight_prior_authorization_past_the_existing_limit_is_read_only",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_records_upgrade_approval_keeps_the_other_projects_warning_literal",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_update_check_replaces_only_the_running_child_refusal",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_wizard_runs_the_takeover_after_approval_and_before_installer_apply",
+   "codex:tests.test_b4t_takeover.StoreTests.test_T0_does_not_ignore_an_offline_predecessor_store_without_a_trusted_package"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-0",
+  "statement": "Update with a child running proceeds; lost settlement, retained committed custody and phase recovery; all other preflight refusals write nothing."
+ },
+ "RS-B-B4t-1": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_0_update_with_a_running_child_goes_ahead",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_update_check_replaces_only_the_running_child_refusal",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_wizard_runs_the_takeover_after_approval_and_before_installer_apply"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-1",
+  "statement": "No idle wait or manual stop for a verified predecessor."
+ },
+ "RS-B-B4t-10": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_journal_stays_bounded_on_a_busy_project",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_withdrawn_service_that_still_holds_work",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_later_stop_generation_and_stopped_count_have_fixed_integer_widths",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_maximum_path_bytes_and_all_later_fields_fit_the_journal",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_unbounded_identity_fields_refuse_before_journal_creation",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_withdraw_hint_past_five_seconds_and_owner_lock_past_twenty_seconds",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_withdrawn_hint_does_not_hide_an_endpoint_that_still_answers",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_two_archived_outboxes_survive_A_B_C_with_one_effect_and_immutable_originals",
+   "codex:tests.test_b4t_takeover.CollectorStopTests.test_wrong_identity_sends_nothing_and_the_stop_past_thirty_seconds_is_resumable",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_0_no_half_installed_file_at_any_step",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_10_crash_at_each_phase_then_resume",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_10_intent_is_journaled_before_any_stop",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_10_resumable_failures_say_what_changed",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_4_runs_admitted_after_the_intent_are_ended_by_update",
+   "codex:tests.test_b4t_takeover.JournalTests.test_a_database_failure_is_redacted_and_keeps_its_resumable_phase",
+   "codex:tests.test_b4t_takeover.JournalTests.test_a_marker_write_failure_reports_the_successful_undo_and_keeps_the_prior_bytes",
+   "codex:tests.test_b4t_takeover.JournalTests.test_a_post_stop_failure_uses_the_designs_lost_count_and_rerun_text",
+   "codex:tests.test_b4t_takeover.JournalTests.test_installed_and_complete_phase_cuts_resume_without_reinstalling_or_repeating_a_stop",
+   "codex:tests.test_b4t_takeover.JournalTests.test_journal_past_the_run_and_byte_limits_changes_nothing",
+   "codex:tests.test_b4t_takeover.JournalTests.test_journal_rejects_symlink_oversize_duplicate_keys_and_wrong_project",
+   "codex:tests.test_b4t_takeover.JournalTests.test_native_owner_failure_keeps_the_phase_and_never_exposes_raw_error_text",
+   "codex:tests.test_b4t_takeover.JournalTests.test_published_phase_names_follow_exit_authorization_and_the_completed_run_reads",
+   "codex:tests.test_b4t_takeover.LineageTests.test_B4t_5_chained_takeover_A_B_C",
+   "codex:tests.test_b4t_takeover.MemoryTakeoverTests.test_archived_memory_holds_recover_only_with_positive_inode_evidence_and_retry_the_removal",
+   "codex:tests.test_b4t_takeover.MigrationCutsTests.test_B4t_10_internal_T5_crash_cuts",
+   "codex:tests.test_b4t_takeover.MigrationCutsTests.test_B4t_10_pending_old_target_migrations",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_J6a_excludes_both_old_and_late_settled_entries_after_restart",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_ledger_straggler_is_stopped_again_before_the_owner_open",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_new_service_that_ignores_its_stop_operation_has_one_thirty_second_bound",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_project_straggler_is_stopped_again_before_an_owner_open",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_straggler_past_three_rounds_never_reaches_an_owner_open",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_declined_upgrade_or_failed_takeover_does_not_start_an_install",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_owner_command_exposes_run_installed_and_complete_without_a_second_install",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_wizard_runs_the_takeover_after_approval_and_before_installer_apply",
+   "codex:tests.test_b4t_takeover.RetentionA1Tests.test_B4t_A1_takeover_tables_have_retention_and_caps",
+   "codex:tests.test_b4t_takeover.RetentionA1Tests.test_retention_keeps_refused_obligations_and_rolls_back_a_failed_pass",
+   "codex:tests.test_b4t_takeover.RolloverTakeoverTests.test_rollover_killed_after_commit_returns_the_same_successor_after_takeover",
+   "codex:tests.test_b4t_takeover.RolloverTakeoverTests.test_rollover_killed_inside_its_transaction_replays_both_ends_after_takeover",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_4_rollover_replay_across_the_takeover",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_5_cross_digest_outbox_replay",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_A1_overflow_count_survives_the_journal",
+   "codex:tests.test_b4t_takeover.StoreTests.test_the_successor_completes_its_adopted_record_after_recovery_and_reports_only_metadata"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-10",
+  "statement": "Every named phase resumes with one effect, including internal migration and atomic-file crash cuts."
+ },
+ "RS-B-B4t-2": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_2_a_result_committed_during_the_stop_is_judged_on_the_final_store",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_2_committed_results_stay_recordable",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_predecessors_classification_is_not_the_successors_takeover_authority",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_result_cannot_borrow_an_unrelated_or_noncurrent_takeover_record",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_taken_over_result_requires_its_own_takeover_authority",
+   "codex:tests.test_b4t_takeover.StoreTests.test_adopted_open_and_paused_orchestrations_are_not_closed_by_runtime_change",
+   "codex:tests.test_b4t_takeover.StoreTests.test_the_successor_completes_its_adopted_record_after_recovery_and_reports_only_metadata"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-2",
+  "statement": "Committed results and open/paused orchestrations stay recordable under current authority."
+ },
+ "RS-B-B4t-3": {
+  "checks": [
+   "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_expected_arguments_is_the_only_signal_target",
+   "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_unchanged_entry_hash_and_held_lock_refuses_adoption",
+   "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
+   "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_with_native_identity_updates_without_a_signal",
+   "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_no_other_process_is_inspected",
+   "codex:tests.test_b4t_native_audit_p66.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim",
+   "codex:tests.test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim",
+   "codex:tests.test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_exec_after_last_check_is_recorded",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_held_store_lock_without_a_service",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_no_other_process_is_inspected",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_withdrawn_service_that_still_holds_work",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_candidate_gone_at_last_read_counts_as_exited",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_exit_event_between_identity_and_last_event_read_counts_as_exited",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_idle_predecessor_with_readable_identity_also_receives_no_signal",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_withdraw_hint_past_five_seconds_and_owner_lock_past_twenty_seconds",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_withdrawn_hint_does_not_hide_an_endpoint_that_still_answers",
+   "codex:tests.test_b4t_takeover.CollectorStopTests.test_B4t_3_collector_and_new_services_are_never_signalled",
+   "codex:tests.test_b4t_takeover.CollectorStopTests.test_drained_stop_forces_only_a_running_child_refusal_without_any_signal",
+   "codex:tests.test_b4t_takeover.CollectorStopTests.test_pre_identity_collectors_receive_only_the_verified_predecessors_bare_shape",
+   "codex:tests.test_b4t_takeover.CollectorStopTests.test_wrong_identity_sends_nothing_and_the_stop_past_thirty_seconds_is_resumable",
+   "codex:tests.test_b4t_takeover.FloorTests.test_a_B4t_build_below_the_floor_cannot_advance_either_epoch",
+   "codex:tests.test_b4t_takeover.FloorTests.test_archived_0866_and_0832_cannot_reopen_either_published_store",
+   "codex:tests.test_b4t_takeover.FloorTests.test_current_ledger_open_keeps_the_predecessors_capacity_coverage_refusal",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_security_takeover_has_no_writer_of_its_own",
+   "codex:tests.test_b4t_takeover.NativeExecA1Tests.test_archived_service_exec_sites_are_beyond_explicit_child_process_boundaries",
+   "codex:tests.test_b4t_takeover.NativeExecA1Tests.test_native_exec_before_and_after_I4_reaches_only_the_same_process",
+   "codex:tests.test_b4t_takeover.NativeProcessProofTests.test_B4t_A1_native_candidate_pin_reads_no_other_process_and_stops_only_it",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_ledger_straggler_is_stopped_again_before_the_owner_open",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_new_service_that_ignores_its_stop_operation_has_one_thirty_second_bound",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_project_straggler_is_stopped_again_before_an_owner_open",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_straggler_past_three_rounds_never_reaches_an_owner_open",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_additive_17_to_18_does_not_ask_for_records_upgrade_consent",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_legacy_exit_does_not_add_another_thirty_second_wait_for_an_inherited_lock",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_linux_below_pidfd_support_uses_the_accepted_birth_recheck_fallback",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_B4t_3_bounded_stop_then_kill_the_same_process",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_B4t_3_inherited_lock_blocks_adoption",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_B4t_3_signals_only_the_proven_process",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_a_kernel_argument_limit_past_four_MiB_is_unproven_before_reading_arguments",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_predecessor_entry_accepts_the_actual_launcher_isolation_flags_only",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_unrelated_native_history_and_host_lock_holders_never_receive_a_signal",
+   "codex:tests.test_b4t_takeover.ServiceStopTests.test_stop_for_update_requires_the_owner_and_the_exact_enrolled_request",
+   "codex:tests.test_b4t_takeover.StartBarrierTests.test_B4t_3_a_straggler_that_passed_its_check_is_caught",
+   "codex:tests.test_b4t_takeover.StartBarrierTests.test_B4t_3_direct_learning_serve_is_refused_at_every_phase",
+   "codex:tests.test_b4t_takeover.StartBarrierTests.test_B4t_3_ensure_collector_project_host_and_e2c_are_refused",
+   "codex:tests.test_b4t_takeover.StartBarrierTests.test_B4t_3_login_agent_restart_is_refused_at_every_phase",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_3_an_old_binary_cannot_reopen_either_store",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_3_injected_stale_owner_commits_nothing",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_3_real_predecessor_is_excluded_by_proven_exit",
+   "root:test_login_start.InstallTests.test_B4t_systemd_failed_start_is_reset_before_refresh_and_a_failed_reset_keeps_the_entry"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-3",
+  "statement": "Proven predecessor exit before adoption; lifetime lock and epoch fence; schema and version floor prevent reopen."
+ },
+ "RS-B-B4t-4": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_B4t_4_another_projects_child_keeps_running",
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_lost_settlement_and_closure_find_the_original_claim_once",
+   "codex:tests.test_b4t_takeover.AccountTakeoverReadTests.test_more_than_one_page_of_other_projects_is_read_without_releasing_any_slot",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_two_archived_outboxes_survive_A_B_C_with_one_effect_and_immutable_originals",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_4_runs_admitted_after_the_intent_are_ended_by_update",
+   "codex:tests.test_b4t_takeover.MemoryTakeoverTests.test_B4t_4_missing_journal_lock_evidence_keeps_memory_holds",
+   "codex:tests.test_b4t_takeover.MemoryTakeoverTests.test_archived_memory_holds_recover_only_with_positive_inode_evidence_and_retry_the_removal",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_J6a_excludes_both_old_and_late_settled_entries_after_restart",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_B4t_3_bounded_stop_then_kill_the_same_process",
+   "codex:tests.test_b4t_takeover.RetentionA1Tests.test_B4t_A1_takeover_tables_have_retention_and_caps",
+   "codex:tests.test_b4t_takeover.RolloverTakeoverTests.test_rollover_killed_after_commit_returns_the_same_successor_after_takeover",
+   "codex:tests.test_b4t_takeover.RolloverTakeoverTests.test_rollover_killed_inside_its_transaction_replays_both_ends_after_takeover",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_4_memory_holds_and_pending_removals_carry_over",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_4_open_bindings_end_by_their_own_rules",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_4_rollover_replay_across_the_takeover",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_4_the_old_child_ends_lost_by_update_and_its_slot_frees_once",
+   "codex:tests.test_b4t_takeover.StoreTests.test_post_stop_count_includes_an_unsettled_orphan_but_excludes_a_result_committed_before_stop"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-4",
+  "statement": "Updated project's running children end lost; other work follows D2.5 and other projects survive."
+ },
+ "RS-B-B4t-5": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_lost_settlement_and_closure_find_the_original_claim_once",
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_terminal_uses_original_scope_and_capacity_row_and_missing_lineage_writes_nothing",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_two_archived_outboxes_survive_A_B_C_with_one_effect_and_immutable_originals",
+   "codex:tests.test_b4t_takeover.LineageTests.test_B4t_5_chained_takeover_A_B_C",
+   "codex:tests.test_b4t_takeover.LineageTests.test_B4t_5_successor_custody_is_the_only_older_runtime_path",
+   "codex:tests.test_b4t_takeover.RetentionA1Tests.test_lineage_retention_keeps_65_live_branches_and_18_successive_links",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_2_committed_results_stay_recordable",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_5_cross_digest_outbox_replay",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_5_no_double_record_in_any_order"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-5",
+  "statement": "One recording or settlement effect per binding across versions and retries."
+ },
+ "RS-B-B4t-6": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_6_primary_recheck_idempotent_across_takeover"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-6",
+  "statement": "Primary recheck remains idempotent across takeover."
+ },
+ "RS-B-B4t-7": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_another_projects_unfinished_takeover_names_its_verified_B4m_command",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_owner_report_reads_other_projects_after_account_handover_without_a_project_service",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_recovery_handover_names_the_B4m_update_command",
+   "codex:tests.test_b4t_takeover.StartBarrierTests.test_B4t_3_direct_learning_serve_is_refused_at_every_phase"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-7",
+  "statement": "Existing B4m commands and documented installed-old-client refusals remain accurate."
+ },
+ "RS-B-B4t-8": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_B4t_4_another_projects_child_keeps_running",
+   "codex:tests.test_b4t_takeover.AccountTakeoverReadTests.test_lineage_over_cap_notice_is_produced_by_the_real_account_handler",
+   "codex:tests.test_b4t_takeover.AccountTakeoverReadTests.test_more_than_one_page_of_other_projects_is_read_without_releasing_any_slot",
+   "codex:tests.test_b4t_takeover.AccountTakeoverReadTests.test_past_the_reply_byte_budget_continues_on_the_next_page_and_old_senders_stay_refused",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_journal_stays_bounded_on_a_busy_project",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_account_report_page_offsets_and_page_count_are_bounded",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_maximum_path_bytes_and_all_later_fields_fit_the_journal",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_a_corrupt_original_outbox_is_reported_unverifiable_and_kept",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_4_runs_admitted_after_the_intent_are_ended_by_update",
+   "codex:tests.test_b4t_takeover.JournalTests.test_a_post_stop_failure_uses_the_designs_lost_count_and_rerun_text",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_another_projects_unfinished_takeover_names_its_verified_B4m_command",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_owner_report_reads_other_projects_after_account_handover_without_a_project_service",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_post_start_account_diagnostics_wait_for_the_existing_bounded_service_start",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_recovery_handover_names_the_B4m_update_command",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_takeover_report_is_a_new_closed_read_without_changing_existing_shapes",
+   "codex:tests.test_b4t_takeover.ServiceStopTests.test_the_new_history_read_is_produced_by_the_real_handler_without_writes",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_4_the_old_child_ends_lost_by_update_and_its_slot_frees_once",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_8_status_names_the_takeover",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_A1_overflow_count_survives_the_journal",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_run_cannot_borrow_an_unrelated_takeover_id_for_its_annotation",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_tampered_takeover_run_is_refused_without_relabelling_another_run",
+   "codex:tests.test_b4t_takeover.StoreTests.test_nonempty_takeover_counts_are_produced_by_the_real_history_handler",
+   "codex:tests.test_b4t_takeover.StoreTests.test_post_stop_count_includes_an_unsettled_orphan_but_excludes_a_result_committed_before_stop",
+   "codex:tests.test_b4t_takeover.StoreTests.test_status_wording_uses_fixed_outcomes_and_other_project_commands",
+   "codex:tests.test_b4t_takeover.StoreTests.test_the_successor_completes_its_adopted_record_after_recovery_and_reports_only_metadata"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-8",
+  "statement": "Status names each takeover outcome using D2.8 wording without changing existing reply shapes."
+ },
+ "RS-B-B4t-9": {
+  "checks": [
+   "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_expected_arguments_is_the_only_signal_target",
+   "codex:tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_unchanged_entry_hash_and_held_lock_refuses_adoption",
+   "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_no_other_process_is_inspected",
+   "codex:tests.test_b4t_native_audit_p66.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim",
+   "codex:tests.test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim",
+   "codex:tests.test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound",
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_earlier_runtime_is_passed_only_at_the_four_approved_call_sites",
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_lost_settlement_and_closure_find_the_original_claim_once",
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_terminal_uses_original_scope_and_capacity_row_and_missing_lineage_writes_nothing",
+   "codex:tests.test_b4t_takeover.AccountTakeoverReadTests.test_past_the_reply_byte_budget_continues_on_the_next_page_and_old_senders_stay_refused",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_busy_predecessor_without_identity_refuses_write_free",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_exec_after_last_check_is_recorded",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_no_other_process_is_inspected",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_later_stop_generation_and_stopped_count_have_fixed_integer_widths",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_registration_without_owner_consent_never_enables_records_upgrade",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_released_0859_owner_upgrade_preserves_project_local_enumeration",
+   "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_unbounded_identity_fields_refuse_before_journal_creation",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_a_corrupt_original_outbox_is_reported_unverifiable_and_kept",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_two_archived_outboxes_survive_A_B_C_with_one_effect_and_immutable_originals",
+   "codex:tests.test_b4t_takeover.CollectorStopTests.test_wrong_identity_sends_nothing_and_the_stop_past_thirty_seconds_is_resumable",
+   "codex:tests.test_b4t_takeover.FloorTests.test_a_B4t_build_below_the_floor_cannot_advance_either_epoch",
+   "codex:tests.test_b4t_takeover.FloorTests.test_current_ledger_open_keeps_the_predecessors_capacity_coverage_refusal",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_0_every_write_free_refusal_still_writes_nothing",
+   "codex:tests.test_b4t_takeover.JournalTests.test_B4t_security_takeover_has_no_writer_of_its_own",
+   "codex:tests.test_b4t_takeover.JournalTests.test_a_database_failure_is_redacted_and_keeps_its_resumable_phase",
+   "codex:tests.test_b4t_takeover.JournalTests.test_journal_rejects_symlink_oversize_duplicate_keys_and_wrong_project",
+   "codex:tests.test_b4t_takeover.JournalTests.test_native_owner_failure_keeps_the_phase_and_never_exposes_raw_error_text",
+   "codex:tests.test_b4t_takeover.JournalTests.test_prior_authorization_past_the_byte_limit_changes_nothing",
+   "codex:tests.test_b4t_takeover.LineageTests.test_B4t_5_successor_custody_is_the_only_older_runtime_path",
+   "codex:tests.test_b4t_takeover.LineageTests.test_B4t_9_lineage_refuses_unknown_mismatched_or_newer_digests",
+   "codex:tests.test_b4t_takeover.LineageTests.test_lineage_cycles_and_past_sixteen_links_are_refused_without_writes",
+   "codex:tests.test_b4t_takeover.LineageTests.test_release_catalogue_past_the_byte_limit_is_not_trusted",
+   "codex:tests.test_b4t_takeover.MemoryTakeoverTests.test_B4t_4_missing_journal_lock_evidence_keeps_memory_holds",
+   "codex:tests.test_b4t_takeover.NativeExecA1Tests.test_archived_service_exec_sites_are_beyond_explicit_child_process_boundaries",
+   "codex:tests.test_b4t_takeover.NativeExecA1Tests.test_native_exec_before_and_after_I4_reaches_only_the_same_process",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_a_newer_ledger_floor_is_refused_by_T0_before_intent_or_epoch_writes",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_historical_package_identity_is_hashed_without_loading_its_code",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_owner_command_does_not_report_an_uninspectable_ledger_as_absent",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_preflight_prior_authorization_past_the_existing_limit_is_read_only",
+   "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_preflight_requires_both_catalogue_and_matching_authorized_loaded_identity",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_B4t_3_signals_only_the_proven_process",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_a_kernel_argument_limit_past_four_MiB_is_unproven_before_reading_arguments",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_linux_foreign_flock_holder_is_busy_without_descriptor_reads",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_predecessor_entry_accepts_the_actual_launcher_isolation_flags_only",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_process_arguments_past_byte_limit_are_unproven",
+   "codex:tests.test_b4t_takeover.ProcessProofTests.test_unrelated_native_history_and_host_lock_holders_never_receive_a_signal",
+   "codex:tests.test_b4t_takeover.RetentionA1Tests.test_lineage_retention_keeps_65_live_branches_and_18_successive_links",
+   "codex:tests.test_b4t_takeover.RetentionA1Tests.test_retention_keeps_refused_obligations_and_rolls_back_a_failed_pass",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_2_revoked_enrollment_refuses_recording",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_9_corrupt_receipts_context_and_outbox_are_refused",
+   "codex:tests.test_b4t_takeover.StoreTests.test_B4t_machine_local_tables_never_travel",
+   "codex:tests.test_b4t_takeover.StoreTests.test_T0_does_not_ignore_an_offline_predecessor_store_without_a_trusted_package",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_predecessors_classification_is_not_the_successors_takeover_authority",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_result_cannot_borrow_an_unrelated_or_noncurrent_takeover_record",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_run_cannot_borrow_an_unrelated_takeover_id_for_its_annotation",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_taken_over_result_requires_its_own_takeover_authority",
+   "codex:tests.test_b4t_takeover.StoreTests.test_a_tampered_takeover_run_is_refused_without_relabelling_another_run",
+   "codex:tests.test_b4t_takeover.StoreTests.test_adopted_open_and_paused_orchestrations_are_not_closed_by_runtime_change"
+  ],
+  "source": "tests/requirements/b4t.json#RS-B-B4t-9",
+  "statement": "Unknown lineage or corrupt custody is refused and held, never guessed or freed."
  }
 }

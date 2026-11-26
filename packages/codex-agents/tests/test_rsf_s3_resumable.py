@@ -198,6 +198,8 @@ class ResumableMigrationTests(unittest.TestCase):
             db.execute('DROP TRIGGER ' + name)
         db.execute('DROP TABLE run_holds')
         db.execute('ALTER TABLE records DROP COLUMN probe_id')
+        db.execute('DROP TABLE IF EXISTS runtime_floor')
+        db.execute('DROP TABLE IF EXISTS runtime_lineage')
         db.execute('DROP TABLE runtime_takeover')
         db.execute('PRAGMA user_version=14')
         owner._fence.epoch = None
@@ -313,7 +315,7 @@ class ResumableMigrationTests(unittest.TestCase):
                     self.reopen(root, kind)
                     self.assertEqual(expected, self.snapshot(root, kind))
                     if kind == 'project':
-                        self.assertEqual(1, len(list((root / 'history').glob('history.sqlite3.before-22.*'))))
+                        self.assertEqual(1, len(list((root / 'history').glob('history.sqlite3.before-23.*'))))
         for table in ('records', 'owner_attestations', 'launch_claims', 'result_reservations'):
             if table in original:
                 if table == 'owner_attestations':
@@ -374,7 +376,7 @@ class ResumableMigrationTests(unittest.TestCase):
                     self.reopen(root, kind)
                     self.assertEqual(expected, self.snapshot(root, kind))
                     if kind == 'project':
-                        self.assertEqual(1, len(list((root / 'history').glob('history.sqlite3.before-22.*'))))
+                        self.assertEqual(1, len(list((root / 'history').glob('history.sqlite3.before-23.*'))))
 
     @requirements('RSF-S3-1', 'RSF-S3-3', 'RSF-S3-4', 'RSF-S3-5')
     def test_account_last_short_done_and_publication_commits_reopen_twice_identically(self):
@@ -455,9 +457,9 @@ class ResumableMigrationTests(unittest.TestCase):
                     kept = []
                     if kind == 'project' and stage == 'validation':
                         self.assertIn('hold_migration_progress', self.snapshot(root, kind))
-                        self.assertEqual(1, len(list((root / 'history').glob('.history.sqlite3.upgrade-22.*.attempt'))))
+                        self.assertEqual(1, len(list((root / 'history').glob('.history.sqlite3.upgrade-23.*.attempt'))))
                         kept = [(path, path.read_bytes()) for path in
-                                (root / 'history').glob('history.sqlite3.before-22.*')]
+                                (root / 'history').glob('history.sqlite3.before-23.*')]
                         self.assertEqual(1, len(kept))
                     self.reopen(root, kind)
                     for path, before_bytes in kept:
@@ -485,11 +487,11 @@ class ResumableMigrationTests(unittest.TestCase):
             with self.subTest(missing=missing):
                 root = self.clone(source, 'missing-' + missing)
                 directory = root / 'history'
-                marker, = directory.glob('.history.sqlite3.upgrade-22.*.attempt')
+                marker, = directory.glob('.history.sqlite3.upgrade-23.*.attempt')
                 copy = directory / json.loads(marker.read_text())['copy']
                 recovery_bytes = copy.read_bytes()
                 # A different copy cannot stand in for the original attempt's.
-                decoy = directory / 'history.sqlite3.before-22.1'
+                decoy = directory / 'history.sqlite3.before-23.1'
                 decoy.write_bytes(recovery_bytes)
                 decoy.chmod(0o600)
                 if missing == 'marker':
@@ -510,7 +512,7 @@ class ResumableMigrationTests(unittest.TestCase):
                 with closing(sqlite3.connect(database(root, 'project'))) as db:
                     self.assertEqual(epoch, db.execute('SELECT epoch FROM runtime_takeover').fetchone()[0])
                 if missing == 'marker':
-                    original_marker, = (source / 'history').glob('.history.sqlite3.upgrade-22.*.attempt')
+                    original_marker, = (source / 'history').glob('.history.sqlite3.upgrade-23.*.attempt')
                     shutil.copy2(original_marker, marker)
                 else:
                     if copy.is_symlink():

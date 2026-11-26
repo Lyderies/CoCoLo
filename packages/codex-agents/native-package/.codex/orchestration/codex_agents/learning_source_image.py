@@ -37,7 +37,7 @@ class SourceArchive:
 # index (not in a project's backup: derived from what is); 15 added the hold
 # register (O0b RS-A), which is in it, since a crashed release cannot be derived.
 # Schema 16 adds nullable probe provenance to the original records.
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 # The registered backup is a streamed (format 3) SQLite file, read one batch at a
 # time; this bounds its size, not memory. It matches the ledger's own limit.
 MAX_BACKUP_BYTES = 16 * 1024 ** 3
@@ -215,7 +215,8 @@ def _schema(connection, store):
     # E2a-1: the machine-local wake and starter tables are never part of the image (0.8.60 full-run fixes); each
     # one present must have exactly its own columns, so it cannot hide an unrepresented partition either.
     found = {row[0] for row in names}
-    local = found & set(store.LOCAL_TABLE_COLUMNS)
+    # B4t authority never travels with another project's learning image.
+    local = found & (set(store.LOCAL_TABLE_COLUMNS) | {'runtime_floor', 'runtime_lineage'})
     if found - local != {*_KEYS, "projects", "additive_migrations",
                          "owner_key_history", "sqlite_sequence", "admission_evidence", "runtime_takeover"}:
         raise HistoryError("history_incompatible")

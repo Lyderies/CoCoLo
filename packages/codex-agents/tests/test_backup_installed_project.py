@@ -35,7 +35,7 @@ class InstalledBackupManifestTests(unittest.TestCase):
                     self.assertEqual(learning_store._backup_expected_columns(version, table),
                                      TOOL["_expected_columns"](version, table))
                     self.assertEqual(learning_store._BACKUP_ORDER_COLUMNS[table], TOOL["_TABLE_ORDER"][table])
-        for version in (0, 4, 18):  # PC-4 (requirement): 16 is now supported
+        for version in (0, 4, 19):  # PC-4 (requirement): 16 is now supported
             with self.subTest(unsupported=version), self.assertRaises(RuntimeError):
                 TOOL["_tables"](version)
 

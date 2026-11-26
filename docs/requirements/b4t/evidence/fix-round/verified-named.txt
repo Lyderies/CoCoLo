@@ -1,0 +1,194 @@
+BUDGET DEBT: codex:tests.test_b2_service_outcome_paths ceiling=69.160s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_billing_gate ceiling=78.580s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_bridge ceiling=368.250s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_container_stop ceiling=72.230s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_host_commands ceiling=119.560s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_learning_cli ceiling=112.560s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_lost_run_settlement ceiling=119.750s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_project_driver ceiling=520.370s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_project_start ceiling=183.400s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_result_lifetime ceiling=73.050s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_session_guard ceiling=7.230s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_trial_run_driver_bugs ceiling=103.340s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_write_merge ceiling=247.710s not_measured seconds=None
+BUDGET DEBT: root:test_install ceiling=113.540s not_measured seconds=None
+BUDGET DEBT: root:test_install_claude_upgrade ceiling=135.450s not_measured seconds=None
+BUDGET DEBT: root:test_setup_sh ceiling=203.640s not_measured seconds=None
+BUDGET DEBT: root:test_setup_straight ceiling=293.120s not_measured seconds=None
+BUDGET DEBT: root:test_setup_update ceiling=275.000s not_measured seconds=None
+BUDGET DEBT: root:test_setup_wizard_direct ceiling=282.080s not_measured seconds=None
+RUN RECORD: /tmp/b4t-fix-verified.json.run.json
+{
+ "elapsed_seconds": 23.9,
+ "jobs": 16,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 48.112,
+ "over_budget": [],
+ "budget_failures": [],
+ "budget_warnings": [
+  {
+   "module": "codex:tests.test_b2_service_outcome_paths",
+   "ceiling": 69.16,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_billing_gate",
+   "ceiling": 78.58,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_bridge",
+   "ceiling": 368.25,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_container_stop",
+   "ceiling": 72.23,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "ceiling": 119.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "ceiling": 112.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "ceiling": 119.75,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "ceiling": 520.37,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_project_start",
+   "ceiling": 183.4,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_result_lifetime",
+   "ceiling": 73.05,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_session_guard",
+   "ceiling": 7.23,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "ceiling": 103.34,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "ceiling": 247.71,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install",
+   "ceiling": 113.54,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "ceiling": 135.45,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_sh",
+   "ceiling": 203.64,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_straight",
+   "ceiling": 293.12,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_update",
+   "ceiling": 275,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "ceiling": 282.08,
+   "seconds": null,
+   "status": "not_measured"
+  }
+ ],
+ "debt_retirement_required": [],
+ "discovery_seconds": 2.6493672920623794,
+ "preflight_seconds": 7.817515415954404,
+ "metadata_errors": [],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [],
+ "units": 7,
+ "tests": {
+  "codex": 143,
+  "root": 38
+ },
+ "failed_units": [],
+ "slowest_units": [
+  [
+   "codex:tests.test_b4t_takeover#1",
+   23.8
+  ],
+  [
+   "codex:tests.test_b4t_takeover#0",
+   20.5
+  ],
+  [
+   "root:test_e2e_update_safety",
+   1.7
+  ],
+  [
+   "codex:tests.test_lifetime_cap_guard",
+   0.9
+  ],
+  [
+   "codex:tests.test_b4t_native#1",
+   0.4
+  ],
+  [
+   "codex:tests.test_b4t_native#0",
+   0.4
+  ],
+  [
+   "codex:tests.test_b4t_native#2",
+   0.4
+  ]
+ ],
+ "logs": "/private/tmp/ptsyu91uh4"
+}
+Unchecked requirements (85): API-1, API-10, API-11, API-12, API-13, API-14, API-15, API-16, API-17, API-18, API-19, API-2, API-20, API-21, API-22, API-23, API-24, API-25, API-26, API-27, API-3, API-4, API-5, API-6, API-7, API-8, API-9, G1, G2, G3, G4, G5, G6, G7, G8, G9, L1.1, L1.2, L10.1, L10.2, L10.3, L11.1, L11.2, L12.1, L12.2, L12.3, L12.4, L12.5, L12.6a, L12.6b, L12.7, L13.1, L13.2, L2.1, L2.2, L3.1, L3.2, L3.3, L4.1, L4.2, L5.1, L5.2, L5.3, L6.1, L6.2, L7.1, L7.2, L7.3, L8.1, L8.2, L9.1, L9.2, L9.3, O0C-U4-3, P4-REPORT, RS-B-B6-6, TERM-13, TERM-17, TERM-5, TERM-6, TERM-7, TF-23, TF-25, TF-26, TF-27
+Requirements proved only by skipped checks here (3): RS-B-B4t-0, RS-B-B4t-3, RS-B-B4t-9

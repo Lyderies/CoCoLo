@@ -421,6 +421,11 @@ class HistoryService:
                     result = {'stored': False, 'refused': refusal.owner_reason,
                               'detail': None if refusal.detail is None else refusal.detail[:200],
                               **({'record': None} if review else {})}
+            elif request.operation == 'service.stop_for_update':
+                result = {'stopping': True}
+            elif request.operation == 'history.takeover_report':
+                from .project_takeover import takeover_report
+                result = takeover_report(self._history(), run_handle=request.payload.get('run_handle'))
             elif request.operation == 'history.holds_report':
                 from .project_holds_report import holds_report
                 self._history()
@@ -532,7 +537,10 @@ class HistoryService:
             decode_history_response(reply, request)
             # Serialization and authorization may reenter trusted lifecycle code.
             # Consult the original owner again before releasing any cached reply.
-            self._history()._require_owner()
+            if request.operation != 'service.stop_for_update':
+                self._history()._require_owner()
+            elif self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
+                raise HistoryError('history_wrong_owner')
             if request.operation == 'history.open_scope':
                 authorize_open_scope()
                 from .project_open_scope import current_open_scope

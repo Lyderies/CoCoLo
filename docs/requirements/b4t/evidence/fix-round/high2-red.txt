@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_failed_handover_rejects_added_business_rows_and_changed_schema (tests.test_e2e_update_safety.RegistryTests.test_failed_handover_rejects_added_business_rows_and_changed_schema)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/tests/test_e2e_update_safety.py", line 462, in test_failed_handover_rejects_added_business_rows_and_changed_schema
+    self.assertFalse(us.handover_history_kept(before, {**after, 'rows': {**after['rows'], key: 'invented'}}), key)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : outcome:2
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

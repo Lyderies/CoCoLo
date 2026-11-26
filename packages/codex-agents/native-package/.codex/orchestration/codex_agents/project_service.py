@@ -213,7 +213,7 @@ def _result_capacity():
     return ResultCapacity(64, MAX_ACTIVE_ATTEMPTS * MAX_RESULT_BODY_BYTES, RESULT_RESERVATION_MS, 7 * 86_400_000)
 
 
-def open_offline_history(state, project_id):
+def open_offline_history(state, project_id, *, takeover=None):
     """The project's store for an offline owner tool (a drained migration).
 
     The store's exclusive lock refuses this with `history_writer_busy` while
@@ -225,7 +225,7 @@ def open_offline_history(state, project_id):
     _owned_directory(directory.parent)
     _owned_directory(directory)
     return ProjectHistory(directory, project_id, result_key=state.digest_key(), orchestration_limits=ORCHESTRATIONS,
-                          result_capacity=_result_capacity(), allow_schema_upgrade=True)
+                          result_capacity=_result_capacity(), allow_schema_upgrade=True, takeover=takeover)
 
 
 def service_bundle_root(orchestration_root, project_root):
@@ -322,7 +322,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         stopped = lambda: bool(stopping)  # noqa: E731
 
     def finished():
-        if stopped():
+        if stopped() or host.stopping_for_update():
             return True
         if host.faulted():
             # O10 D13: its result writer faulted, so every later store call is refused for good.

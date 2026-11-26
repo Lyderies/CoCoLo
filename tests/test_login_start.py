@@ -88,6 +88,26 @@ class TempHome(unittest.TestCase):
 
 
 class InstallTests(TempHome):
+    @requirements('RS-B-B4t-3', why_not_scenario='Injected systemctl runner; asserts start-limit reset before refresh starts the replacement.')
+    def test_B4t_systemd_failed_start_is_reset_before_refresh_and_a_failed_reset_keeps_the_entry(self):
+        self.assertTrue(login_start.install(self.home, 'systemd', ARGV, self.logs, self.runner, uid=1000).ok)
+        path = login_start.entry_path(self.home, 'systemd')
+        before = path.read_bytes()
+        replacement = [*ARGV[:-1], '/owner/new-project']
+        failing = Runner(fail=('reset-failed',))
+        result, _, _, _ = login_start._install(self.home, 'systemd', replacement, self.logs,
+                                               failing, uid=1000, refreshing=True)
+        self.assertFalse(result.ok)
+        self.assertEqual(before, path.read_bytes())
+        self.assertFalse(any('enable' in call for call in failing.calls))
+        good = Runner()
+        result, _, _, _ = login_start._install(self.home, 'systemd', replacement, self.logs,
+                                               good, uid=1000, refreshing=True)
+        self.assertTrue(result.ok)
+        verbs = [call[2] for call in good.calls]
+        self.assertLess(verbs.index('reset-failed'), verbs.index('daemon-reload'))
+        self.assertLess(verbs.index('reset-failed'), verbs.index('enable'))
+
     @requirements('E1-2', why_not_scenario='Pure file and command rendering with an injected runner; no process is started.')
     def test_E1_2_launchd_plist_and_load(self):
         result = login_start.install(self.home, "launchd", ARGV, self.logs, self.runner, uid=501)

@@ -198,6 +198,10 @@ class DirectDriverMixin:
             return self._process([TRUSTED_PY, str(self.fakes / "fake_rule.py"), *args], env)
         if env.get("FAKE_CLIENT_DIRS") and matches("*attest.py client-status *"):
             return self._process([TRUSTED_PY, "-I", "-B", "-S", str(self.fakes / "fake_client_tool.py"), *args], env)
+        if env.get('FAKE_TAKEOVER') and matches('*cli.py learning-update-takeover *'):
+            self._append(self.base / 'register.log', joined)
+            reply = env['FAKE_TAKEOVER']
+            return (2 if '"ready": false' in reply else 0), (reply + '\n').encode(), b''
         if env.get("FAKE_CHILDREN") and matches("*cli.py learning-update-check *"):  # UPDFIX-2: the read-only check's reply
             log = self.base / "register.log"
             earlier = log.read_text().count("learning-update-check") if log.exists() else 0

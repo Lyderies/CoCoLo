@@ -1,0 +1,23 @@
+FF
+======================================================================
+FAIL: test_unbounded_identity_fields_refuse_before_journal_creation (tests.test_b4t_takeover.AmendmentA1Tests.test_unbounded_identity_fields_refuse_before_journal_creation) (change={'birth': '\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01'})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 3072, in test_unbounded_identity_fields_refuse_before_journal_creation
+    with self.assertRaises(JournalError):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+AssertionError: JournalError not raised
+
+======================================================================
+FAIL: test_unbounded_identity_fields_refuse_before_journal_creation (tests.test_b4t_takeover.AmendmentA1Tests.test_unbounded_identity_fields_refuse_before_journal_creation) (change={'version': '١.١.١'})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 3072, in test_unbounded_identity_fields_refuse_before_journal_creation
+    with self.assertRaises(JournalError):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+AssertionError: JournalError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.008s
+
+FAILED (failures=2)

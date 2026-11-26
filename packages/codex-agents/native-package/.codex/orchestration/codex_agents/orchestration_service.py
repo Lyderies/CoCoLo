@@ -56,7 +56,7 @@ class OrchestrationService:
         # canonical request, so its mutation cannot reach persistence.
         request = decode_orchestration_request(encoded)
         if (self._closed or not self._owner()
-                or request.scope.project_id != self._project or request.scope.runtime_digest != self._runtime
+                or request.scope.project_id != self._project
                 or self._authorizer is None):
             raise HistoryError('history_not_authorized')
         denied = False
@@ -74,6 +74,11 @@ class OrchestrationService:
                     or expected.operation not in auth.allowed_operations):
                 raise HistoryError('history_not_authorized')
             client = auth.client_version
+            if request.scope.runtime_digest != self._runtime:
+                from .project_takeover import adopted_orchestration_scope
+                if (request.operation == 'orchestration.open' or not adopted_orchestration_scope(
+                        self._history(), request.scope, request.payload.get('orchestration_handle'), client)):
+                    raise HistoryError('history_not_authorized')
         except Exception:
             denied = True
         if denied:

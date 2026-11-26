@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .store_fence import StoreFence, EPOCH_SCHEMA, FENCE_MESSAGE
+from . import takeover_schema
 
 import contextlib
 import base64
@@ -207,6 +208,7 @@ LOCAL_PROJECT_COLUMNS = frozenset({"launch_copy", "launch_digest"})
 # move never carry them (they hold this machine's wake, epoch and starter state, and a path-bearing launch record);
 # a check that refuses unknown tables accepts exactly these, and only with exactly these columns.
 LOCAL_TABLE_COLUMNS = {
+    # B4t runtime_floor and runtime_lineage are local writer authority, never partition data.
     "project_wake": ("project_id", "allocated_epoch", "epoch", "seq", "state", "next_due_at_ms", "body_digest",
                      "due_at_ms", "refused", "updated_at_ms"),
     "project_wake_instances": ("project_id", "instance", "epoch"),
@@ -234,8 +236,8 @@ def _other_table_columns() -> dict[str, tuple[str, ...]]:
     try:
         for statement in (_OWNER_KEY_HISTORY_SCHEMA, _ADDITIVE_MIGRATIONS_SCHEMA, ADMISSION_EVIDENCE_SCHEMA, EPOCH_SCHEMA):
             reference.execute(statement)
-        return {table: tuple(row[1] for row in reference.execute(f"PRAGMA table_xinfo({table})"))
-                for table in ("additive_migrations", "owner_key_history", "admission_evidence", "runtime_takeover")}
+        return {**takeover_schema.FLOOR_COLUMNS, **takeover_schema.LINEAGE_COLUMNS, **{table: tuple(row[1] for row in reference.execute(f"PRAGMA table_xinfo({table})"))
+                for table in ("additive_migrations", "owner_key_history", "admission_evidence", "runtime_takeover")}}
     finally:
         reference.close()
 
@@ -1055,7 +1057,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -1602,7 +1604,7 @@ def _schema_behind(database: Path) -> int | None:
         raise LedgerError("the ledger cannot be read to check which version wrote it") from error
     # Step 16->17 adds only the machine-local owner epoch, like the additive
     # launch/wake steps: no project records change or need upgrade consent.
-    return version if 5 <= version < LEDGER_SCHEMA_VERSION and version != 16 else None
+    return version if 5 <= version < LEDGER_SCHEMA_VERSION and version not in (16, 17) else None
 
 
 def ledger_schema_behind(state: "LearningState") -> int | None:
@@ -2312,6 +2314,11 @@ def ingestion_freshness(last_accepted: int | None, now_ms: int) -> dict[str, Any
         ),
     }
 
+def _resume_predecessor_migration(ledger):
+    """Stage A keeps the predecessor's target, cursor and frozen clocks."""
+    ledger._migrate_v17()
+
+
 class LearningLedger:
     """The only SQLite writer. Callers receive scoped repositories, never its connection."""
 
@@ -2324,11 +2331,13 @@ class LearningLedger:
         allow_schema_upgrade: bool = False,
         backup_before_upgrade: bool = False,
         sole_owner: bool = False,
+        takeover: dict | None = None,
     ) -> None:
         if type(allow_schema_upgrade) is not bool or type(backup_before_upgrade) is not bool or (
                 backup_before_upgrade and not allow_schema_upgrade):
             raise LedgerError('ledger schema upgrade option is invalid')
         self._sole_owner = sole_owner or getattr(_OPENING, "sole_owner", False) is True
+        self._takeover_intent = takeover
         self._allow_schema_upgrade = allow_schema_upgrade
         # The owner's approved upgrade (setup's registration): each active project's
         # records are first kept as they are, then the migration checks those copies.
@@ -2519,9 +2528,13 @@ class LearningLedger:
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise LedgerError('ledger schema is newer than this package')
+            from .hold_migration import pending, PENDING_MESSAGE
+            if pending(connection) and not self._allow_schema_upgrade:
+                raise LedgerError(PENDING_MESSAGE)
             if (5 <= version < LEDGER_SCHEMA_VERSION and version != 16
                     and not self._allow_schema_upgrade):
                 raise LedgerError('ledger schema upgrade requires explicit drained-owner authorization and verified backups')
+            takeover_schema.check_floor(connection, PACKAGE_VERSION, lambda: LedgerError(FENCE_MESSAGE))
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("PRAGMA synchronous = FULL")
@@ -2687,7 +2700,8 @@ class LearningLedger:
             if self._readers() or self._connection.in_transaction:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
-            return purge_old_observations(self, now, batch) + purge_finished_opens(self, now, batch)
+            removed = purge_old_observations(self, now, batch) + purge_finished_opens(self, now, batch)
+            return removed + self._purge_runtime_lineage(now)
 
     def sweep_learning_retention(self, *, now_ms: int | None = None, batch: int = LEARNING_SWEEP_BATCH) -> int:
         """Remove up to `batch` unpromoted cases and candidates past the learning retention; returns how many.
@@ -3316,7 +3330,7 @@ class LearningLedger:
         except ValueError:
             raise LedgerError('admission evidence migration is unavailable or incompatible') from None
 
-    def _initialize_run_holds_locked(self):
+    def _initialize_run_holds_locked(self, *, target_version=17):
         """O0b RS-A: the hold register, adopting every existing account hold from its evidence, then (round 1
         F1, before the version is set) releasing the holds today's predicates already treat as ended: a slot
         whose binding was settled service_lost is released `lost` whatever the clocks say; then the sweep's
@@ -3329,7 +3343,7 @@ class LearningLedger:
         self._initialize_probe_ids_locked()
         migration = HoldMigration(self._connection, 'account',
             (('run_slot', 'active_run_capacity'), ('binding', 'host_run_bindings'),
-             ('probe', 'account_billing_probe_requests')), self._clock_ms(), LEDGER_SCHEMA_VERSION,
+             ('probe', 'account_billing_probe_requests')), self._clock_ms(), target_version,
             lambda: LedgerError('run hold migration is unavailable or incompatible'),
             clock_reference_ns=self._capacity_clock_reference(), before_commit=self.state.harden_database_files)
         self._connection._hold_migration = migration
@@ -3347,7 +3361,7 @@ class LearningLedger:
                 self._release_slot_locked(row["project_id"], row["handle_digest"], "lost", now, monotonic)
             while self._release_due_locked(now, monotonic, 1024) == 1024:
                 pass
-            self._assert_launch_schema_locked(LEDGER_SCHEMA_VERSION)
+            self._assert_launch_schema_locked(target_version)
             if not (check_run_holds_consistency(self._connection)
                     and check_cleanup_coverage(self._connection)
                     and check_observation_coverage(self._connection)
@@ -3381,7 +3395,7 @@ class LearningLedger:
             self._initialize_admission_evidence_locked()
             self._initialize_run_holds_locked()  # O0b RS-A
             self._initialize_probe_ids_locked()
-            self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+            self._connection.execute(f"PRAGMA user_version = {17}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
         except BaseException:
@@ -3487,7 +3501,7 @@ class LearningLedger:
             self._initialize_admission_evidence_locked()
             self._initialize_run_holds_locked()  # O0b RS-A
             self._initialize_probe_ids_locked()
-            self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+            self._connection.execute(f"PRAGMA user_version = {17}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
         except BaseException:
@@ -3501,43 +3515,153 @@ class LearningLedger:
             # No backfill: old signed bytes carry no common probe provenance.
             self._connection.execute("ALTER TABLE records ADD COLUMN probe_id TEXT")
 
-    def _migrate(self) -> None:
+    def _migrate(self):
+        from .hold_migration import pending, PENDING_MESSAGE
+        current = self._connection.execute('PRAGMA user_version').fetchone()[0]
+        if current > LEDGER_SCHEMA_VERSION:
+            raise LedgerError('ledger schema is newer than this package')
+        initial = current
+        # A pre-18 ledger that already carries the B4t authority tables (a records
+        # copy whose user_version was set back) upgrades as on 0.8.67 (owner 129.3).
+        # Both tables must have the exact B4t layout; they are kept, never
+        # re-created, and their floor still binds (checked at every open and
+        # acquisition, and again by raise_floor at stage B below).
+        retained_authority = current < 18 and self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name IN ('runtime_floor','runtime_lineage')").fetchone() is not None
+        if retained_authority:
+            takeover_schema.check_layout(self._connection, takeover_schema.LEDGER_SCHEMA,
+                                         lambda: LedgerError('predecessor ledger schema is incompatible'))
+        if current <= 17:
+            _resume_predecessor_migration(self)
+            current = self._connection.execute('PRAGMA user_version').fetchone()[0]
+        if current == 17:
+            if not self._allow_schema_upgrade and initial not in (0, 16):
+                raise LedgerError('ledger schema upgrade requires owner authorization')
+            with self._account_transaction():
+                if not retained_authority:
+                    takeover_schema.install(self._connection, takeover_schema.LEDGER_SCHEMA)
+                takeover_schema.raise_floor(self._connection, PACKAGE_VERSION, lambda: LedgerError(FENCE_MESSAGE),
+                                            initialize=not retained_authority)
+                self._adopt_runtime_lineage_locked()
+                self._initialize_run_holds_locked(target_version=18)
+                self._validate_current_ledger()
+                self._connection.execute('PRAGMA user_version=18')
+        elif current == 18:
+            if not pending(self._connection):
+                self._validate_current_ledger()
+            with self._account_transaction():
+                if pending(self._connection):
+                    if not self._allow_schema_upgrade:
+                        raise LedgerError(PENDING_MESSAGE)
+                    self._initialize_run_holds_locked(target_version=18)
+                    self._validate_current_ledger()
+                # Keep the predecessor's additive repairs on ordinary current
+                # opens too (notably a missing/incomplete hook aggregate).
+                self._migrate_layout_locked(18, target_version=18)
+                self._adopt_runtime_lineage_locked()
+        else:
+            raise LedgerError('ledger schema is incompatible')
+        try:
+            self._purge_runtime_lineage(self._clock_ms())
+        except (sqlite3.Error, LedgerError):
+            pass  # separately retried by maintenance; adoption already committed
+
+    def _purge_runtime_lineage(self, now):
+        from .runtime_lineage import live_ledger_custody, prune_lineage
+        with self._held():
+            return prune_lineage(self._connection, live_ledger_custody(self._connection, now),
+                                 COLLECTOR_RUNTIME_DIGEST, transaction=self._account_transaction)
+
+    def _validate_current_ledger(self):
+        """Keep every predecessor coverage refusal on ordinary schema-18 opens."""
+        self._assert_launch_schema_locked(18)
+        takeover_schema.check_layout(self._connection, takeover_schema.LEDGER_SCHEMA,
+                                     lambda: LedgerError('takeover ledger schema is incompatible'))
+        if self._connection.execute(
+                'SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a '
+                'ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest '
+                'WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1'
+                ).fetchone() is not None:
+            raise LedgerError('active capacity coverage is unavailable')
+        if self._connection.execute(
+                'SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c '
+                'ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest '
+                'AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id '
+                'LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest '
+                'AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id '
+                'WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest '
+                'OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) '
+                f'AND NOT ({DECISION_RELEASED} AND (c.terminal_record_id IS NULL OR e.owner_digest IS NOT NULL)) LIMIT 1'
+                ).fetchone() is not None:
+            raise LedgerError('capacity completion coverage is unavailable')
+        for check, reason in ((check_cleanup_coverage, 'cleanup'), (check_observation_coverage, 'observation'),
+                              (check_billing_probe_coverage, 'billing probe'),
+                              (check_admission_evidence_coverage, 'admission evidence'),
+                              (check_run_holds_consistency, 'run hold')):
+            if not check(self._connection):
+                raise LedgerError(reason + ' coverage is unavailable')
+
+    def _adopt_runtime_lineage_locked(self):
+        intent = self._takeover_intent
+        if intent is None:
+            return
+        from .runtime_lineage import verified_predecessor
+        if intent['successor'] != {'version': PACKAGE_VERSION, 'digest': COLLECTOR_RUNTIME_DIGEST}:
+            raise LedgerError('takeover successor identity is invalid')
+        for name in ('predecessor_collector', 'predecessor_service'):
+            old = intent.get(name)
+            if old is None or old['digest'] == COLLECTOR_RUNTIME_DIGEST:
+                continue
+            if not verified_predecessor(old, PACKAGE_VERSION):
+                raise LedgerError('takeover predecessor identity is invalid')
+            known = self._connection.execute('SELECT successor_digest FROM runtime_lineage WHERE predecessor_digest=?',
+                                              (old['digest'],)).fetchone()
+            if known is not None:
+                from .runtime_lineage import successor_custody
+                if not successor_custody(self, old['digest'], COLLECTOR_RUNTIME_DIGEST):
+                    raise LedgerError('takeover lineage conflicts')
+                continue
+            self._connection.execute('INSERT INTO runtime_lineage VALUES(?,?,?,?,?,?,?)',
+                (old['digest'], old['version'], COLLECTOR_RUNTIME_DIGEST, PACKAGE_VERSION, self._fence.epoch,
+                 intent['takeover_id'], intent['recorded_at_ms']))
+
+    def _migrate_v17(self) -> None:
         from .hold_migration import pending, PENDING_MESSAGE
 
         current = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
         if pending(self._connection):
-            if current != LEDGER_SCHEMA_VERSION or not self._allow_schema_upgrade:
+            if current != 17 or not self._allow_schema_upgrade:
                 raise LedgerError(PENDING_MESSAGE)
             self._assert_launch_schema_locked(current)
             with self._account_transaction():
                 self._initialize_run_holds_locked()
             # Reuse all the ordinary current-store coverage checks as well.
-            self._migrate()
+            self._migrate_v17()
             return
         if current == 0 and (
             self.state._marker_exists(self.state.initialized)
             or not self.state._marker_exists(self.state.initializing)
         ):
             raise StateError("initialized ledger schema is missing; verified recovery is required")
-        if current > LEDGER_SCHEMA_VERSION:
+        if current > 17:
             raise LedgerError("ledger schema is newer than this package")
         if 0 < current < 5:
             raise LedgerError("legacy ledger requires a verified drained staged migration")
         if current == 5:
-            self._require_project_migration_backups(5, LEDGER_SCHEMA_VERSION)
+            self._require_project_migration_backups(5, 17)
             self._migrate_five_to_current()
             self.state.harden_database_files()
             return
         if current in {6, 7}:
             if current == 7:
                 self._assert_launch_schema_locked(7)
-            self._require_project_migration_backups(current, LEDGER_SCHEMA_VERSION)
+            self._require_project_migration_backups(current, 17)
             self._migrate_six_or_seven_to_current(current)
             self.state.harden_database_files()
             return
         if current == 8:
             self._assert_launch_schema_locked(8)
-            self._require_project_migration_backups(8, LEDGER_SCHEMA_VERSION)
+            self._require_project_migration_backups(8, 17)
             with self._account_transaction():
                 self._initialize_active_capacity_locked()
                 self._initialize_account_opens_locked()
@@ -3547,7 +3671,7 @@ class LearningLedger:
                 self._initialize_admission_evidence_locked()
                 self._initialize_run_holds_locked()  # O0b RS-A
                 self._initialize_probe_ids_locked()
-                self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                self._connection.execute(f"PRAGMA user_version = {17}")
             return
         if current >= 9:
             self._assert_launch_schema_locked(current)
@@ -3572,7 +3696,7 @@ class LearningLedger:
             ).fetchone() is not None:
                 raise LedgerError("capacity completion coverage is unavailable")
             if current == 9:
-                self._require_project_migration_backups(9, LEDGER_SCHEMA_VERSION)
+                self._require_project_migration_backups(9, 17)
                 with self._account_transaction():
                     self._initialize_account_opens_locked()
                     self._initialize_account_cleanup_locked()
@@ -3581,10 +3705,10 @@ class LearningLedger:
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
                     self._initialize_probe_ids_locked()
-                    self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
+                    self._connection.execute(f'PRAGMA user_version = {17}')
                 return
             if current == 10:
-                self._require_project_migration_backups(10, LEDGER_SCHEMA_VERSION)
+                self._require_project_migration_backups(10, 17)
                 with self._account_transaction():
                     self._initialize_account_cleanup_locked()
                     self._initialize_account_observations_locked()
@@ -3592,7 +3716,7 @@ class LearningLedger:
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
                     self._initialize_probe_ids_locked()
-                    self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
+                    self._connection.execute(f'PRAGMA user_version = {17}')
                 return
             if current >= 11:
                 if not check_cleanup_coverage(self._connection):
@@ -3600,57 +3724,57 @@ class LearningLedger:
             if current >= 12 and not check_observation_coverage(self._connection):
                 raise LedgerError('account observation coverage is unavailable')
             if current == 11:
-                self._require_project_migration_backups(11, LEDGER_SCHEMA_VERSION)
+                self._require_project_migration_backups(11, 17)
                 with self._account_transaction():
                     self._initialize_account_observations_locked()
                     self._initialize_billing_probes_locked()
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
                     self._initialize_probe_ids_locked()
-                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                    self._connection.execute(f"PRAGMA user_version = {17}")
                 return
             if current >= 13 and not check_billing_probe_coverage(self._connection):
                 raise LedgerError('billing probe coverage is unavailable')
             if current == 12:
-                self._require_project_migration_backups(12, LEDGER_SCHEMA_VERSION)
+                self._require_project_migration_backups(12, 17)
                 with self._account_transaction():
                     self._initialize_billing_probes_locked()
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
                     self._initialize_probe_ids_locked()
-                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                    self._connection.execute(f"PRAGMA user_version = {17}")
                 return
             if current >= 14 and not check_admission_evidence_coverage(self._connection):
                 raise LedgerError('admission evidence coverage is unavailable')
             if current == 13:
-                self._require_project_migration_backups(13, LEDGER_SCHEMA_VERSION)
+                self._require_project_migration_backups(13, 17)
                 with self._account_transaction():
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
                     self._initialize_probe_ids_locked()
-                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                    self._connection.execute(f"PRAGMA user_version = {17}")
                 return
             # O0b RS-A: schema 15 adds the hold register, through the same authorized path.
             if current >= 15 and not check_run_holds_consistency(self._connection):
                 raise LedgerError('run hold coverage is unavailable')
             if current == 14:
-                self._require_project_migration_backups(14, LEDGER_SCHEMA_VERSION)
+                self._require_project_migration_backups(14, 17)
                 with self._account_transaction():
                     self._initialize_run_holds_locked()
                     self._initialize_probe_ids_locked()
-                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                    self._connection.execute(f"PRAGMA user_version = {17}")
                 return
             if current == 15:
-                self._require_project_migration_backups(15, LEDGER_SCHEMA_VERSION)
+                self._require_project_migration_backups(15, 17)
                 with self._account_transaction():
                     self._initialize_probe_ids_locked()
-                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                    self._connection.execute(f"PRAGMA user_version = {17}")
                 return
         if current == 16:
             # Epoch-only, additive step. The lifetime lock already proves the
             # prior writer retired; no per-project data is rewritten or backed up.
             with self._account_transaction():
-                self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                self._connection.execute(f"PRAGMA user_version = {17}")
             return
         with self._account_transaction():
             self._migrate_layout_locked(current)
@@ -3672,7 +3796,7 @@ class LearningLedger:
         if trailing := "".join(pending).strip():
             self._connection.execute(trailing)
 
-    def _migrate_layout_locked(self, current: int) -> None:
+    def _migrate_layout_locked(self, current: int, *, target_version: int = 17) -> None:
         # The caller owns the single transaction, including all additive DDL.
         had_hook_ingestion = self._connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hook_ingestion'"
@@ -3890,7 +4014,7 @@ class LearningLedger:
                 )
         # These tables are additive and deliberately keep user_version at 4 so a
         # registered 0.3.0 project can still cold-start the shared collector.
-        if current <= LEDGER_SCHEMA_VERSION:
+        if current <= 18:
             with contextlib.nullcontext():
                 self._execute_schema_script_locked(
                     """
@@ -4246,7 +4370,7 @@ class LearningLedger:
                 self._initialize_admission_evidence_locked()
                 self._initialize_run_holds_locked()  # O0b RS-A
             self._initialize_probe_ids_locked()
-            self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+            self._connection.execute(f"PRAGMA user_version = {target_version}")
         self.state.harden_database_files()
 
     def close(self) -> None:
@@ -7835,8 +7959,13 @@ class LearningLedger:
         # lease is usually an earlier version's, under that version's runtime (C3f): the request
         # comes under this account's runtime, and the claim request it closes is checked whole
         # under the lease's own runtime, so the denial is stored for exactly that request.
+        from .runtime_lineage import successor_custody
+        custody = expected.runtime_digest
+        successor = successor_custody(self, custody, runtime_digest)
         sweep = closure.identity_digest is None
-        original_runtime = expected.runtime_digest if sweep and runtime_digest == COLLECTOR_RUNTIME_DIGEST else runtime_digest
+        if not successor and not (sweep and runtime_digest == COLLECTOR_RUNTIME_DIGEST):
+            raise ClaimError('claim_denial_invalid')
+        original_runtime = custody
         if closure.identity_digest is None:
             # The identity this run was observed with before launch, checked below against the
             # whole claim request.
@@ -8116,11 +8245,15 @@ class LearningLedger:
         grant, delivery = evidence.grant, evidence.delivery
         terminal_record = parse_bounded_json(evidence.record)
         observed = terminal_record['observed_at_ms']
+        from .runtime_lineage import successor_custody
+        custody = expected.runtime_digest
+        if not successor_custody(self, custody, runtime_digest):
+            raise ClaimError('claim_terminal_invalid')
         registration = submission.registration
         launch = LaunchClaimInput(registration.run_handle, registration.identity_digest)
         original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', registration.claim_request_id,
-                                  project_id, runtime_digest, launch.payload())
-        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                                  project_id, custody, launch.payload())
+        if (expected.project_id != project_id or expected.runtime_digest != custody
                 or expected.claim_request_id != registration.claim_request_id
                 or expected.claim_request_digest != account_request_digest(original)
                 or grant.binding.run_handle != registration.run_handle or grant.binding.claim_id != registration.bridge_run_id
@@ -8139,8 +8272,9 @@ class LearningLedger:
         }))
         if not secrets.compare_digest(claim_binding, lease.claim_binding_digest):
             raise ClaimError('claim_terminal_invalid')
-        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                                    request_id=registration.claim_request_id, launch=launch, storage_binding=expected)
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=custody, caller_scope=caller_scope,
+                                                    request_id=registration.claim_request_id, launch=launch, storage_binding=expected,
+                                                    earlier_runtime=custody != COLLECTOR_RUNTIME_DIGEST)
         if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != registration.bridge_run_id
                 or known['receipt_digest'] != registration.claim_digest):
             raise ClaimError('claim_terminal_unavailable')
@@ -8162,7 +8296,7 @@ class LearningLedger:
             if (row is None or row['kind'] != 'claimed' or row['provider'] not in {'codex', 'claude'}
                     # Only the Claude client reports diagnostics; the record validator closed their values.
                     or (terminal_record['client_diagnostics'] is not None and row['provider'] != 'claude')
-                    or row['runtime_digest'] != runtime_digest or row['run_id'] != grant.binding.run_id
+                    or row['runtime_digest'] != custody or row['run_id'] != grant.binding.run_id
                     or row['client_version'] != 'bridge-v1' or row['owner_digest'] != grant.registration_digest
                     or orchestration_digest != keyed_digest(key, grant.binding.orchestration_handle)
                     or row['native_assignment_id'] != external_id(key, 'asg', registration.bridge_run_id)

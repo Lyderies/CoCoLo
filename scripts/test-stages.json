@@ -422,5 +422,10 @@
  "codex:tests.test_s44a_usage_install": "integration",
  "codex:tests.test_run_retention": "integration",
  "codex:tests.test_run_retention_integration": "integration",
- "codex:tests.test_run_retention_scale": "integration"
+ "codex:tests.test_run_retention_scale": "integration",
+ "codex:tests.test_b4t_takeover": "integration",
+ "codex:tests.test_b4t_native": "integration",
+ "codex:tests.test_b4t_native_kill": "integration",
+ "codex:tests.test_b4t_native_audit_p66": "integration",
+ "codex:tests.test_b4t_native_audit_v34": "integration"
 }

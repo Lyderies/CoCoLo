@@ -138,13 +138,99 @@ The command needs the shared ledger to itself, and a child is running (or its se
 not yet settled it) in some project. Nothing was stopped. Wait for the child to finish, or ask the
 primary to cancel it, and run the command again.
 
-An update (`./setup.sh --update`) asks first, before it installs anything: with a child running and an earlier version's
-collector or project service to replace, it stops in step 2 with `child_run_active` and the same words, and changes nothing. Run
-it again when the child has finished. (A child that starts in the few seconds between that check and step 5 is refused at
-step 5; setup then says that step 4 had already updated the project's files and to run the update again.) If the update
-cannot tell whether a child is running because the learning database exists but cannot be read, it stops the same way, in
-step 2, with `update_check_unavailable` and the next step (close any running child, check the state folder is readable by this
-account, try again). It is asked again right before the files are written.
+This message can still come from an already-installed older update command, or
+from a different command that requires drained maintenance. Run the update from
+the CoCoLo clone named in the local install record to use Update hand-over below.
+The current update proceeds with a running child. An unreadable existing ledger
+still refuses before any write, with `update_check_unavailable`; check that the
+state folder is readable by this account and run the update again. The pre-check
+is repeated immediately before hand-over and installation.
+
+## Update hand-over
+
+An update can proceed while a child runs. The updated project's old child ends
+as `lost`; finished results remain available for recording by the currently
+enrolled host. Other projects keep running, and their slots remain held until
+their own update or the ordinary account recovery rule. Status lists their
+locally verified update commands.
+
+`predecessor_unverified` means the installed runtime's lineage could not be
+verified. Nothing was changed. Use the project's recorded CoCoLo clone and keep
+the installed files intact while investigating.
+
+`predecessor_unproven` means a busy old service could not be confirmed as this
+project's own service. Nothing was changed and its child keeps running. When
+that run ends, the old service stops by itself; then run `./setup.sh --update`.
+An idle service needs no signal proof: withdrawal of its hint lets it stop.
+
+`project_store_busy` means another program, such as a backup or records command,
+is using this project's records. Nothing was changed. Let it finish, then run
+`./setup.sh --update`. To inspect the holder yourself, run `lsof` on
+`<state-root>/projects/<project-id>/history.lock` and the project's
+`<state-root>/rt/<runtime-directory>/host.lock`. Keep lock files intact.
+
+`update_busy` means another setup or records command holds
+`<state-root>/collector-runtime.lock`. Nothing was changed. Let it finish, then
+run `./setup.sh --update`.
+
+`collector_unresponsive` means the collector holds its records lock but does
+not answer. Nothing was changed. Wait a minute and retry `./setup.sh --update`.
+If it still does not answer, inspect `lsof <state-root>/collector.lock` and the
+collector's exit/status report. Verify its command and state root before ending
+that one process with the operating system's process viewer. Never stop a
+process by a guessed PID or a process-name pattern; the updater never signals
+the collector.
+
+An already-installed older client can still show its original compatibility
+refusal; run the update from the clone named in its local install record.
+
+After hand-over starts, `learning-status` names the unfinished phase. Run
+`./setup.sh --update` for that project again to resume. If another project's
+update is unfinished, finish the command named in the refusal first.
+Do not remove the takeover journal, authorization marker, local store copies
+or lock files to bypass recovery.
+
+`collector_stop_failed` says whether the update was undone. When undone, the
+collector starts again on next use. Otherwise collectors remain paused until
+the update resumes. An unresponsive collector is never signalled by the update.
+`service_stop_failed` leaves the hand-over resumable. A pre-B4t service receives
+one identity-checked SIGTERM, with bounded escalation against that same process;
+a newer service uses its authenticated stop operation. If escalation was needed,
+the old child may still run and its slot stays held until it is proven gone.
+`service_still_finishing` means the old service was told to stop by hint
+withdrawal and is finishing its work first. Its child runs to its end, at most
+at its deadline. Then run `./setup.sh --update` to finish; nothing else needs
+doing. This is a resumable failure, so it never says nothing was changed.
+
+`predecessor_lock_inherited` means this project's old service stopped, but
+another program still holds its records lock. Nothing was taken over yet.
+Inspect the lock with `lsof` as above, let that program finish, then run
+`./setup.sh --update` again. Do not signal a guessed PID.
+
+An installer failure after hand-over rolls managed files back where possible;
+the records already belong to the successor, and its journal names the next
+step. Run the update again to finish. A record reported as "could not be
+verified" stays in custody: the update never frees it by guessing. Missing
+memory-lock evidence also keeps the hold. A recorded pending preparation-folder
+removal continues to be retried by the successor.
+
+Before any signal, the updater rechecks only the candidate's uid, birth time
+and exact project launch line. macOS also checks pending exit/exec events; its
+numeric-PID reuse interval remains (decision 323). Linux uses a pidfd where
+supported; older kernels use the same birth recheck rule. No process descriptor
+table or user-wide process list is read. Adoption requires the successor to
+acquire the lifetime flocks; a held lock is never explained away.
+
+The owner-only state root has the existing trust level: a same-user program
+that presents the exact service arguments can receive a signal itself. The
+entry hash attests the file on disk, not the running code. Exec after the last
+check can replace the program in the same process before the signal arrives.
+These are the accepted A1.7/TL residuals, separate from macOS PID reuse. A real
+predecessor service starts children as separate processes rather than execing
+itself. Later services use the stop operation without signals.
+
+State roots on network file systems without real cross-process flocks are not
+supported. Use a local file system for the protected state root.
 
 ## `ledger_upgrade_required`, or "these records were written by an earlier version"
 
@@ -309,25 +395,11 @@ line, for example `Account holds: 1 run slot held (next can be freed at 2027-01-
 
 ## `project_service_other_version`
 
-The project was updated while its service was still running from before the update, and the old
-service was left alone. Usually a child is still active somewhere, on any project of this account: try
-again when no child is running, and the old service is then replaced by itself.
-
-If it keeps happening with nothing running, the old service may be one that cannot stop by itself: a
-0.3.2 service (Codex package 0.8.22) that holds a dispatch refused at its claim never stops when asked.
-Stop it yourself, then use the project again; its new service closes that run.
-
-1. Find it. Its command line runs `project_host.py` from the earlier version's protected copy, with
-   `--project-root` and this project's path:
-
-   ```
-   ps -axo pid,etime,command | grep project_host.py | grep -- "--project-root $HOME/path/to/project"
-   ```
-
-2. Stop it with a plain `kill <pid>`, which sends SIGTERM: the service stops and settles what it holds.
-   Never use `kill -9`.
-3. Run `learning-orchestration-report` for one of the project's orchestrations, which starts this
-   version's service, then check the run with `learning-classify-host-run-abandoned`.
+This project's earlier service still owns its records. Follow the update command
+from its local install record, using that CoCoLo clone. The update verifies and
+stops the predecessor automatically before adoption; see Update hand-over above.
+An unverifiable or unresponsive service remains held with a plain refusal. An
+ordinary project use does not itself perform an owner-authorized hand-over.
 
 ## `learning_migration` stays `pending`
 

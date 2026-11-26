@@ -1,0 +1,8 @@
+FAIL: test_an_earlier_versions_records_are_upgraded_only_when_approved (test_setup_wizard_direct.WizardDirectTests.test_an_earlier_versions_records_are_upgraded_only_when_approved)
+AssertionError: 'until you run this setup for each of them' not found in " COCOLO setup Step 5 of 9 Checks Project Providers Install [Collector] Billing Profile Commands Done ######################------------------ --------------------------------------------------------------------------------------------------- Upgrade the records now? [Y/n] WARN Your orchestrator records were written by an earlier version of the orchestrator. Setup can upgrade them now. It first keeps a checked copy of everything as it is, in the same protected folder. Every project on this machine shares these records. The update hands over this project's service. Other projects keep running. To record their results, run this setup for each of them. > Yes, upgrade them No, leave them as they are Up/Down move Enter select ? what ran q quit "
+ERROR: test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade (tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade)
+sqlite3.OperationalError: no such column: project_id
+FAIL: test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced (tests.test_project_start.OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced)
+codex_agents.service_transport.ServiceTransportError: transport_unavailable
+AssertionError: collector did not start: 
+FAIL: test_E2c_7_another_version_s_live_host_is_not_replaced (tests.test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced)

@@ -1,0 +1,10 @@
+T-4 test_B4t_2_a_result_committed_during_the_stop_is_judged_on_the_final_store RED (mutation detected)
+codex_agents.history_contracts.HistoryError: history_unrecordable_other_runtime
+T-12b test_B4t_3_collector_and_new_services_are_never_signalled RED (mutation detected)
+AssertionError: forbidden signal
+T-15 test_B4t_4_open_bindings_end_by_their_own_rules RED (mutation detected)
+Diff is 1114 characters long. Set self.maxDiff to None to see it.
+T-17 test_B4t_4_another_projects_child_keeps_running RED (mutation detected)
+Diff is 725 characters long. Set self.maxDiff to None to see it.
+T-30 test_B4t_4_missing_journal_lock_evidence_keeps_memory_holds RED (mutation detected)
+    None)]

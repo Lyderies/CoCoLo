@@ -74,7 +74,8 @@ _KINDS = ('control', 'project', 'driver')
 OWNER_HISTORY_OPERATIONS = frozenset({'history.learning_cycle', 'history.learning_report',
                                       'history.learning_feedback', 'history.learning_review_case',
                                       'history.orchestration_report', 'history.capacity_report', 'history.holds_report',
-                                      'history.orchestration_counts', 'history.run_usage'})
+                                      'history.orchestration_counts', 'history.run_usage',
+                                      'history.takeover_report'})
 DRIVER_ENDPOINT = 'run.sock'  # Beside the control socket; client_runtime uses the same name.
 # D1: refusals of the stored record context a caller is told as they are; any other failure is "not authorized".
 _PLAIN_CONTEXT_REFUSALS = frozenset({'history_worker_context_unavailable', 'history_result_expired',
@@ -520,7 +521,14 @@ class ProjectServiceHost:
         if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host'
                 or entry.enrolled.host_client == OWNER_CLIENT):
             return None
-        return OrchestrationAuthorization(self._scope, orchestration_request_digest(request),
+        scope = self._scope
+        if request.scope != scope:
+            if (request.operation == 'orchestration.open' or not self._stored(lambda lane:
+                    lane.adopted_orchestration_scope(request.scope, request.payload.get('orchestration_handle'),
+                                                    entry.enrolled.host_client))):
+                return None
+            scope = request.scope
+        return OrchestrationAuthorization(scope, orchestration_request_digest(request),
                                           entry.enrolled.host_client, ORCHESTRATION_OPERATIONS)
 
     def _stored(self, read, *, plain=False):
@@ -553,6 +561,13 @@ class ProjectServiceHost:
         entry = self._frontend.context(token) if self._frontend is not None else None
         if entry is None or entry.kind != 'project' or entry.enrolled.role != 'host':
             return None
+        if request.operation == 'service.stop_for_update':
+            if (entry.enrolled.host_client != OWNER_CLIENT
+                    or entry.enrolled.request_digest != history_request_digest(request)):
+                return None
+            self._update_stop_requested = True
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request),
+                                        'host', frozenset({request.operation}))
         if entry.enrolled.host_client == OWNER_CLIENT and request.operation not in OWNER_HISTORY_OPERATIONS:
             return None
         if request.operation == 'history.read_record':
@@ -572,7 +587,8 @@ class ProjectServiceHost:
                                         host_result_context=original)
         if request.operation in {'history.learning_cycle', 'history.learning_report', 'history.learning_review_case',
                                  'history.orchestration_report', 'history.capacity_report', 'history.holds_report',
-                                 'history.orchestration_counts', 'history.run_usage'}:
+                                 'history.orchestration_counts', 'history.run_usage',
+                                 'history.takeover_report'}:
             # The project's own learning: any enrolled primary of this project may run and
             # read it. Reviewing a case is the owner's command, by the same convention as
             # every earlier version (the installed deny rules keep it from model sessions).
@@ -700,6 +716,9 @@ class ProjectServiceHost:
             return os.fstat(self._lock_fd).st_nlink == 0 or not self._hint.exists()
         except (OSError, TypeError):
             return True
+
+    def stopping_for_update(self):
+        return getattr(self, '_update_stop_requested', False)
 
     def exhausted(self):
         self._owner()

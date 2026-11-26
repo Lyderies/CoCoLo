@@ -891,6 +891,10 @@ class ResultPersistenceLane:
     def stored_result_context(self, binding, host_class, *, recorded=False):
         return self._writer_store().stored_result_context(binding, host_class=host_class, recorded=recorded)
 
+    def adopted_orchestration_scope(self, scope, handle, host_class):
+        from .project_takeover import adopted_orchestration_scope
+        return adopted_orchestration_scope(self._writer_store(), scope, handle, host_class)
+
     def stored_worker_context(self, outcome_digest, host_class, *, orchestration_handle=None):
         return self._writer_store().stored_worker_context(outcome_digest, host_class=host_class,
                                                           orchestration_handle=orchestration_handle)
@@ -1379,6 +1383,8 @@ class ResultPersistenceLane:
                 # RECOV-1/3: every maintenance step must succeed to renew progress. Suppressed failures still
                 # allow cleanup, but must not hide partly broken maintenance from E2c-9.
                 if maintenance_ok:
+                    from .project_takeover import complete_takeovers
+                    complete_takeovers(history)
                     from .project_holds_schema import wake_checked
                     wake_checked(history.project_id, history._connection, now_ms=_TIME_NS() // 1_000_000)
             elif request.kind == 'arbitrate':

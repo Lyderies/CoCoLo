@@ -1,0 +1,33 @@
+env -u COCOLO_TEST_B4T_SKIP_SOCKETS python -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_b4t_native --module codex:tests.test_b4t_native_kill --module codex:tests.test_b4t_native_audit_p66 --module codex:tests.test_b4t_native_audit_v34 --module codex:tests.test_b4t_takeover --module codex:tests.test_project_start --module root:test_setup_wizard_direct  (short TMPDIR under /tmp/claude-501; after the stub connection fix)
+exit 0
+tests: {'codex': 179, 'root': 60}
+elapsed_seconds: 150.2
+job_seconds: 559.137
+preflight_seconds: 9.862142915953882
+metadata_errors: []
+budget_failures: []
+failed_units: []
+requirement_failures: []
+over_budget (each under its recorded budget-debt ceiling): [('codex:tests.test_project_start', 153.0), ('root:test_setup_wizard_direct', 235.2)]
+slowest units:
+  codex:tests.test_project_start#1 43.9
+  codex:tests.test_b4t_native_audit_p66 42.4
+  root:test_setup_wizard_direct#0 35.9
+  codex:tests.test_b4t_native_kill 35.1
+  root:test_setup_wizard_direct#1 34.6
+  root:test_setup_wizard_direct#7 31.8
+  root:test_setup_wizard_direct#4 31.5
+  root:test_setup_wizard_direct#3 28.1
+named outcomes:
+  tests.test_b4t_native_audit_p66.ArchivedServiceAuditTests.test_B4t_A1_real_P66_service_does_not_exec_during_a_claim passed
+  tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade passed
+  tests.test_project_start.OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced passed
+  tests.test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced passed
+  tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_expected_arguments_is_the_only_signal_target passed
+  tests.test_b4t_native.AcceptedResidualStubTests.test_same_user_impostor_with_unchanged_entry_hash_and_held_lock_refuses_adoption passed
+  tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_updates_without_process_proof passed
+  tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_with_native_identity_updates_without_a_signal passed
+  tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_no_other_process_is_inspected passed
+  tests.test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound passed
+  tests.test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim passed
+  test_setup_wizard_direct.WizardDirectTests.test_an_earlier_versions_records_are_upgraded_only_when_approved passed

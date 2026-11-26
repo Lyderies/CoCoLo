@@ -3,13 +3,13 @@
 Sources: DESIGN-0.4.0-RS-D.md, RS-D-2 narrowing (draft 2 §3), draft 3 §9 and N1/N2;
 ANALYSIS-0.4.0-rsd-rse-closure.md, slice S2 and RS-D table.
 
-**RS-D-2-N1 — Eligible changed-runtime closure.**
-After a runtime change, the real `end_earlier` sweep closes an eligible orchestration as
-interrupted. Recorded results and verified account releases permit closure. The ordinary
-expiry pass releases committed custody `orchestration_closed`. Count each update-ended
-orchestration with any unrecorded result once as `ended_by_update_unrecorded`, including
-after restart and result retirement/purge. Expose only a count, never result content.
-Same-runtime and other-service sweeps do nothing. The close and its count commit atomically.
+**RS-D-2-N1 — Changed-runtime custody after B4t.**
+Accepted B4t Draft 2 D2.11 supersedes the interim runtime-only close. A runtime
+change does not close an open or paused orchestration or release its committed
+custody. Verified predecessor custody stays recordable under current authority;
+unknown or newer custody stays held. Ordinary primary close, rollover, idle and
+retention rules still apply. Existing legacy `ended_by_update_unrecorded` counts
+remain readable without adding a new update-only close or changing reply fields.
 
 **RS-D-2-N2 — Unfinished changed-runtime custody.**
 Without verified account release, an unrecorded result prevents close. Keep the orchestration
@@ -17,7 +17,7 @@ open and committed body/context custody charged until its retention deadline; at
 release custody `retention`, without inventing release evidence or counting an update closure.
 Corrupt release evidence cannot close it. No pre-commit deadline retires reserved custody (SH-4).
 
-## Shared invariants and implementation
+## Historical implementation (superseded by B4t D2.11)
 
 SH-3/4/7: preserve release reasons; every new store test ends with both validators via `consistent()`.
 
@@ -34,7 +34,7 @@ No route, service or socket path is patched. Provider/enrollment are fixtures; n
 
 No existing assertions change. No release bookkeeping or schema change is needed.
 
-## Red and green evidence
+## Historical red and green evidence
 
 Before production edits, `python3 -B -m unittest -v tests.test_rsd_runtime_close` ran
 3 tests in 1.468 s: all three errored at the missing `runtime_close_status` method.
@@ -61,3 +61,12 @@ Final affected runs (all with `-B`):
   `/private/tmp/cocolo-testfw-venv` (system Python lacks Hypothesis).
 
 Assertions changed in existing tests: none. Every new store case ends in `consistent()`.
+
+## B4t replacement
+
+The current tests require no runtime-only close, retained custody and zero new
+legacy update-close counts. The real account release remains verified; natural
+retention and an explicit primary close still free their own obligations. See
+`b4t/assertions.md` for each assertion replacement and `b4t/STATUS.md` for current
+verification and its limits. The older evidence above describes the superseded
+interim behavior, not the B4t acceptance result.
