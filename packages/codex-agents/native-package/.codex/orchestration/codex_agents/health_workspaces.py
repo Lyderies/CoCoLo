@@ -211,14 +211,16 @@ def _finding(subject, outcome, reason, text):
 
 def _unproven_finding(count, container):
     """PREP-1: all leftover folders whose owner cannot be proven, as ONE finding (a count, never one line each).
-    The step is safe: look in the scratch folder, and delete only once CoCoLo is quit (a folder may belong to a
+    The step is safe: look in the scratch folder, and delete only when no CoCoLo service runs for any project (a folder may belong to a
     running service, which is why nothing here removes it)."""
     many = count != 1
     head = (f'{count} leftover CoCoLo preparation folder{"s are" if many else " is"} not in use, but nothing proves '
             f'the service{"s that made them have" if many else " that made it has"} stopped, so '
             f'{"they were" if many else "it was"} left alone.')
-    step = f' Look in {container}; delete {"them" if many else "it"} only after you quit CoCoLo.'
-    short = ' Delete only after you quit CoCoLo; they sit in the CoCoLo scratch folder (prepare-*).'
+    step = (f' Look in {container}; delete {"them" if many else "it"} only when no CoCoLo service is running '
+            'on this Mac (check every project).')
+    short = (' Delete only when no CoCoLo service runs on this Mac (any project); they sit in the CoCoLo '
+             'scratch folder (prepare-*).')
     text = head + step
     if _sentence(text) != text:  # past the finding bound: say where in general words instead of the path
         text = head + short

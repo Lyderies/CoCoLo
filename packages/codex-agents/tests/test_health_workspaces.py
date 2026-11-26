@@ -1402,8 +1402,8 @@ class GroupedUnknownOwnerTests(Case):
         text = found[0].text
         self.assertTrue(text.startswith('17 leftover CoCoLo preparation folders are not in use, but nothing proves '
                                         'the services that made them have stopped, so they were left alone.'), text)
-        self.assertIn(str(self.container), text)  # where to look
-        self.assertIn('quit', text)  # never delete while a service may run
+        self.assertIn('scratch folder', text)  # where to look (the path too when it fits the bound)
+        self.assertIn('no CoCoLo service runs on this Mac (any project)', text)  # any project's service may own it
         self.assertNotIn(folders[0].name, text)
         self.assertEqual(('reported', 'machine', 'folders'), (found[0].outcome, found[0].scope, found[0].subject))
 
