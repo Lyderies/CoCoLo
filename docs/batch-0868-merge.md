@@ -96,6 +96,17 @@ Merged with `git merge --no-ff` from the local worktree branches (shared object 
 - Modules: test_run_retention, _integration, _scale, test_learning_store, test_lifetime_cap_guard, test_health_holds, test_health_workspaces, test_health_ledger, test_health_ledger_fix, test_admission_capture_bytes, test_admission_capture_claim, test_admission_history_growth, test_admission_inputs, test_s44a_usage_install, test_cli_status_client_boundary, test_git_plumbing, test_codex_preparation, test_health_monitor, test_s13d_regressions (443 tests, 42.3 s, 0 failed).
 - Not run (heavy, left to the batch run): test_project_driver, test_project_start, test_project_service_startup, test_lost_run_settlement, test_account_lane_restart and other socket modules S14b touched; test_runtime_release (digest, expected).
 
+## Full run fix round (IP-B 0.8.68)
+
+| Unit | Root cause | Fix |
+|------|-----------|-----|
+| claude:tests.test_previous_release_recorded | 325d8427 did not finish the bump: 0.8.67's Claude bundle was not recorded | Recorded 0.8.67 (source ce81bd96) in previous-releases.json (bundle compiled with `packaging.compile_bundle`; digest equals the pinned one, as for 0.8.41 to 0.8.66), added it to the PINNED_RELEASE_DIGESTS comment, catalogue count 27 -> 28. Product code unchanged. |
+| codex:tests.test_b4t_takeover test_released_0859_owner_upgrade... | hardcoded floor literal; the product sets the floor to PACKAGE_VERSION (`raise_floor(..., PACKAGE_VERSION)` in learning_store/project_history/store_fence) | assertion `[(1,'0.8.67')]` -> `[(1,PACKAGE_VERSION)]` (collector_client.PACKAGE_VERSION, what the product writes) |
+| codex:tests.test_account_observation_schema | fixture recipe `eleven()` drops every additive index newer than schema 11, but schema 18's five S14b retention indexes (decision 352: now in the fresh layout) were not dropped: records_run_retention, record_links_retention_to, account_open_retention_run, consumed_grants_retention_promotion, stored_files_retention_source. The product layout is right (352). | Added those five to the drop list in the recipe. The strict assertion against schema11-layout.json is untouched. Test-only. |
+| codex:tests.test_health_holds test_unrelated_lifetime_caps_bytes_are_preserved | S5 B4t (146955fc, accepted, assertion-audit.md) replaced test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release (removed) with test_B4t_runtime_change_creates_no_legacy_update_close_count (exists, test_holds_report.py) and re-pointed lifetime_caps.json | cap entry already points at a real test. Guard: for site `project_holds_report.py::_ended_by_update` expects the base entry with only `test` changed `test_B7_2_ended_by_update_unrecorded_...` -> `test_B4t_runtime_change_creates_no_legacy_update_close_count`; all other bytes of the entry stay pinned. |
+
+Assertions changed (old -> new): see the Fix column of each row (b4t floor literal -> PACKAGE_VERSION; guard equality for the renamed site; test_previous_release_catalogue counts 27 -> 28 (two assertions)).
+
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 ## IP-B part 2: S5 (351), STATUS fix, S14b-6 wiring (349)
@@ -111,20 +122,64 @@ docs/requirements/b4t/STATUS.md: the open AP3 note replaced by the decision 348 
 See docs/requirements/s14b/STATUS.md "S14b-6". Requirement id S14b-6 (S14b-5 was taken). Red -> green: only the takeover adoption test was red (5 != 0); the cli upgrade test, the running-collector test and the plain-open check were already green on the merged tree because S14b's regression fix already created the indexes in cli --upgrade-ledger. Code: `takeover_owner.adopt_ledger` calls `create_retention_indexes()`. Registration with a running collector cannot create indexes (a running collector refuses it); it relies on the consented step that made the ledger current.
 - Modules (named list from the brief plus test_learning_cli and the op-set pin modules): 37 units, 567 tests, 123.9 s, 0 failed, metadata_errors empty, requirement_failures empty. No --affected/full run, no VERSION bump.
 
+## Full run fix round (IP-B 0.8.68)
+
+| Unit | Root cause | Fix |
+|------|-----------|-----|
+| claude:tests.test_previous_release_recorded | 325d8427 did not finish the bump: 0.8.67's Claude bundle was not recorded | Recorded 0.8.67 (source ce81bd96) in previous-releases.json (bundle compiled with `packaging.compile_bundle`; digest equals the pinned one, as for 0.8.41 to 0.8.66), added it to the PINNED_RELEASE_DIGESTS comment, catalogue count 27 -> 28. Product code unchanged. |
+| codex:tests.test_b4t_takeover test_released_0859_owner_upgrade... | hardcoded floor literal; the product sets the floor to PACKAGE_VERSION (`raise_floor(..., PACKAGE_VERSION)` in learning_store/project_history/store_fence) | assertion `[(1,'0.8.67')]` -> `[(1,PACKAGE_VERSION)]` (collector_client.PACKAGE_VERSION, what the product writes) |
+| codex:tests.test_account_observation_schema | fixture recipe `eleven()` drops every additive index newer than schema 11, but schema 18's five S14b retention indexes (decision 352: now in the fresh layout) were not dropped: records_run_retention, record_links_retention_to, account_open_retention_run, consumed_grants_retention_promotion, stored_files_retention_source. The product layout is right (352). | Added those five to the drop list in the recipe. The strict assertion against schema11-layout.json is untouched. Test-only. |
+| codex:tests.test_health_holds test_unrelated_lifetime_caps_bytes_are_preserved | S5 B4t (146955fc, accepted, assertion-audit.md) replaced test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release (removed) with test_B4t_runtime_change_creates_no_legacy_update_close_count (exists, test_holds_report.py) and re-pointed lifetime_caps.json | cap entry already points at a real test. Guard: for site `project_holds_report.py::_ended_by_update` expects the base entry with only `test` changed `test_B7_2_ended_by_update_unrecorded_...` -> `test_B4t_runtime_change_creates_no_legacy_update_close_count`; all other bytes of the entry stay pinned. |
+
+Assertions changed (old -> new): see the Fix column of each row (b4t floor literal -> PACKAGE_VERSION; guard equality for the renamed site; test_previous_release_catalogue counts 27 -> 28 (two assertions)).
+
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 ### S14b-6 follow-up: learning-migrate (primary decision)
 `cli._migrate_learning` can perform the 17 -> 18 step. Test first (red: schema 18 with 0 indexes after `learning-migrate-project` on a schema-17 ledger), then `_ledger_takes_additive_step` + `create_retention_indexes()` in the same operation. The fixture was split so only the two upgrade tests downgrade to schema 6. Running-collector registration accepted as is (no new collector op). Modules: the part-2 list plus test_learning_migration: 39 units, 585 tests, 128.9 s, 0 failed, metadata_errors empty. No VERSION bump.
+
+## Full run fix round (IP-B 0.8.68)
+
+| Unit | Root cause | Fix |
+|------|-----------|-----|
+| claude:tests.test_previous_release_recorded | 325d8427 did not finish the bump: 0.8.67's Claude bundle was not recorded | Recorded 0.8.67 (source ce81bd96) in previous-releases.json (bundle compiled with `packaging.compile_bundle`; digest equals the pinned one, as for 0.8.41 to 0.8.66), added it to the PINNED_RELEASE_DIGESTS comment, catalogue count 27 -> 28. Product code unchanged. |
+| codex:tests.test_b4t_takeover test_released_0859_owner_upgrade... | hardcoded floor literal; the product sets the floor to PACKAGE_VERSION (`raise_floor(..., PACKAGE_VERSION)` in learning_store/project_history/store_fence) | assertion `[(1,'0.8.67')]` -> `[(1,PACKAGE_VERSION)]` (collector_client.PACKAGE_VERSION, what the product writes) |
+| codex:tests.test_account_observation_schema | fixture recipe `eleven()` drops every additive index newer than schema 11, but schema 18's five S14b retention indexes (decision 352: now in the fresh layout) were not dropped: records_run_retention, record_links_retention_to, account_open_retention_run, consumed_grants_retention_promotion, stored_files_retention_source. The product layout is right (352). | Added those five to the drop list in the recipe. The strict assertion against schema11-layout.json is untouched. Test-only. |
+| codex:tests.test_health_holds test_unrelated_lifetime_caps_bytes_are_preserved | S5 B4t (146955fc, accepted, assertion-audit.md) replaced test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release (removed) with test_B4t_runtime_change_creates_no_legacy_update_close_count (exists, test_holds_report.py) and re-pointed lifetime_caps.json | cap entry already points at a real test. Guard: for site `project_holds_report.py::_ended_by_update` expects the base entry with only `test` changed `test_B7_2_ended_by_update_unrecorded_...` -> `test_B4t_runtime_change_creates_no_legacy_update_close_count`; all other bytes of the entry stay pinned. |
+
+Assertions changed (old -> new): see the Fix column of each row (b4t floor literal -> PACKAGE_VERSION; guard equality for the renamed site; test_previous_release_catalogue counts 27 -> 28 (two assertions)).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 ### S14b-6 rewrite (decision 352, Codex merge review r1)
 Per-path index calls replaced by one rule inside `LearningLedger._migrate`'s 17 -> 18 transaction (details in docs/requirements/s14b/STATUS.md). Also: registration `--upgrade-ledger` now allows the step on a schema-17 ledger (MED 1); `learning-migrate-project --status` never performs it (MED 4). Four tests red on 17a70460, green now. Two existing tests changed (old -> new in docs/requirements/s14b/assertions.md): the takeover adoption test and test_project_start E2a-1 layout comparison. Modules: part-2 list + test_learning_migration + test_learning_cli: 39 units, 589 tests, ~130 s; one failure (E2a-1 layout, fixed as above, rerun with test_state_location and the new module: 13 units, 67 tests, 46.7 s, 0 failed). No VERSION bump.
 
+## Full run fix round (IP-B 0.8.68)
+
+| Unit | Root cause | Fix |
+|------|-----------|-----|
+| claude:tests.test_previous_release_recorded | 325d8427 did not finish the bump: 0.8.67's Claude bundle was not recorded | Recorded 0.8.67 (source ce81bd96) in previous-releases.json (bundle compiled with `packaging.compile_bundle`; digest equals the pinned one, as for 0.8.41 to 0.8.66), added it to the PINNED_RELEASE_DIGESTS comment, catalogue count 27 -> 28. Product code unchanged. |
+| codex:tests.test_b4t_takeover test_released_0859_owner_upgrade... | hardcoded floor literal; the product sets the floor to PACKAGE_VERSION (`raise_floor(..., PACKAGE_VERSION)` in learning_store/project_history/store_fence) | assertion `[(1,'0.8.67')]` -> `[(1,PACKAGE_VERSION)]` (collector_client.PACKAGE_VERSION, what the product writes) |
+| codex:tests.test_account_observation_schema | fixture recipe `eleven()` drops every additive index newer than schema 11, but schema 18's five S14b retention indexes (decision 352: now in the fresh layout) were not dropped: records_run_retention, record_links_retention_to, account_open_retention_run, consumed_grants_retention_promotion, stored_files_retention_source. The product layout is right (352). | Added those five to the drop list in the recipe. The strict assertion against schema11-layout.json is untouched. Test-only. |
+| codex:tests.test_health_holds test_unrelated_lifetime_caps_bytes_are_preserved | S5 B4t (146955fc, accepted, assertion-audit.md) replaced test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release (removed) with test_B4t_runtime_change_creates_no_legacy_update_close_count (exists, test_holds_report.py) and re-pointed lifetime_caps.json | cap entry already points at a real test. Guard: for site `project_holds_report.py::_ended_by_update` expects the base entry with only `test` changed `test_B7_2_ended_by_update_unrecorded_...` -> `test_B4t_runtime_change_creates_no_legacy_update_close_count`; all other bytes of the entry stay pinned. |
+
+Assertions changed (old -> new): see the Fix column of each row (b4t floor literal -> PACKAGE_VERSION; guard equality for the renamed site; test_previous_release_catalogue counts 27 -> 28 (two assertions)).
+
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 ### S14b-6 refinement (decision 352 refined)
 The five indexes are part of the schema-18 layout: `_migrate` now adds them on every 17 -> 18 step including a fresh create (same transaction as the version write); a plain open of an existing 18 ledger creates none. New test (red on ed6aae6b: 5 != 0): fresh ledger -> 5 indexes, retention ready and due set, sweep removes the old row. The E2a-1 edit is reverted to the strict original (it passes again). `test_plain_open_makes_no_index...` (S14b-3) and the new module's setUp changed old -> new, recorded in docs/requirements/s14b/assertions.md; the takeover "5 before adoption" still reads right. Full named set: 39 units, 590 tests, 130.4 s, 0 failed, metadata_errors empty. No VERSION bump.
+
+## Full run fix round (IP-B 0.8.68)
+
+| Unit | Root cause | Fix |
+|------|-----------|-----|
+| claude:tests.test_previous_release_recorded | 325d8427 did not finish the bump: 0.8.67's Claude bundle was not recorded | Recorded 0.8.67 (source ce81bd96) in previous-releases.json (bundle compiled with `packaging.compile_bundle`; digest equals the pinned one, as for 0.8.41 to 0.8.66), added it to the PINNED_RELEASE_DIGESTS comment, catalogue count 27 -> 28. Product code unchanged. |
+| codex:tests.test_b4t_takeover test_released_0859_owner_upgrade... | hardcoded floor literal; the product sets the floor to PACKAGE_VERSION (`raise_floor(..., PACKAGE_VERSION)` in learning_store/project_history/store_fence) | assertion `[(1,'0.8.67')]` -> `[(1,PACKAGE_VERSION)]` (collector_client.PACKAGE_VERSION, what the product writes) |
+| codex:tests.test_account_observation_schema | fixture recipe `eleven()` drops every additive index newer than schema 11, but schema 18's five S14b retention indexes (decision 352: now in the fresh layout) were not dropped: records_run_retention, record_links_retention_to, account_open_retention_run, consumed_grants_retention_promotion, stored_files_retention_source. The product layout is right (352). | Added those five to the drop list in the recipe. The strict assertion against schema11-layout.json is untouched. Test-only. |
+| codex:tests.test_health_holds test_unrelated_lifetime_caps_bytes_are_preserved | S5 B4t (146955fc, accepted, assertion-audit.md) replaced test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release (removed) with test_B4t_runtime_change_creates_no_legacy_update_close_count (exists, test_holds_report.py) and re-pointed lifetime_caps.json | cap entry already points at a real test. Guard: for site `project_holds_report.py::_ended_by_update` expects the base entry with only `test` changed `test_B7_2_ended_by_update_unrecorded_...` -> `test_B4t_runtime_change_creates_no_legacy_update_close_count`; all other bytes of the entry stay pinned. |
+
+Assertions changed (old -> new): see the Fix column of each row (b4t floor literal -> PACKAGE_VERSION; guard equality for the renamed site; test_previous_release_catalogue counts 27 -> 28 (two assertions)).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
@@ -133,6 +188,17 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 2. Schema 16 no longer takes 17 -> 18 unconsented: `_migrate` requires consent for 17 -> 18 unless the ledger is fresh (was: also exempt when it started at 16). The 16 -> 17 epoch-only exemption in `_connect`/`_schema_behind` stays (basis: RSF-S2 fix rounds 1-2, docs/requirements/rsf-s2/STATUS.md). New test red (reached 18), green now. Consequence for the primary/owner: a default open or plain `learning-register` of a schema-16 ledger now stops at 17 and refuses; `--upgrade-ledger` (or allow_schema_upgrade) completes it. Five existing tests adapted (docs/requirements/s14b/assertions.md).
 3. S14b-3 test reopens the ledger before asserting zero indexes.
 Modules (15, 30 units, 465 tests, ~112 s wall, 0 failed, metadata_errors []): test_s14b_upgrade_indexes, test_run_retention, test_run_retention_scale, test_learning_store, test_rsf_s3_resumable, test_rsf_s6_classify, test_rsf_s2_regressions, test_b4t_takeover, test_project_start, test_state_location, test_learning_migration, test_learning_cli, test_upgrade_handover, test_history_service_upgrade, test_lifetime_cap_guard. No VERSION bump.
+
+## Full run fix round (IP-B 0.8.68)
+
+| Unit | Root cause | Fix |
+|------|-----------|-----|
+| claude:tests.test_previous_release_recorded | 325d8427 did not finish the bump: 0.8.67's Claude bundle was not recorded | Recorded 0.8.67 (source ce81bd96) in previous-releases.json (bundle compiled with `packaging.compile_bundle`; digest equals the pinned one, as for 0.8.41 to 0.8.66), added it to the PINNED_RELEASE_DIGESTS comment, catalogue count 27 -> 28. Product code unchanged. |
+| codex:tests.test_b4t_takeover test_released_0859_owner_upgrade... | hardcoded floor literal; the product sets the floor to PACKAGE_VERSION (`raise_floor(..., PACKAGE_VERSION)` in learning_store/project_history/store_fence) | assertion `[(1,'0.8.67')]` -> `[(1,PACKAGE_VERSION)]` (collector_client.PACKAGE_VERSION, what the product writes) |
+| codex:tests.test_account_observation_schema | fixture recipe `eleven()` drops every additive index newer than schema 11, but schema 18's five S14b retention indexes (decision 352: now in the fresh layout) were not dropped: records_run_retention, record_links_retention_to, account_open_retention_run, consumed_grants_retention_promotion, stored_files_retention_source. The product layout is right (352). | Added those five to the drop list in the recipe. The strict assertion against schema11-layout.json is untouched. Test-only. |
+| codex:tests.test_health_holds test_unrelated_lifetime_caps_bytes_are_preserved | S5 B4t (146955fc, accepted, assertion-audit.md) replaced test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release (removed) with test_B4t_runtime_change_creates_no_legacy_update_close_count (exists, test_holds_report.py) and re-pointed lifetime_caps.json | cap entry already points at a real test. Guard: for site `project_holds_report.py::_ended_by_update` expects the base entry with only `test` changed `test_B7_2_ended_by_update_unrecorded_...` -> `test_B4t_runtime_change_creates_no_legacy_update_close_count`; all other bytes of the entry stay pinned. |
+
+Assertions changed (old -> new): see the Fix column of each row (b4t floor literal -> PACKAGE_VERSION; guard equality for the renamed site; test_previous_release_catalogue counts 27 -> 28 (two assertions)).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
@@ -151,5 +217,18 @@ Bump (step 2) note: the 0.8.67 bump also recorded the previous Claude bundle in 
 | codex:tests.test_account_observation_schema | 4 of 7 fail alone: "fixture must match genuine prior-source layout" (layout differs); passes on base ce81bd96 | regression from the batch (probably the schema 18 retention indexes/S14b), not a flake |
 | codex:tests.test_health_holds | test_unrelated_lifetime_caps_bytes_are_preserved: lifetime_caps site project_holds_report.py::_ended_by_update `test` name changed (B7_2... -> B4t_runtime_change...); test not on base | merge interaction (a batch step re-pointed the base entry's `test`); guard needs an owner/primary decision |
 | root:test_test_framework_affected | ModuleNotFoundError: coverage | environmental (venv lacks coverage; also on base) |
+
+## Full run fix round (IP-B 0.8.68)
+
+| Unit | Root cause | Fix |
+|------|-----------|-----|
+| claude:tests.test_previous_release_recorded | 325d8427 did not finish the bump: 0.8.67's Claude bundle was not recorded | Recorded 0.8.67 (source ce81bd96) in previous-releases.json (bundle compiled with `packaging.compile_bundle`; digest equals the pinned one, as for 0.8.41 to 0.8.66), added it to the PINNED_RELEASE_DIGESTS comment, catalogue count 27 -> 28. Product code unchanged. |
+| codex:tests.test_b4t_takeover test_released_0859_owner_upgrade... | hardcoded floor literal; the product sets the floor to PACKAGE_VERSION (`raise_floor(..., PACKAGE_VERSION)` in learning_store/project_history/store_fence) | assertion `[(1,'0.8.67')]` -> `[(1,PACKAGE_VERSION)]` (collector_client.PACKAGE_VERSION, what the product writes) |
+| codex:tests.test_account_observation_schema | fixture recipe `eleven()` drops every additive index newer than schema 11, but schema 18's five S14b retention indexes (decision 352: now in the fresh layout) were not dropped: records_run_retention, record_links_retention_to, account_open_retention_run, consumed_grants_retention_promotion, stored_files_retention_source. The product layout is right (352). | Added those five to the drop list in the recipe. The strict assertion against schema11-layout.json is untouched. Test-only. |
+| codex:tests.test_health_holds test_unrelated_lifetime_caps_bytes_are_preserved | S5 B4t (146955fc, accepted, assertion-audit.md) replaced test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release (removed) with test_B4t_runtime_change_creates_no_legacy_update_close_count (exists, test_holds_report.py) and re-pointed lifetime_caps.json | cap entry already points at a real test. Guard: for site `project_holds_report.py::_ended_by_update` expects the base entry with only `test` changed `test_B7_2_ended_by_update_unrecorded_...` -> `test_B4t_runtime_change_creates_no_legacy_update_close_count`; all other bytes of the entry stay pinned. |
+
+Assertions changed (old -> new): see the Fix column of each row (b4t floor literal -> PACKAGE_VERSION; guard equality for the renamed site; test_previous_release_catalogue counts 27 -> 28 (two assertions)).
+
+Budgets (each module alone via `parallel_tests.py --module`, 4 jobs, twice): test_run_retention_scale 30 s of test time per run (35.2 and 36.0 s elapsed with preflight), not over the 60 s limit, so the 70 s in the full run was 16-job load. test_project_start 151.1 s and 150.9 s of job seconds (44 s elapsed across fragments) against the 60 s limit; it is a listed debt module with ceiling 183.4 (test-budget-debt-0850.json), so within its debt ceiling; the 189 s in the full run exceeded that ceiling under load (it was 210.5 s in the saved timings). No ceiling raised. After fixes: test_b4t_takeover, test_account_observation_schema, test_health_holds, test_lifetime_cap_guard, test_runtime_release, test_previous_release_recorded, test_previous_release_catalogue all pass, metadata_errors [].
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
