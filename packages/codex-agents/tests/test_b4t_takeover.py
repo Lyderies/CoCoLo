@@ -2025,9 +2025,9 @@ class FloorTests(unittest.TestCase):
             self.assertEqual(before, {path: path.read_bytes() for path in before})
 
     @requirements('RS-B-B4t-3', 'RS-B-B4t-9')
-    def test_a_store_written_by_this_build_refuses_0868_and_0869(self):
-        # IP-D (decision 370): the takeover floor this build writes is its own PACKAGE_VERSION (0.8.70), so the
-        # released 0.8.68 and 0.8.69 builds refuse a store that already carries the unverified marker.
+    def test_a_store_written_by_this_build_refuses_0868_0869_and_0870(self):
+        # IP-E (decision 370, floor moved by the 0.8.71 bump): the takeover floor this build writes is its own PACKAGE_VERSION (0.8.71), so the
+        # released 0.8.68, 0.8.69 and 0.8.70 builds refuse a store that already carries the unverified marker.
         from codex_agents import collector_client, project_history
         from codex_agents.history_contracts import HistoryError
         with tempfile.TemporaryDirectory(dir='/tmp') as folder:
@@ -2036,10 +2036,10 @@ class FloorTests(unittest.TestCase):
             project = 'prj_' + '8' * 32
             project_history.ProjectHistory(directory, project).close()
             history = project_history.ProjectHistory(directory, project)
-            self.assertEqual([(1, '0.8.70')], [tuple(r) for r in history._connection.execute('SELECT * FROM runtime_floor')])
+            self.assertEqual([(1, '0.8.71')], [tuple(r) for r in history._connection.execute('SELECT * FROM runtime_floor')])
             history.close()
             before = (directory / 'history.sqlite3').read_bytes()
-            for older in ('0.8.68', '0.8.69'):
+            for older in ('0.8.68', '0.8.69', '0.8.70'):
                 with mock.patch.object(collector_client, 'PACKAGE_VERSION', older):
                     with self.assertRaises(HistoryError):
                         project_history.ProjectHistory(directory, project)

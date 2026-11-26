@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.71: custody lookups search run holds by their full key (S14e), and the fault-matrix batch (S15) pins what happens to every counted limit once a run is past it; builds 0.8.70 and older refuse a store this build wrote (IP-E; decisions 380, 381, 383, 384).
+
 - Package 0.8.70: a run the last update could not re-verify is recorded as unverified at hand-over, reported as its own harmless finding instead of an overdue hold, and its settlement is no longer retried against the account (IP-D; decisions 366, 367, 370).
 
 - Package 0.8.69: usage partial reasons now reach reply history, due holds drain at production cadence, low disk refuses new runs and run checks fail closed (IP-C).
