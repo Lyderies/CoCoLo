@@ -162,7 +162,6 @@ class Spare(RealFixture):
         self.assertEqual('committed', rc.context_row(self.store, *self.attempt)[0])
 
 
-@requirement
 class RunCopyIsolationTests(RealFixture):
     """The run each test gets is its own copy of one built template: a change in one is never seen in another. Both
     tests start by asserting the original state and then change their own copy, so whichever runs second proves
