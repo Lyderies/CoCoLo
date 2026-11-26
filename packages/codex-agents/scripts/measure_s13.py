@@ -240,6 +240,7 @@ def blocked_start_pass(test, leases, assignment, blocked_count, arrivals, tombst
         record['batch_vm_steps'].append(step)
         record['batch_released'].append(released)
         record['batch_selected'].append(max(connection.selections, default=0))
+        record.setdefault('batch_examined', []).append(sum(connection.selections))
         record['batch_backed_off'].append(db.execute(
             "SELECT COUNT(*) FROM project_holds WHERE kind='lease' AND state<>'released' AND next_check_ms>0").fetchone()[0])
     state = db.execute("SELECT state FROM result_leases WHERE run_handle=?",
@@ -277,6 +278,13 @@ def measure_b6(tombstone_counts=(0,), repeats=REPEATS):
     return rows
 
 
+def due_rows(store):
+    """Held unarmed lease rows due now: the lease pass stops only when this set is empty (RS-B section 12)."""
+    return store._connection.execute(
+        "SELECT COUNT(*) FROM project_holds WHERE kind='lease' AND state='held' AND lease_case='unarmed' "
+        "AND next_check_ms<=?", (store._hold_now(),)).fetchone()[0]
+
+
 def measure_due_holds(due=1000, repeats=REPEATS, limit=BATCH):
     """RS-10 at the start pass's own batch size: `due` unarmed leases, all due at once, none blocked, drained by
     consecutive `release_earlier_unarmed_leases(limit=64)` calls. Excludes scheduling (see the production figure).
@@ -296,8 +304,8 @@ def measure_due_holds(due=1000, repeats=REPEATS, limit=BATCH):
                 total += released
                 times.append(ms)
                 counts.append(released)
-                if not released:
-                    break
+                if not released and not due_rows(test.store):
+                    break  # RS-B section 12 (decision 354): stop only on an empty due set
         runs.append((total, counts, times))
     if any(run[:2] != runs[0][:2] for run in runs):
         raise RuntimeError('due-hold repeats disagree on released counts')

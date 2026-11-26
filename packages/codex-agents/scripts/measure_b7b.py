@@ -286,8 +286,10 @@ def measure():
                     batches += 1
                     total += released
                     times.append(ms)
-                    if not released:
-                        break
+                    if not released and not db.execute(
+                            "SELECT 1 FROM project_holds WHERE kind='lease' AND state='held' AND lease_case='unarmed' "
+                            "AND next_check_ms<=? LIMIT 1", (test.store._hold_now(),)).fetchone():
+                        break  # RS-B section 12 (decision 354): continue past backed-off rows; stop on an empty due set
                 trials.append((total, batches, times))
         if any((row[0], row[1]) != (total, batches) for row in trials):
             raise RuntimeError('B3/B5 repeated drain changed released counts')

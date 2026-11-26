@@ -2611,8 +2611,9 @@ class ProjectHistory:
         their lane jobs. So an unarmed lease outside `live` (the (run handle, attempt) of every lease the caller's
         live jobs hold) belongs to a service that stopped: it can never be armed, and with no host open no claim of
         it was ever sent. It is released `withdrawn_unsent` at once, not at its deadline, exactly as
-        `release_unsent_result_lease` would. Live leases remain held. Select at most min(limit,64) due unarmed
-        rows, oldest next_check_ms first; blocked rows back off 1 s doubling to 5 min (RS-B section 5).
+        `release_unsent_result_lease` would. Live leases remain held. ONE selection of at most min(limit,64) due unarmed
+        rows per call (decision 354, RS-B section 5/12), oldest next_check_ms first; blocked rows back off 1 s doubling
+        to 5 min and so leave the due set; the next pass (next driver step) reaches the rows behind them.
         """
         if self._result_key is None:
             raise HistoryError("history_result_unavailable")
@@ -2625,52 +2626,47 @@ class ProjectHistory:
                        for key in live)):
             raise HistoryError("history_invalid_input")
         now = self._hold_now()
+        positions = self._connection.execute(
+            "SELECT h.identity,l.run_handle,l.attempt FROM project_holds h INDEXED BY project_holds_due "
+            "CROSS JOIN result_leases l ON l.project_id=h.project_id "
+            "AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) "
+            "AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) "
+            "WHERE h.project_id=? AND h.state<>'released' AND h.state='held' AND h.kind='lease' "
+            "AND h.lease_case='unarmed' AND l.state='reserved' AND h.next_check_ms<=? "
+            "ORDER BY h.next_check_ms LIMIT ?", (self.project_id, now, min(limit, 64))).fetchall()
         released, failure = 0, None
-        # S13a no-starvation: selections stay at 64 rows, but blocked rows back off out of the due set, so a pass
-        # that released nothing re-selects (at most 4 selections) to reach the eligible rows behind them.
-        for _round in range(4):
-            positions = self._connection.execute(
-                "SELECT h.identity,l.run_handle,l.attempt FROM project_holds h INDEXED BY project_holds_due "
-                "CROSS JOIN result_leases l ON l.project_id=h.project_id "
-                "AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) "
-                "AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) "
-                "WHERE h.project_id=? AND h.state<>'released' AND h.state='held' AND h.kind='lease' "
-                "AND h.lease_case='unarmed' AND l.state='reserved' AND h.next_check_ms<=? "
-                "ORDER BY h.next_check_ms LIMIT ?", (self.project_id, now, min(limit, 64))).fetchall()
-            for identity, run_handle, attempt in positions:
-                try:
-                    with self._transaction():
-                        if (run_handle, attempt) in live:
-                            self._defer_unarmed_lease(identity, now)
-                            continue
-                        value = self._lease(self._connection.execute(
-                            "SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
-                            (self.project_id, run_handle, attempt)).fetchone())
-                        key = (value.binding.run_handle, value.binding.attempt)
-                        if value.state != "reserved" or key in live:
-                            continue
-                        if (self._connection.execute("SELECT 1 FROM project_host_opens WHERE project_id=? AND run_handle=? "
-                                                     "AND attempt=?", (self.project_id, *key)).fetchone() is not None
-                                or self._connection.execute("SELECT 1 FROM result_reservations WHERE project_id=? "
-                                                            "AND run_handle=? AND attempt=? LIMIT 1",
-                                                            (self.project_id, *key)).fetchone() is not None):
-                            self._defer_unarmed_lease(identity, now)
-                            continue  # Not an unsent lease after all: left for its own closure.
-                        self._set_lease(replace(value, state="expired"))
-                        project_holds_schema.release_hold(
-                            self._connection, self.project_id, "lease", attempt_identity(*key), "withdrawn_unsent",
-                            now_ms=now, evidence=project_holds_schema.evidence_json(by="start_pass"))
-                        ending = project_result_contexts.release_unfinished(  # D1 (SH-3, O2)
-                            self, *key, "withdrawn_unsent", now)
-                    if ending:
-                        project_result_contexts.finish_quietly(self, *key)
-                    released += 1
-                except HistoryError as error:
-                    failure = failure or error.reason_code  # One lease that does not verify never stops the others.
-                    with self._transaction():
+        for identity, run_handle, attempt in positions:
+            try:
+                with self._transaction():
+                    if (run_handle, attempt) in live:
                         self._defer_unarmed_lease(identity, now)
-            if released or not positions:
-                break
+                        continue
+                    value = self._lease(self._connection.execute(
+                        "SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                        (self.project_id, run_handle, attempt)).fetchone())
+                    key = (value.binding.run_handle, value.binding.attempt)
+                    if value.state != "reserved" or key in live:
+                        continue
+                    if (self._connection.execute("SELECT 1 FROM project_host_opens WHERE project_id=? AND run_handle=? "
+                                                 "AND attempt=?", (self.project_id, *key)).fetchone() is not None
+                            or self._connection.execute("SELECT 1 FROM result_reservations WHERE project_id=? "
+                                                        "AND run_handle=? AND attempt=? LIMIT 1",
+                                                        (self.project_id, *key)).fetchone() is not None):
+                        self._defer_unarmed_lease(identity, now)
+                        continue  # Not an unsent lease after all: left for its own closure.
+                    self._set_lease(replace(value, state="expired"))
+                    project_holds_schema.release_hold(
+                        self._connection, self.project_id, "lease", attempt_identity(*key), "withdrawn_unsent",
+                        now_ms=now, evidence=project_holds_schema.evidence_json(by="start_pass"))
+                    ending = project_result_contexts.release_unfinished(  # D1 (SH-3, O2)
+                        self, *key, "withdrawn_unsent", now)
+                if ending:
+                    project_result_contexts.finish_quietly(self, *key)
+                released += 1
+            except HistoryError as error:
+                failure = failure or error.reason_code  # One lease that does not verify never stops the others.
+                with self._transaction():
+                    self._defer_unarmed_lease(identity, now)
         if failure is not None:
             raise HistoryError(failure)
         return released
