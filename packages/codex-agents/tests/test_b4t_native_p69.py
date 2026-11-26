@@ -1,4 +1,4 @@
-"""The owner's installed 0.8.69 (final build b63b6f5c) must be taken over by this build's update (0.8.72).
+"""The owner's installed 0.8.69 (final build b63b6f5c) must be taken over by this build's update (0.8.73).
 
 The installed service runs from its protected runtime copy (`~/.codex/agent-orchestration/<project>/<runtime>/`),
 the launch target setup records and the collector's starter launches. The S5 native witnesses launched the archived
@@ -129,8 +129,8 @@ class RealP69LaunchCopyTests(StarterBase):
             if not database.exists():
                 continue
             with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as db:
-                self.assertEqual('0.8.72', db.execute('SELECT floor_version FROM runtime_floor').fetchone()[0], database)
-                check_floor(db, '0.8.72', RuntimeError)
+                self.assertEqual('0.8.73', db.execute('SELECT floor_version FROM runtime_floor').fetchone()[0], database)
+                check_floor(db, '0.8.73', RuntimeError)
                 with self.assertRaises(RuntimeError):
                     check_floor(db, '0.8.69', RuntimeError)
 
@@ -170,7 +170,7 @@ class RealP69LaunchCopyTests(StarterBase):
 
 
     @requirements('RS-B-B4t-3',
-                  why_not_scenario='Real released 0.8.69 runtime against the store the 0.8.72 update adopted.')
+                  why_not_scenario='Real released 0.8.69 runtime against the store the 0.8.73 update adopted.')
     def test_B4t_0871_after_adoption_released_P69_cannot_reopen_the_store(self):
         from codex_agents.takeover_preflight import read_plan
         self.assertEqual('account_done', self.run_update(read_plan(self.state, self.project))['phase'])
@@ -186,7 +186,7 @@ class RealP69LaunchCopyTests(StarterBase):
         done = subprocess.run([sys.executable, '-B', '-c', code, str(old_runtime), str(store.parent),
                                self.project_id], capture_output=True, text=True, timeout=30)
         self.assertNotEqual(0, done.returncode)
-        # The floor (0.8.72) refuses the released 0.8.69: the fence refusal (`history_wrong_owner`), with its update step.
+        # The floor (0.8.73) refuses the released 0.8.69: the fence refusal (`history_wrong_owner`), with its update step.
         self.assertIn('This store owner was replaced or lost its writer lock. Run: ./setup.sh --update', done.stderr)
         self.assertEqual(before, store.read_bytes())
 

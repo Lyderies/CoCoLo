@@ -2025,9 +2025,9 @@ class FloorTests(unittest.TestCase):
             self.assertEqual(before, {path: path.read_bytes() for path in before})
 
     @requirements('RS-B-B4t-3', 'RS-B-B4t-9')
-    def test_a_store_written_by_this_build_refuses_0868_0869_0870_and_0871(self):
-        # IP-F (decision 370, floor moved by the 0.8.72 bump): the takeover floor this build writes is its own PACKAGE_VERSION (0.8.72), so the
-        # released 0.8.68, 0.8.69, 0.8.70 and 0.8.71 builds refuse a store that already carries the unverified marker.
+    def test_a_store_written_by_this_build_refuses_0868_0869_0870_0871_and_0872(self):
+        # IP-G (decision 370, floor moved by the 0.8.73 bump): the takeover floor this build writes is its own PACKAGE_VERSION (0.8.73), so the
+        # released 0.8.68, 0.8.69, 0.8.70, 0.8.71 and 0.8.72 builds refuse a store that already carries the unverified marker.
         from codex_agents import collector_client, project_history
         from codex_agents.history_contracts import HistoryError
         with tempfile.TemporaryDirectory(dir='/tmp') as folder:
@@ -2036,10 +2036,10 @@ class FloorTests(unittest.TestCase):
             project = 'prj_' + '8' * 32
             project_history.ProjectHistory(directory, project).close()
             history = project_history.ProjectHistory(directory, project)
-            self.assertEqual([(1, '0.8.72')], [tuple(r) for r in history._connection.execute('SELECT * FROM runtime_floor')])
+            self.assertEqual([(1, '0.8.73')], [tuple(r) for r in history._connection.execute('SELECT * FROM runtime_floor')])
             history.close()
             before = (directory / 'history.sqlite3').read_bytes()
-            for older in ('0.8.68', '0.8.69', '0.8.70', '0.8.71'):
+            for older in ('0.8.68', '0.8.69', '0.8.70', '0.8.71', '0.8.72'):
                 with mock.patch.object(collector_client, 'PACKAGE_VERSION', older):
                     with self.assertRaises(HistoryError):
                         project_history.ProjectHistory(directory, project)
