@@ -452,5 +452,10 @@
  "codex:tests.test_s15_failure_matrix": "integration",
  "codex:tests.test_s14f_owner_bounds": "integration",
  "codex:tests.test_s14g_hold_queries": "integration",
- "codex:tests.test_s13_batch_tx": "integration"
+ "codex:tests.test_s13_batch_tx": "integration",
+ "codex:tests.test_learning_cli_host": "integration",
+ "codex:tests.test_learning_cli_records": "integration",
+ "codex:tests.test_learning_cli_keys_upgrade": "integration",
+ "codex:tests.test_b4t_takeover_store": "integration",
+ "codex:tests.test_b4t_takeover_owner": "integration"
 }

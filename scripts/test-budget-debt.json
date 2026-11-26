@@ -5,7 +5,6 @@
     "codex:tests.test_cli_billing_runtime": 62.27,
     "codex:tests.test_container_stop": 67.62,
     "codex:tests.test_host_commands": 119.56,
-    "codex:tests.test_learning_cli": 95.44,
     "codex:tests.test_lost_run_settlement": 98.64,
     "codex:tests.test_project_driver": 390.32,
     "codex:tests.test_run_network": 63.28,

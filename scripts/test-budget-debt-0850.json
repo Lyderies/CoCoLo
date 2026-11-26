@@ -6,7 +6,6 @@
   "codex:tests.test_bridge": 368.25,
   "codex:tests.test_container_stop": 72.23,
   "codex:tests.test_host_commands": 119.56,
-  "codex:tests.test_learning_cli": 112.56,
   "codex:tests.test_lost_run_settlement": 119.75,
   "codex:tests.test_project_driver": 520.37,
   "codex:tests.test_project_start": 183.4,
