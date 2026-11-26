@@ -21,6 +21,9 @@ from .account_api import MAX_ACCOUNT_FRAME_BYTES, AccountError, decode_account_r
 from .account_service import AccountService
 
 
+IDLE_WAIT_SECONDS = 0.05  # how long the frontend thread sleeps when no connection is attached
+
+
 @dataclass(frozen=True)
 class AccountIngressLimits:
     ordinary_connections: int
@@ -95,6 +98,7 @@ class AccountIngress:
         self._limits = AccountIngressLimits(**vars(limits))
         self._pid, self._owner_thread = os.getpid(), threading.current_thread()
         self._lock = threading.Lock()
+        self._wake = threading.Event()  # set when a peer is attached or a close is requested (see IDLE_WAIT_SECONDS)
         self._peers: dict[object, _Peer] = {}
         # Owner-only ticket/subscriber state. Detached tickets retain custody
         # until the actual coordinator returns a ready result or fully drains.
@@ -163,6 +167,7 @@ class AccountIngress:
             if count >= (self._limits.health_connections if health else self._limits.ordinary_connections):
                 raise AccountError("account_busy")  # R7b: told to the client as service_refused_busy
             self._peers[object()] = peer
+        self._wake.set()
 
     @staticmethod
     def _wire(raw):
@@ -259,6 +264,12 @@ class AccountIngress:
                     peers = tuple(self._peers.items())
                 if closing:
                     break
+                if not peers:
+                    # S13d-1: with nothing attached there is nothing to poll. Wait for an attach or a close
+                    # (both set the event); the bound only covers a state change nobody signals.
+                    self._wake.wait(IDLE_WAIT_SECONDS)
+                    self._wake.clear()
+                    continue
                 for token, peer in peers:
                     if peer.io_closed:
                         continue
@@ -450,6 +461,7 @@ class AccountIngress:
                 self._closing = True
                 if not self._started:
                     self._front_stopped = True
+            self._wake.set()
             self._jobs.request_close()
             if self._observations is not None:
                 self._observations.request_close()

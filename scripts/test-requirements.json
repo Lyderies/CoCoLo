@@ -4073,7 +4073,8 @@
  },
  "S13d-1": {
   "checks": [
-   "codex:tests.test_idle_cpu_budget.IdleCpuBudgetTests.test_S13d_1_idle_collector_and_project_host_stay_within_their_cpu_budgets"
+   "codex:tests.test_idle_cpu_budget.IdleCpuBudgetTests.test_S13d_1_idle_collector_and_project_host_stay_within_their_cpu_budgets",
+   "codex:tests.test_project_ingress.ProjectIngressTests.test_S13d_1_an_ingress_with_no_connection_does_not_wake_every_poll_interval"
   ],
   "source": "tests/requirements/s13d.json#S13d-1",
   "statement": "Measure real idle host CPU before setting a regression budget or changing waits; preserve queue and latency contracts."

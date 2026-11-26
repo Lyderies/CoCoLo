@@ -191,7 +191,7 @@
  "codex:tests.test_ledger_lock_limits": "scenario",
  "codex:tests.test_ledger_owner_queue": "unit",
  "codex:tests.test_ledger_owner_queue_lifecycle": "component",
- "codex:tests.test_ledger_startup": "unit",
+ "codex:tests.test_ledger_startup": "component",
  "codex:tests.test_ledger_waits": "unit",
  "codex:tests.test_legacy_capacity_upgrade": "scenario",
  "codex:tests.test_legacy_history_compatibility": "unit",

@@ -1,7 +1,9 @@
 """Connected project frontend, real APIs/inert workers, fake native enrollment."""
 import json
 from pathlib import Path
+import selectors
 import socket
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -9,6 +11,8 @@ import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+from test_framework import requirements  # noqa: E402
 from tests import test_project_request_queue as fixtures
 from tests.learning_support import event_record
 
@@ -326,6 +330,29 @@ class ProjectIngressTests(unittest.TestCase):
         with self.assertRaises(HistoryError):
             ingress.bootstrap()
         self.assertEqual(self.api.composition.factory.call_count, 0)
+
+
+    @requirements('S13d-1', why_not_scenario='Counts the frontend thread\'s own wake-ups; no client scenario is involved.')
+    def test_S13d_1_an_ingress_with_no_connection_does_not_wake_every_poll_interval(self):
+        selects = []
+
+        class Counting(selectors.DefaultSelector):
+            def select(self, timeout=None):
+                selects.append(timeout)
+                return super().select(timeout)
+
+        with mock.patch.object(project_ingress.selectors, "DefaultSelector", Counting):
+            ingress = self.start()
+            time.sleep(1.0)
+            idle_wakes = len(selects)
+            client, _ = self.pair(ingress)  # a connection that arrives after a quiet spell is still taken at once
+            deadline = time.monotonic() + 3
+            while ingress.snapshot()["connections"] != 1 and time.monotonic() < deadline:
+                time.sleep(0.005)
+        self.assertEqual(1, ingress.snapshot()["connections"])
+        client.close()
+        # The poll interval is 1 ms: a thread that polls with nothing attached wakes about 1000 times a second.
+        self.assertLess(idle_wakes, 60, idle_wakes)
 
 
 class ProjectIngressLimitTests(unittest.TestCase):
