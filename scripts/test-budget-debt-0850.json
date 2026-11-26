@@ -10,7 +10,6 @@
   "codex:tests.test_lost_run_settlement": 119.75,
   "codex:tests.test_project_driver": 520.37,
   "codex:tests.test_project_start": 183.4,
-  "codex:tests.test_result_lifetime": 73.05,
   "codex:tests.test_session_guard": 7.23,
   "codex:tests.test_trial_run_driver_bugs": 103.34,
   "codex:tests.test_write_merge": 247.71,
