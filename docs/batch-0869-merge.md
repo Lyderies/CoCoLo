@@ -67,3 +67,15 @@ real HistoryClient.run_usage with the existing `RUN_USAGE_SECONDS=-1` / `RUN_USA
 suite records a real reply carrying `partial_reason`. No existing assertion changed.
 Green: soak `test_reply_shape_live` 5 tests, failed_units [], metadata_errors [], 638.9 s. Normal profile
 test_s44a_usage_install, test_usage_report, test_reply_shape_compatibility, test_holds_report: 67 tests, pass.
+
+## Full run (0.8.69, commit 1ef995e2 on 98baf436; base e46759a5)
+
+Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-run-timings.json` (output: docs/batch-0869-full-run.txt).
+- Exit 1. 554 units, tests claude 134 / codex 6910 / root 1194. Elapsed 625 s (preflight 7.5 s, discovery 2.5 s; the rest is test time). `metadata_errors`: []. Not partial.
+- Budget failures (2): `test_project_start` 207.3 s (budget 60, debt ceiling 183.4) and `test_run_retention_scale` 68.9 s (budget 60). Both flake (load): rerun alone through the runner 23.5 s and 32.1 s, no budget failure; project_start also passes alone and on base.
+- `requirement_failures`: AP3, B2-OUTCOME, E2c-10, E2c-2, TESTSPEED-1, TESTSPEED-3, TESTSPEED-4 (derived from the failed units and the budget failures above).
+- Failed units (4):
+  1. `test_project_start#0` (E2c-2, start_timeout slot `failed` != `starting`): FLAKE (load). Passes alone (3 tests) and on base.
+  2. `test_cli_open_client_runtime#0/#1` (`history_not_authorized` != `open_service_unreachable`, 2 tests each): REGRESSION, deterministic. Passes on base e46759a5 and on 8d1ebba6 (S13b merge); fails from e22b0274 (IP-C merge of S10 HM-6, run.check fails closed) onward, so it is S10's change, not the bump. Not fixed.
+  3. `test_candidate_evidence_lookup` AP3 (`LedgerError: store owner replaced or lost its writer lock` in `check_floor(PACKAGE_VERSION)`): REGRESSION from the 0.8.69 version bump (passes on base and on 98baf436, fails at 1ef995e2). Likely the test's real-previous-release scenario assumes a floor that the new PACKAGE_VERSION changes (same family as the 0.8.68 b4t floor fix 42875305). Not fixed.
+- Debt retirement required: test_container_stop, test_result_lifetime, test_session_guard (runner note, not failures).
