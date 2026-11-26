@@ -3184,5 +3184,6 @@
  "codex:tests.test_b4t_native_kill": 36.0,
  "codex:tests.test_b4t_native_audit_p66": 41.0,
  "codex:tests.test_b4t_native_audit_v34": 26.0,
- "codex:tests.test_s14b_upgrade_indexes": 20.0
+ "codex:tests.test_s14b_upgrade_indexes": 20.0,
+ "codex:tests.test_s13a_lease_pass": 8.0
 }

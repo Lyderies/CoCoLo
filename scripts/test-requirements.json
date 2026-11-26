@@ -4955,7 +4955,7 @@
    "codex:tests.test_s13_budgets.S13Budgets.test_b6_finding_the_lease_start_pass_has_no_bounded_selection_and_no_back_off"
   ],
   "source": "tests/requirements/s13.json#RS-B-9-B6-MECH",
-  "statement": "RS-B draft 4 section 5 (bounded selection, back-off, re-due order): a start-pass batch selects at most 64 rows and a blocked row gets a back-off so later batches do not examine it before it is due. FINDING: NOT MET by the product (the lease start pass fetches every reserved lease on every batch and has no back-off). The test pins the measured miss until the proposed step lands."
+  "statement": "RS-B draft 4 section 5 (bounded selection, back-off, re-due order): a start-pass batch selects at most 64 rows and a blocked row gets a back-off so later batches do not examine it before it is due."
  },
  "RS-10-DUE-PROD": {
   "checks": [
@@ -4973,5 +4973,44 @@
   ],
   "source": "tests/requirements/s13.json#RS-S13-CONTROLS",
   "statement": "Regression controls: patching the product in the test only, to release 128 rows per call or to slow the reservation/hold JOIN by 6 ms, turns the per-batch and B1 checks red; the mechanism check is red for an unbounded selection or a missing back-off; a pass that drains everything clears the production finding."
+ },
+ "S13A-BOUND": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_128_blocked_plus_arrivals_select_at_most_64_even_with_limit_100",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_all_eligible_rows_still_release_at_most_64_with_limit_100",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_armed_rows_do_not_consume_the_unarmed_batch"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-BOUND",
+  "statement": "The unarmed lease start pass selects at most min(limit,64) held unarmed due rows from the existing partial register index, including with 128 blocked rows and 50 new blocked arrivals per batch; armed rows do not consume the batch and eligible releases remain bounded by 64."
+ },
+ "S13A-BACKOFF": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_backoff_doubles_from_one_second_to_300_and_skips_until_due_across_reopen",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_host_open_blocker_backs_off_inside_the_inspection_transaction",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_inspection_refusal_backs_off_and_does_not_stop_other_rows"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-BACKOFF",
+  "statement": "A blocked unarmed lease is deferred in its inspection batch for 1 s, doubling on each retry to a 300 s cap; retries persist across reopen, do not occur before next_check_ms, leave due_at_ms unchanged, and an inspection refusal does not prevent progress of other selected rows."
+ },
+ "S13A-RESET": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_release_resets_backoff_for_start_pass_explicit_release_expiry_and_bind"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-RESET",
+  "statement": "Every lease release resets next_check_ms and its start-pass backoff counter, including start-pass release, explicit unsent release, lease expiry, and binding to a reservation."
+ },
+ "S13A-ORDER": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_due_rows_are_selected_by_next_check_not_lease_insertion_order"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-ORDER",
+  "statement": "The unarmed lease start pass selects only next_check_ms <= now, in ascending next_check_ms order rather than source insertion order."
+ },
+ "S13A-FAIR": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_blocked_row_is_retried_when_due_despite_a_full_batch_of_new_arrivals"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-FAIR",
+  "statement": "A previously blocked lease is retried once its backoff ends despite full batches of new blocked arrivals; new leases join with their creation time as next_check_ms so they cannot continually overtake an older due retry."
  }
 }

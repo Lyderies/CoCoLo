@@ -23,7 +23,7 @@
   },
   {
    "id": "RS-B-9-B6-MECH",
-   "statement": "RS-B draft 4 section 5 (bounded selection, back-off, re-due order): a start-pass batch selects at most 64 rows and a blocked row gets a back-off so later batches do not examine it before it is due. FINDING: NOT MET by the product (the lease start pass fetches every reserved lease on every batch and has no back-off). The test pins the measured miss until the proposed step lands.",
+   "statement": "RS-B draft 4 section 5 (bounded selection, back-off, re-due order): a start-pass batch selects at most 64 rows and a blocked row gets a back-off so later batches do not examine it before it is due.",
    "source": "tests/requirements/s13.json#RS-B-9-B6-MECH"
   },
   {

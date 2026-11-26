@@ -429,5 +429,6 @@
  "codex:tests.test_b4t_native_kill": "integration",
  "codex:tests.test_b4t_native_audit_p66": "integration",
  "codex:tests.test_b4t_native_audit_v34": "integration",
- "codex:tests.test_s14b_upgrade_indexes": "integration"
+ "codex:tests.test_s14b_upgrade_indexes": "integration",
+ "codex:tests.test_s13a_lease_pass": "integration"
 }

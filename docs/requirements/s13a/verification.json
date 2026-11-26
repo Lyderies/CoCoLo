@@ -1,0 +1,68 @@
+{
+  "red": {
+    "product": "unchanged HEAD 5d1fd520 project_history.py",
+    "tests": 8,
+    "failures": 7,
+    "seconds": 2.668,
+    "passing_guard": "armed rows do not consume unarmed selection",
+    "failures_cover": [
+      "RS-B-9-B6-MECH",
+      "S13A-BOUND",
+      "S13A-BACKOFF",
+      "S13A-RESET",
+      "S13A-ORDER",
+      "S13A-FAIR"
+    ]
+  },
+  "green_registered": [
+    {
+      "test_count": 77,
+      "modules": {
+        "codex:tests.test_project_history": 1.2854878330836073,
+        "codex:tests.test_result_leases": 2.1244750829646364,
+        "codex:tests.test_s13_budgets": 7.607086958014406,
+        "codex:tests.test_s13a_lease_pass": 7.7762904580449685
+      },
+      "elapsed_seconds": 9.737076833029278,
+      "preflight_seconds": 8.33995449997019,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "python": "3.14.7",
+      "platform": "Darwin"
+    },
+    {
+      "test_count": 87,
+      "modules": {
+        "codex:tests.test_record_context": 8.229926207917742,
+        "codex:tests.test_recovery_line": 5.044357583974488,
+        "codex:tests.test_retirement_sweep": 4.0546187500003725
+      },
+      "elapsed_seconds": 9.106609582901001,
+      "preflight_seconds": 8.086373875034042,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "python": "3.14.7",
+      "platform": "Darwin"
+    }
+  ],
+  "green_direct": {
+    "test_count": 108,
+    "seconds": 22.274,
+    "modules_or_classes": [
+      "tests.test_project_hold_register.RegisterWriteTests",
+      "tests.test_project_hold_register.RegisterAdoptionTests",
+      "tests.test_project_hold_register.DenialRegisterTests",
+      "tests.test_holds_report",
+      "tests.test_project_holds_schema",
+      "tests.test_deadlines_retention.ContextSweepTests"
+    ]
+  },
+  "assertion_change": "RS-B-9-B6-MECH expected two pinned violations -> [] (planned); no other existing assertion changed",
+  "primary_socket_reruns": [
+    "codex:tests.test_project_hold_register",
+    "codex:tests.test_result_lease_lane",
+    "codex:tests.test_project_driver",
+    "codex:tests.test_deadlines_retention",
+    "codex:tests.test_b7b_budgets"
+  ]
+}

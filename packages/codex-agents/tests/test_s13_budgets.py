@@ -8,7 +8,7 @@ Protocol (so a scheduling pause on a loaded machine cannot fail a run without a 
   - wall-clock is a loose bound: each scenario is repeated on fresh stores and the figure is the median at each batch
     position (B1: one warm-up run, then the median of five), compared with the budget itself (5 ms, 50 ms, 60 s);
   - regression controls patch the product in this test only and must turn the same checks red.
-Two budgets are MISSED by the product; the tests that name them pin the measured miss (see docs/requirements/s13/STATUS.md).
+S13a now requires the B6 mechanism; production drain still pins its measured miss (see docs/requirements/s13/STATUS.md).
 """
 import importlib.util
 from pathlib import Path
@@ -108,13 +108,9 @@ class S13Budgets(unittest.TestCase):
 
     @requirements('RS-B-9-B6-MECH', why_not_scenario=WHY)
     def test_b6_finding_the_lease_start_pass_has_no_bounded_selection_and_no_back_off(self):
-        # FINDING (S13 fix round): RS-B draft 4 section 5's mechanism is not built in the lease start pass. The pass
-        # fetches every reserved lease on every batch (here 179) and never backs a blocked row off. This pins the
-        # measured miss; when the proposed step lands, this assertion is replaced by `[] == violations`.
+        # S13a implements the section 5 mechanism; keep S13's measurement and require no violations.
         row, = measurements().measure_b6((0,), repeats=1)
-        self.assertEqual(['selection unbounded: 179 rows selected in one batch',
-                          'no back-off: blocked rows are examined again by every batch'],
-                         b6_mechanism_violations(row), row)
+        self.assertEqual([], b6_mechanism_violations(row), row)
 
     @requirements('RS-B-9-B6', 'RS-10-FLAT', why_not_scenario=WHY)
     def test_b6_start_pass_work_is_equal_with_and_without_released_leases_of_history(self):
@@ -172,8 +168,7 @@ class S13RegressionControls(unittest.TestCase):
 
     @requirements('RS-S13-CONTROLS', why_not_scenario=WHY_CONTROL)
     def test_control_the_mechanism_check_separates_bounded_back_off_from_unbounded_and_none(self):
-        # No back-off exists in the product to remove, so the control is on the check: rows shaped like a pass that
-        # selects 64 and backs blocked rows off are clean; removing either part turns it red; the real pass is red.
+        # The control is on the check: bounded selection with back-off is clean; removing either part turns it red.
         met = {'batch_selected': [64, 64], 'batch_backed_off': [64, 128]}
         self.assertEqual([], b6_mechanism_violations(met))
         self.assertEqual(['no back-off: blocked rows are examined again by every batch'],

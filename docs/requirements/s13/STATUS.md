@@ -1,5 +1,8 @@
 # S13 status: DONE with two product findings (RS-B-9 B6 mechanism, RS-10 production drain)
 
+Follow-up: [S13a](../s13a/STATUS.md) resolves finding 1 and flips its pinned assertion.
+The figures below remain the accepted S13 baseline; finding 2 remains for S13b.
+
 Branch `feat/s13-budgets` on 0.8.66 (afb6f610). Test-only: `packages/codex-agents/tests/test_s13_budgets.py`,
 `packages/codex-agents/scripts/measure_s13.py`, registry entries, docs. Requirement map: [../s13.md](../s13.md).
 Raw numbers (macOS, CPython 3.14, disposable stores, 100,000 run): [measurements.json](measurements.json).
