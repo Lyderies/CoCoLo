@@ -179,7 +179,7 @@ def select_layers(layers, profile):
 
 
 def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1), profile='ci', catalogue=None,
-                 budget_debt=None, discovery_seconds=0., preflight_seconds=0., invocation_id=None, expected_fragments=None):
+                 budget_debt=None, discovery_seconds=0., preflight_seconds=0., invocation_id=None, expected_fragments=None, origin='ci'):
     modules = {}
     fragments = {}
     for row in rows:
@@ -200,7 +200,9 @@ def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1),
     expected_fragments = expected_fragments or {}
     complete = {name for name, units in expected_fragments.items() if units and
                 set(units) == {row['unit'] for row in rows if row['suite'] + ':' + row['unit'].split('#')[0] == name and row.get('returncode') == 0 and not row.get('timed_out')} }
-    retirement = sorted(name for name in debt if name in complete and name in modules and modules[name] <= BUDGETS[layers[name]]) if part == (1, 1) else []
+    looks_retirable = sorted(name for name in debt if name in complete and name in modules and modules[name] <= BUDGETS[layers[name]]) if part == (1, 1) else []
+    # Decision 425: a debt is retired only on CI-runner evidence; a local run may only report that a module looks retirable.
+    retirement = looks_retirable if origin == 'ci' else []
     plan = {'expected_fragments': supplied_fragments or {}, 'budget_debt': budget_debt or {}, 'layers': layers, 'stages': stages, 'selection': sorted(selection), 'profile': profile,
             'catalogue': catalogue or {}}
     return {'schema': 1, 'run_id': uuid.uuid4().hex, 'invocation_id': invocation_id or __import__('os').environ.get('COCOLO_TEST_RUN_ID') or uuid.uuid4().hex, 'python': platform.python_version(),
@@ -209,6 +211,7 @@ def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1),
             'unchecked_requirement_count': sum(not row['checks'] for row in (catalogue or {}).values()),
             'job_seconds': sum(row['seconds'] for row in rows), 'workers': rows, 'modules': modules,
             'budget_failures': failures, 'budget_warnings': warnings, 'debt_retirement_required': retirement,
+            'debt_retirable_local': [] if origin == 'ci' else looks_retirable, 'origin': origin,
             'discovery_seconds': discovery_seconds, 'preflight_seconds': preflight_seconds,
             'over_budget': over, 'partial': part != (1, 1), 'shard': list(part), 'plan': plan,
             'plan_digest': hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()}
@@ -242,7 +245,8 @@ def combine_measurements(reports):
                           budget_debt=first['plan']['budget_debt'],
                           discovery_seconds=sum(r['discovery_seconds'] for r in reports),
                           preflight_seconds=sum(r['preflight_seconds'] for r in reports), invocation_id=first['invocation_id'],
-                          expected_fragments=first['plan'].get('expected_fragments'))
+                          expected_fragments=first['plan'].get('expected_fragments'),
+                          origin='ci' if all(r.get('origin', 'ci') == 'ci' for r in reports) else 'local')
     result['metadata_errors'] = sorted({error for report in reports for error in report.get('metadata_errors', [])})
     outcomes = {key: value for row in rows for key, value in row.get('outcomes', {}).items()}
     result['requirements'] = coverage(first['plan']['catalogue'], outcomes)

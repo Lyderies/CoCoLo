@@ -370,6 +370,17 @@ class ReviewCoreTests(unittest.TestCase):
         self.assertEqual([], self.fw.measurements([{**row,'timed_out':True}], **options)['debt_retirement_required'], 'p02 timed_out must block retirement')
         self.assertEqual([], self.fw.measurements([{**row,'returncode':1}], **options)['debt_retirement_required'], 'p02 returncode must block retirement')
 
+    def test_A8b_local_measurement_never_requires_retirement_only_ci_evidence_does(self):
+        row = dict(suite='root', unit='m#0', seconds=1., names=['m.a'], returncode=0, timed_out=False)
+        options = dict(layers={'root:m': 'unit'}, stages={'root:m': 'unit'}, jobs=1, elapsed=1., selection=['root:m'],
+                       budget_debt={'modules': {'root:m': 10.}}, expected_fragments={'root:m':['m#0']})
+        local = self.fw.measurements([row], origin='local', **options)
+        self.assertEqual([], local['debt_retirement_required'])
+        self.assertEqual(['root:m'], local['debt_retirable_local'])
+        ci = self.fw.measurements([row], origin='ci', **options)
+        self.assertEqual(['root:m'], ci['debt_retirement_required'])
+        self.assertEqual([], ci['debt_retirable_local'])
+
     def test_A11_empty_method_rationale_falls_back_to_class(self):
         fw = self.fw
         class Case(unittest.TestCase):

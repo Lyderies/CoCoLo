@@ -551,7 +551,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     detail = framework.measurements(results, layers, stages, jobs=jobs, elapsed=elapsed, selection=selection, part=part,
                                     profile=profile, catalogue=catalogue,
                                     budget_debt=budget_debt, discovery_seconds=DISCOVERY_SECONDS, preflight_seconds=preflight_seconds,
-                                    expected_fragments=expected_fragments)
+                                    expected_fragments=expected_fragments,
+                                    origin='ci' if os.environ.get('GITHUB_ACTIONS') == 'true' else 'local')
     detail['profile'], detail['metadata_errors'] = profile, metadata_errors
     if recording_seconds is not None:
         detail['recording_seconds'] = recording_seconds
@@ -565,6 +566,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     for entry in detail['budget_warnings']:
         print(f'BUDGET DEBT: {entry["module"]} ceiling={entry["ceiling"]:.3f}s '
               f'{entry["status"]} seconds={entry["seconds"]}', flush=True)
+    for name in detail['debt_retirable_local']:
+        print(f'LOOKS RETIRABLE (local run, not evidence; retire only from a CI run): {name} is within its layer budget here', flush=True)
     for name in detail['debt_retirement_required']:
         print(f'RETIRE BUDGET DEBT: {name} is now within its layer budget', flush=True)
     for entry in detail['budget_failures']:
@@ -589,6 +592,7 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                       "job_seconds": round(detail['job_seconds'], 3), "over_budget": detail['over_budget'],
                       "budget_failures": detail['budget_failures'], "budget_warnings": detail['budget_warnings'],
                       "debt_retirement_required": detail['debt_retirement_required'],
+                      "debt_retirable_local": detail['debt_retirable_local'],
                       "discovery_seconds": DISCOVERY_SECONDS, "preflight_seconds": preflight_seconds,
                       "metadata_errors": metadata_errors, "partial": detail['partial'], "profile": profile,
                       "requirement_failures": requirement_failures,
