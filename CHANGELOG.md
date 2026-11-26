@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.69: usage partial reasons now reach reply history, due holds drain at production cadence, low disk refuses new runs and run checks fail closed (IP-C).
+
 - Package 0.8.68: batch of health holds, workspace checks, run retention (indexes in schema 18), usage install and test-speed changes (IP-B).
 
 - Package 0.8.67: one thread now owns all account-records access, fair and bounded; a child's temp folder that will not delete is retried in the background with a warning in status, and never blocks an update; long sessions roll over to a new orchestration automatically, staying paused if paused.
