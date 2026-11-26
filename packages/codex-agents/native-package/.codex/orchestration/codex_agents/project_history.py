@@ -1616,6 +1616,13 @@ class ProjectHistory:
              value.claim_binding_digest, self._lease_seal(value), self.project_id,
              value.binding.run_handle, value.binding.attempt),
         )
+        if value.state in {"bound", "expired"}:
+            # S13a: every lease release path resets the start-pass retry, in the source transaction.
+            self._connection.execute(
+                "UPDATE project_holds SET next_check_ms=0,evidence=CASE WHEN evidence IS NOT NULL "
+                "THEN json_remove(evidence,'$.start_pass_failures') END WHERE project_id=? AND kind='lease' "
+                "AND identity=? AND next_check_ms<>0",
+                (self.project_id, attempt_identity(value.binding.run_handle, value.binding.attempt)))
 
     def _reclaim_if_full(self):
         """Reclaim on allocation (0.3.4 R8): a store that looks full first retires what it may (results
@@ -1753,6 +1760,10 @@ class ProjectHistory:
             project_holds_schema.take_hold(self._connection, self.project_id, "lease",
                                            attempt_identity(binding.run_handle, binding.attempt), now_ms=now,
                                            lease_case="unarmed", due_at_ms=until)
+            # New arrivals join in check-time order, behind older due retries (RS-B section 5).
+            self._connection.execute("UPDATE project_holds SET next_check_ms=? WHERE project_id=? "
+                                     "AND kind='lease' AND identity=?",
+                                     (now, self.project_id, attempt_identity(binding.run_handle, binding.attempt)))
             if context is not None:
                 # D1 (SH-3 "taken"): the context row and its custody hold, in the lease's own transaction.
                 project_result_contexts.insert(self, binding.run_handle, binding.attempt, context[1], len(context[0]),
@@ -2573,6 +2584,26 @@ class ProjectHistory:
             raise HistoryError(failure)
         return retired
 
+    def _defer_unarmed_lease(self, identity, now):
+        """A blocked start-pass row waits 1 s, doubling to 5 min; keep its other evidence and deadline."""
+        row = self._connection.execute("SELECT evidence FROM project_holds WHERE project_id=? AND kind='lease' "
+                                       "AND identity=? AND state='held' AND lease_case='unarmed'",
+                                       (self.project_id, identity)).fetchone()
+        if row is None:
+            return
+        evidence = json.loads(row['evidence'] or '{}')
+        failures = evidence.get('start_pass_failures', 0)
+        if not valid_integer(failures):
+            raise HistoryError('history_incompatible')
+        failures = min(failures + 1, 32)
+        evidence['start_pass_failures'] = failures
+        retry = now + min(300_000, 1000 * 2 ** (failures - 1))
+        project_holds_schema.wake_before(self.project_id, retry)
+        self._connection.execute("UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? "
+                                 "AND kind='lease' AND identity=?",
+                                 (retry, project_holds_schema.evidence_json(**evidence), self.project_id, identity))
+        self._unarmed_lease_pass_pending = True
+
     @_operation
     def release_earlier_unarmed_leases(self, live, *, limit: int = 10) -> int:
         """RS-B L1 (draft 2 §3, G4): release the unarmed leases no live run of this service holds.
@@ -2581,8 +2612,12 @@ class ProjectHistory:
         their lane jobs. So an unarmed lease outside `live` (the (run handle, attempt) of every lease the caller's
         live jobs hold) belongs to a service that stopped: it can never be armed, and with no host open no claim of
         it was ever sent. It is released `withdrawn_unsent` at once, not at its deadline, exactly as
-        `release_unsent_result_lease` would. Leases in `live` are untouched. At most `limit` per pass.
+        `release_unsent_result_lease` would. Live leases remain held. ONE selection of at most min(limit,64) due unarmed
+        rows per call (decision 354, RS-B section 5/12), oldest next_check_ms first; blocked rows back off 1 s doubling
+        to 5 min and so leave the due set; the next pass (next driver step) reaches the rows behind them.
         """
+        # Writer-local progress for RS-B section 12; each call replaces the previous pass's signal.
+        self._unarmed_lease_pass_pending = False
         if self._result_key is None:
             raise HistoryError("history_result_unavailable")
         try:
@@ -2593,19 +2628,25 @@ class ProjectHistory:
                 or any(type(key) is not tuple or len(key) != 2 or type(key[0]) is not str or type(key[1]) is not int
                        for key in live)):
             raise HistoryError("history_invalid_input")
+        now = self._hold_now()
         positions = self._connection.execute(
-            "SELECT rowid,run_handle,attempt FROM result_leases WHERE project_id=? AND state='reserved' ORDER BY rowid",
-            (self.project_id,)).fetchall()
+            "SELECT h.identity,l.run_handle,l.attempt FROM project_holds h INDEXED BY project_holds_due "
+            "CROSS JOIN result_leases l ON l.project_id=h.project_id "
+            "AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) "
+            "AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) "
+            "WHERE h.project_id=? AND h.state<>'released' AND h.state='held' AND h.kind='lease' "
+            "AND h.lease_case='unarmed' AND l.state='reserved' AND h.next_check_ms<=? "
+            "ORDER BY h.next_check_ms LIMIT ?", (self.project_id, now, min(limit, 64))).fetchall()
         released, failure = 0, None
-        for position, run_handle, attempt in positions:
-            if released >= limit:
-                break
-            if (run_handle, attempt) in live:
-                continue
+        for identity, run_handle, attempt in positions:
             try:
                 with self._transaction():
-                    value = self._lease(self._connection.execute("SELECT * FROM result_leases WHERE rowid=?",
-                                                                 (position,)).fetchone())
+                    if (run_handle, attempt) in live:
+                        self._defer_unarmed_lease(identity, now)
+                        continue
+                    value = self._lease(self._connection.execute(
+                        "SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                        (self.project_id, run_handle, attempt)).fetchone())
                     key = (value.binding.run_handle, value.binding.attempt)
                     if value.state != "reserved" or key in live:
                         continue
@@ -2614,18 +2655,23 @@ class ProjectHistory:
                             or self._connection.execute("SELECT 1 FROM result_reservations WHERE project_id=? "
                                                         "AND run_handle=? AND attempt=? LIMIT 1",
                                                         (self.project_id, *key)).fetchone() is not None):
+                        self._defer_unarmed_lease(identity, now)
                         continue  # Not an unsent lease after all: left for its own closure.
                     self._set_lease(replace(value, state="expired"))
                     project_holds_schema.release_hold(
                         self._connection, self.project_id, "lease", attempt_identity(*key), "withdrawn_unsent",
-                        now_ms=self._hold_now(), evidence=project_holds_schema.evidence_json(by="start_pass"))
+                        now_ms=now, evidence=project_holds_schema.evidence_json(by="start_pass"))
                     ending = project_result_contexts.release_unfinished(  # D1 (SH-3, O2)
-                        self, *key, "withdrawn_unsent", self._hold_now())
+                        self, *key, "withdrawn_unsent", now)
                 if ending:
                     project_result_contexts.finish_quietly(self, *key)
                 released += 1
             except HistoryError as error:
                 failure = failure or error.reason_code  # One lease that does not verify never stops the others.
+                with self._transaction():
+                    self._defer_unarmed_lease(identity, now)
+        # A failed inspection/backoff must not turn an unchanged full selection into a retry spin.
+        self._unarmed_lease_pass_pending |= len(positions) == min(limit, 64)
         if failure is not None:
             raise HistoryError(failure)
         return released

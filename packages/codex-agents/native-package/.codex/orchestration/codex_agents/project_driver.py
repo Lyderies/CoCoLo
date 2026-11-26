@@ -1946,11 +1946,15 @@ class RunDriver:
 
     def _expire_results(self):
         """Owner step: retire results past their retention or whose orchestration closed, and remove
-        finished rows, at start and then every EXPIRY_SECONDS (0.3.4 R2). In 0.8.29 nothing ran this,
+        finished rows, at start and then every EXPIRY_SECONDS (0.3.4 R2). A full lease pass or one
+        that backed rows off queues the next pass on the next driver step (RS-B section 12).
+        In 0.8.29 nothing ran this,
         so a project's results were never retired and its store filled for good."""
         if self._expiry is not None:
             if self._expiry.state == 'queued':
                 return
+            if self._expiry.state == 'done' and getattr(self._expiry, 'lease_pass_pending', False):
+                self._next_expiry = self._clock()
             self._expiry = None  # Done or failed: a failure stays charged and is tried again later.
         if self._clock() < self._next_expiry:
             return

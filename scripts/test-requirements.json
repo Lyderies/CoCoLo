@@ -4938,5 +4938,130 @@
   ],
   "source": "tests/requirements/s11.json#HM2A-11",
   "statement": "The collector registers the workspaces check with a read-only pending reader over the project histories (no I/O at registration); a pass removes an orphan folder and keeps a live driver's folder."
+ },
+ "RS-10-DUE": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_1000_due_holds_drain_in_batches_of_64_each_under_50_ms_and_well_inside_60_s"
+  ],
+  "source": "tests/requirements/s13.json#RS-10-DUE",
+  "statement": "1,000 due holds drain, at the start pass's own batch size of 64 (direct calls, scheduling excluded), within ceil((1000+64)/64)+1 = 18 batches, at most 64 released per batch, each batch under 50 ms (median of three repeats) and in total under 60 s. The production path is RS-10-DUE-PROD."
+ },
+ "RS-10-FLAT": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_b6_start_pass_work_is_equal_with_and_without_released_leases_of_history"
+  ],
+  "source": "tests/requirements/s13.json#RS-10-FLAT",
+  "statement": "The start pass's work is flat as released history grows (small scale in the suite; 100,000 released leases and reservations in scripts/measure_s13.py)."
+ },
+ "RS-B-9-B1": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_b1_register_and_memory_writer_work_of_a_normal_run_is_under_5_ms"
+  ],
+  "source": "tests/requirements/s13.json#RS-B-9-B1",
+  "statement": "Per normal run, the added writer work of all RS-B register transactions (reserve, arm, bind, commit, reservation release, including the reservation/hold JOIN inside _release_obligation) plus the commit cost the register rows add plus the memory-hold transactions is under 5 ms in total, measured on the real operations (one warm-up run, then the median of five)."
+ },
+ "RS-B-9-B6": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_b6_one_eligible_row_behind_128_blocked_and_50_arrivals_per_batch_within_4_batches",
+   "codex:tests.test_s13_budgets.S13Budgets.test_b6_start_pass_work_is_equal_with_and_without_released_leases_of_history"
+  ],
+  "source": "tests/requirements/s13.json#RS-B-9-B6",
+  "statement": "One eligible unarmed lease behind 128 blocked (live) leases, with 50 new blocked arrivals before every batch, is released within 4 start-pass batches, at most 64 released per batch, the median wall-clock of each batch position under 50 ms over repeated runs; the pass does equal SQLite work with and without released lease history. This is the observable budget; the section 5 mechanism is RS-B-9-B6-MECH."
+ },
+ "RS-B-9-B6-MECH": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_b6_finding_the_lease_start_pass_has_no_bounded_selection_and_no_back_off"
+  ],
+  "source": "tests/requirements/s13.json#RS-B-9-B6-MECH",
+  "statement": "RS-B draft 4 section 5 (bounded selection, back-off, re-due order): a start-pass batch selects at most 64 rows and a blocked row gets a back-off so later batches do not examine it before it is due."
+ },
+ "RS-10-DUE-PROD": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_rs10_finding_the_service_maintenance_cadence_misses_the_60_s_drain_of_1000_due_holds"
+  ],
+  "source": "tests/requirements/s13.json#RS-10-DUE-PROD",
+  "statement": "1,000 due holds are released within 60 s through the real driver maintenance step and real persistence writer: one lease pass at limit 64 per request, full or backed-off passes continued on the next driver step, otherwise the ten-second cadence applies."
+ },
+ "RS-S13-CONTROLS": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13RegressionControls.test_control_a_pass_that_drains_everything_clears_the_production_finding",
+   "codex:tests.test_s13_budgets.S13RegressionControls.test_control_a_pass_that_releases_128_rows_per_call_fails_the_per_batch_limit",
+   "codex:tests.test_s13_budgets.S13RegressionControls.test_control_a_slowed_reservation_hold_join_fails_b1",
+   "codex:tests.test_s13_budgets.S13RegressionControls.test_control_the_mechanism_check_separates_bounded_back_off_from_unbounded_and_none"
+  ],
+  "source": "tests/requirements/s13.json#RS-S13-CONTROLS",
+  "statement": "Regression controls: patching the product in the test only, to release 128 rows per call or to slow the reservation/hold JOIN by 6 ms, turns the per-batch and B1 checks red; the mechanism check is red for an unbounded selection or a missing back-off; a pass that drains everything clears the production finding."
+ },
+ "S13A-BOUND": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_128_blocked_plus_arrivals_select_at_most_64_even_with_limit_100",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_all_eligible_rows_still_release_at_most_64_with_limit_100",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_armed_rows_do_not_consume_the_unarmed_batch"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-BOUND",
+  "statement": "The unarmed lease start pass selects at most min(limit,64) held unarmed due rows from the existing partial register index, including with 128 blocked rows and 50 new blocked arrivals per batch; armed rows do not consume the batch and eligible releases remain bounded by 64."
+ },
+ "S13A-BACKOFF": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_backoff_doubles_from_one_second_to_300_and_skips_until_due_across_reopen",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_host_open_blocker_backs_off_inside_the_inspection_transaction",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_inspection_refusal_backs_off_and_does_not_stop_other_rows"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-BACKOFF",
+  "statement": "A blocked unarmed lease is deferred in its inspection batch for 1 s, doubling on each retry to a 300 s cap; retries persist across reopen, do not occur before next_check_ms, leave due_at_ms unchanged, and an inspection refusal does not prevent progress of other selected rows."
+ },
+ "S13A-RESET": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_release_resets_backoff_for_start_pass_explicit_release_expiry_and_bind"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-RESET",
+  "statement": "Every lease release resets next_check_ms and its start-pass backoff counter, including start-pass release, explicit unsent release, lease expiry, and binding to a reservation."
+ },
+ "S13A-ORDER": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_due_rows_are_selected_by_next_check_not_lease_insertion_order"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-ORDER",
+  "statement": "The unarmed lease start pass selects only next_check_ms <= now, in ascending next_check_ms order rather than source insertion order."
+ },
+ "S13A-FAIR": {
+  "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_64_blocked_rows_ahead_of_eligible_rows_do_not_starve_them",
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_blocked_row_is_retried_when_due_despite_a_full_batch_of_new_arrivals"
+  ],
+  "source": "tests/requirements/s13a.json#S13A-FAIR",
+  "statement": "A previously blocked lease is retried once its backoff ends despite full batches of new blocked arrivals; new leases join with their creation time as next_check_ms so they cannot continually overtake an older due retry."
+ },
+ "S13B-NEXT": {
+  "statement": "Each production expiry writer request runs one unarmed lease start pass at limit 64; a full pass queues one next request on the next driver step without waiting EXPIRY_SECONDS.",
+  "source": "tests/requirements/s13b.json#S13B-NEXT",
+  "checks": [
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_pass_queues_one_request_on_next_step_and_selects_at_most_64_per_call"
+  ]
+ },
+ "S13B-BOUND": {
+  "statement": "The production drain selects at most 64 due unarmed lease rows per call, including full blocked prefixes, and drains eligible rows on later driver steps without an in-call selection loop.",
+  "source": "tests/requirements/s13b.json#S13B-BOUND",
+  "checks": [
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_pass_queues_one_request_on_next_step_and_selects_at_most_64_per_call",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff"
+  ]
+ },
+ "S13B-IDLE": {
+  "statement": "A non-full production lease pass with no backed-off rows keeps the ten-second expiry cadence; queued and failed requests never cause immediate duplicate or failed-request retries. A full selection whose inspection/backoff fails without progress also waits for the normal cadence.",
+  "source": "tests/requirements/s13b.json#S13B-IDLE",
+  "checks": [
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_non_full_pass_without_backoff_keeps_ten_second_cadence",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_queued_or_failed_request_never_triggers_immediate_retry",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_selection_that_cannot_back_rows_off_waits_instead_of_spinning"
+  ]
+ },
+ "S13B-BACKOFF": {
+  "statement": "A production lease pass that backs rows off continues on the next driver step even if non-full or releasing zero; the following empty pass stops continuation, so all-blocked rows are not retried before durable backoff and eligible rows behind blocked rows progress.",
+  "source": "tests/requirements/s13b.json#S13B-BACKOFF",
+  "checks": [
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_non_full_backed_off_pass_continues_then_empty_pass_stops_busy_loop",
+   "codex:tests.test_s13b_due_drain.DueDrainTests.test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff"
+  ]
  }
 }

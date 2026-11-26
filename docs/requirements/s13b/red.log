@@ -1,0 +1,92 @@
+<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/learning_support.py:618: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/claude-501/s13b/fake-client-launcher-_ezelnv2/launcher' mode='r' encoding='UTF-8'>
+  _LAUNCHER_CONTENT = open(path).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/claude-501/s13b/fake-client-launcher-_ezelnv2/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+F<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/claude-501/s13b/fake-client-launcher-_ezelnv2/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+F<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/claude-501/s13b/fake-client-launcher-_ezelnv2/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+F<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/claude-501/s13b/fake-client-launcher-_ezelnv2/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+F<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/claude-501/s13b/fake-client-launcher-_ezelnv2/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/claude-501/s13b/fake-client-launcher-_ezelnv2/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.
+======================================================================
+FAIL: test_rs10_finding_the_service_maintenance_cadence_misses_the_60_s_drain_of_1000_due_holds (tests.test_s13_budgets.S13Budgets.test_rs10_finding_the_service_maintenance_cadence_misses_the_60_s_drain_of_1000_due_holds)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/test_s13_budgets.py", line 131, in test_rs10_finding_the_service_maintenance_cadence_misses_the_60_s_drain_of_1000_due_holds
+    self.assertEqual([], production_violations(value), value)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != ['drain took 991 s (60 s budget): 100 pass[50 chars]0 s']
+
+Second list contains 1 additional elements.
+First extra element 0:
+'drain took 991 s (60 s budget): 100 passes of at most 10, one every 10 s; 60 released by 60 s'
+
+- []
++ ['drain took 991 s (60 s budget): 100 passes of at most 10, one every 10 s; 60 '
++  'released by 60 s'] : {'due': 1000, 'released': 1000, 'passes': 100, 'pass_limit': 10, 'cadence_seconds': 10.0, 'seconds_until_drained': 990.9557624656009, 'seconds_elapsed': 990.9557624656009, 'released_by_pass': [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], 'pass_ms_median': 4.532895982265472, 'limit_seconds': 60, 'released_within_60_s': 60}
+
+======================================================================
+FAIL: test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff (tests.test_s13b_due_drain.DueDrainTests.test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/test_s13b_due_drain.py", line 137, in test_full_blocked_pass_reaches_eligible_rows_then_waits_for_backoff
+    self.assertEqual([(64, 64), (64, 1)], self.passes)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [(64, 64), (64, 1)] != [(10, 10)]
+
+First differing element 0:
+(64, 64)
+(10, 10)
+
+First list contains 1 additional elements.
+First extra element 1:
+(64, 1)
+
+- [(64, 64), (64, 1)]
++ [(10, 10)]
+
+======================================================================
+FAIL: test_full_pass_queues_one_request_on_next_step_and_selects_at_most_64_per_call (tests.test_s13b_due_drain.DueDrainTests.test_full_pass_queues_one_request_on_next_step_and_selects_at_most_64_per_call)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/test_s13b_due_drain.py", line 93, in test_full_pass_queues_one_request_on_next_step_and_selects_at_most_64_per_call
+    self.assertEqual(66, len(self.held()))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 66 != 120
+
+======================================================================
+FAIL: test_non_full_backed_off_pass_continues_then_empty_pass_stops_busy_loop (tests.test_s13b_due_drain.DueDrainTests.test_non_full_backed_off_pass_continues_then_empty_pass_stops_busy_loop)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/test_s13b_due_drain.py", line 121, in test_non_full_backed_off_pass_continues_then_empty_pass_stops_busy_loop
+    self.assertEqual([(64, 3), (64, 0)], self.passes)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [(64, 3), (64, 0)] != [(10, 3)]
+
+First differing element 0:
+(64, 3)
+(10, 3)
+
+First list contains 1 additional elements.
+First extra element 1:
+(64, 0)
+
+- [(64, 3), (64, 0)]
++ [(10, 3)]
+
+----------------------------------------------------------------------
+Ran 6 tests in 3.665s
+
+FAILED (failures=4)

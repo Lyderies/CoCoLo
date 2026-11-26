@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_full_selection_that_cannot_back_rows_off_waits_instead_of_spinning (tests.test_s13b_due_drain.DueDrainTests.test_full_selection_that_cannot_back_rows_off_waits_instead_of_spinning)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-s13b/packages/codex-agents/tests/test_s13b_due_drain.py", line 176, in test_full_selection_that_cannot_back_rows_off_waits_instead_of_spinning
+    self.assertEqual(1, len(self.passes))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 2
+
+----------------------------------------------------------------------
+Ran 1 test in 0.335s
+
+FAILED (failures=1)
