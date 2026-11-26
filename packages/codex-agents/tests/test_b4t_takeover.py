@@ -3058,6 +3058,7 @@ class AmendmentA1Tests(unittest.TestCase):
     @requirements('RS-B-B4t-0','RS-B-B4t-9')
     def test_released_0859_owner_upgrade_preserves_project_local_enumeration(self):
         from codex_agents.learning_store import LearningLedger,LearningState,LOCAL_TABLE_COLUMNS,OTHER_TABLE_COLUMNS
+        from codex_agents.collector_client import PACKAGE_VERSION
         with tempfile.TemporaryDirectory(dir='/tmp') as folder:
             root=Path(folder).resolve(); old=root/'old';old.mkdir(); project=root/'project';project.mkdir()
             packed=subprocess.run(['git','-C',str(Path(__file__).parents[3]),'archive','227b0c5e',
@@ -3076,7 +3077,7 @@ class AmendmentA1Tests(unittest.TestCase):
                 for table in LOCAL_TABLE_COLUMNS:
                     self.assertIn('project_id',[r[1] for r in owner._connection.execute('PRAGMA table_info('+table+')')])
                 self.assertEqual(('singleton','floor_version'),OTHER_TABLE_COLUMNS['runtime_floor'])
-                self.assertEqual([(1,'0.8.67')],[tuple(r) for r in owner._connection.execute('SELECT * FROM runtime_floor')])
+                self.assertEqual([(1,PACKAGE_VERSION)],[tuple(r) for r in owner._connection.execute('SELECT * FROM runtime_floor')])
 
 
     @requirements('RS-B-B4t-8','RS-B-B4t-10')

@@ -75,6 +75,9 @@ class AccountObservationSchemaTests(unittest.TestCase):
         for name in ('records_run', 'records_candidate', 'records_type_observed', 'records_foreign_admissions',
                      'account_cleanup_receipts_unreleased'):
             db.execute('DROP INDEX IF EXISTS ' + name)  # U3 additive indexes postdate schema 11.
+        for name in ('records_run_retention', 'record_links_retention_to', 'account_open_retention_run',
+                     'consumed_grants_retention_promotion', 'stored_files_retention_source'):
+            db.execute('DROP INDEX IF EXISTS ' + name)  # S14b (decision 352): schema 18's retention indexes, likewise
         db.execute('DROP INDEX IF EXISTS host_run_bindings_live')  # O0b B0-1: likewise
         db.execute('DROP INDEX IF EXISTS billing_probes_in_progress')  # O0b B0-5: likewise
         db.execute('DROP INDEX IF EXISTS account_open_requests_in_flight')  # OP-1: likewise
