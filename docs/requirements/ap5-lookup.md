@@ -14,6 +14,9 @@ ANALYSIS-0.4.0-p38-inventory slice 4, rows AP3, AP5-2 and AP5-3.
   account-ledger copy must open, read, validate and append with the recorded
   same-schema previous release's actual code in a separate process, then reopen
   correctly with this version. Retain the existing append/type index checks.
+  Decision 348 (follows B4t H1d, T-5): the previous release is the newest recorded one with the same ledger
+  schema; while none exists (B4t makes schema 18), the check asserts the current schema is newer than every
+  released one and that released 0.8.61 refuses the indexed copy with zero ledger writes.
 
 The focused lookup and compatibility checks live in
 [`CandidateEvidenceLookupTests`](../../packages/codex-agents/tests/test_candidate_evidence_lookup.py).

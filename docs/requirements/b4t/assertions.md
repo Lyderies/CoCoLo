@@ -340,9 +340,22 @@ operation(s) and `service.stop_for_update`". D2.8 names the reads (`history.take
 | `test_updfix` `test_UPDFIX_2_refused_needs_both_a_child_and_a_replacement` | `refused == children and replace` → `refused == False` (the `children_running` and `would_replace` checks are unchanged) | D2.1/SW-3 ("B4t removes only UPDFIX's `child_run_active` refusal"), B4t-0. The product's `refused = unreadable` is from the earlier B4t rounds |
 | `test_updfix` `test_UPDFIX_2_a_claimed_unreleased_run_is_a_child_that_may_be_running` | fixture: the test's own open ledger is closed before the check. The assertion `(would_replace, refused) == (False, False)` is unchanged | The test says "No collector runs here". Under A1.5 row 10, an open ledger holds `collector.lock` without answering `health`, so it is a `collector_unresponsive` collector. The fixture now builds the scenario its comment states |
 
-Not changed, so the primary must decide: `test_candidate_evidence_lookup` AP3. The test needs released 0.8.61
-(ledger schema 17) to open the current ledger. H1d ("Every binary before B4t refuses a store past its own
-schema") and T-5 require schema 18 to refuse it. No released schema-18 build exists yet.
+Decision 348 (S5 follow-up), `test_candidate_evidence_lookup` AP3, re-aimed not loosened (no skip):
+- `test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release`. Old: hard-coded released 0.8.61
+  (schema 17) must open, read, append to the indexed copy. New: derive every previous release's ledger schema from its
+  archived `collector_contracts.py` (fails loudly if not exactly one `LEDGER_SCHEMA_VERSION`); use the newest release
+  with the same schema as the current one and run the unchanged open/read/append checks; if none exists (now: 0.8.68 is
+  the first schema 18), assert current schema > every released schema, then that released 0.8.61 refuses the
+  indexed copy (LedgerError, non-zero exit) and every ledger file stays byte-identical. Reason: B4t H1d / T-5, owner 129.3.
+  Observed: the old build's writer fence still stamps `collector.lock` before it reads the schema, so that one lock file
+  is excluded from the byte-identity check (ledger database untouched).
+- `test_AP3_missing_previous_source_has_actionable_failure`: unchanged; still fails explicitly naming 0.8.61 / 782a7eed.
+- AP3 statement (tests/requirements/ap5-lookup.json, scripts/test-requirements.json, docs/requirements/ap5-lookup.md):
+  Old: "...an older same-schema release still opens, reads and appends to an indexed account-ledger copy."
+  New: "...an older release with the same ledger schema still opens, reads and appends ...; while none exists, older
+  releases refuse with zero writes (B4t H1d; decision 348)."
+  (`generate_test_metadata.py --catalogue` does not cover the ap5 source and only adds unrelated lifecycle-check drift,
+  so the registry row was edited to match the source exactly.)
 
 Product changes (no test edits): `learning_store._migrate` keeps a pre-18 ledger that already carries the exact
 B4t authority tables, and upgrades it instead of refusing it (owner 129.3). Its floor still binds.

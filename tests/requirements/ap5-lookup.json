@@ -3,7 +3,7 @@
  "requirements": [
   {
    "id": "AP3",
-   "statement": "No schema version change and no owner step: an older same-schema release still opens, reads and appends to an indexed account-ledger copy.",
+   "statement": "No schema version change and no owner step: an older release with the same ledger schema still opens, reads and appends to an indexed account-ledger copy; while none exists, older releases refuse with zero writes (B4t H1d; decision 348).",
    "source": "tests/requirements/ap5-lookup.json#AP3"
   },
   {
