@@ -272,21 +272,23 @@ def _page(connection, store, project_id, file_id, table, last):
         parameters.extend(last)
     sql += " ORDER BY " + ",".join(keys) + " LIMIT 32"
     cursor = connection.execute(sql, parameters)
-    rows, used = [], 0
+    rows, encoded, used = [], [], 0
     try:
         for raw in cursor:
             row = {name: store._backup_encode_value(raw[name]) for name in columns}
-            size = len(canonical_json(row))
+            canonical = canonical_json(row)
+            size = len(canonical)
             if size > PAGE_BYTES:
                 raise HistoryError("history_learning_capacity")
             if used + size > PAGE_BYTES:
                 break
             _key(row, keys)
             rows.append(row)
+            encoded.append(canonical)  # the comparison reuses it instead of encoding the row again
             used += size
     finally:
         cursor.close()
-    return rows
+    return rows, encoded
 
 
 def _compare(connection, store, project_id, file_id, backup, limits, now):
@@ -312,15 +314,15 @@ def _compare(connection, store, project_id, file_id, backup, limits, now):
         try:
             last = None
             while True:
-                rows = connection.transaction_read_call(limits,
+                rows, encoded = connection.transaction_read_call(limits,
                     lambda: _page(connection, store, project_id, file_id, table, last))
                 if not rows:
                     if next(expected, None) is not None:
                         raise HistoryError("history_conflict")
                     break
-                for row in rows:
+                for row, canonical in zip(rows, encoded):
                     wanted = next(expected, None)
-                    if wanted is None or canonical_json(row) != canonical_json(wanted):
+                    if wanted is None or canonical != canonical_json(wanted):
                         raise HistoryError("history_conflict")
                 # Resume after the last CONSUMED row if the byte envelope stopped a
                 # page early. A fetched-but-unconsumed row is read again next page.
