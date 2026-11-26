@@ -5182,10 +5182,11 @@
    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_test_must_exist",
    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught",
    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end",
-   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site"
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_kinds_require_bounds_only_for_count_bytes_and_time"
   ],
   "source": "tests/requirements/s15.json#S15-O0C-GUARD",
-  "statement": "O0c: every lifetime-cap registry entry, including a stale site, must name a nonempty ends description and an existing test; new or increased count-limit sites must be registered."
+  "statement": "Decision 382: every lifetime-cap registry entry has kind and nonempty ends; count, bytes and time bind an existing real past-limit test; validation, read_only and precondition require ends only. New/increased sites remain guarded; only six source-proven stale sites may be removed."
  },
  "S15-O0C-P3": {
   "checks": [
@@ -5235,5 +5236,13 @@
   ],
   "source": "tests/requirements/s15.json#S15-RS8-RELEASE-PATHS",
   "statement": "RS-8: actual unsent/expired/successor lease and companion custody releases, lease-to-reservation transfer, custody retention, normal memory retirement, refusal and handover paths, primary and unattended orchestration close, and authenticated denial release once and replay without changing their first register release."
+ },
+ "S15-O0C-FIRST-RECORD": {
+  "checks": [
+   "codex:tests.test_s15_session_caps.SessionCapTests.test_first_record_rejects_one_byte_past_its_real_byte_limit",
+   "codex:tests.test_s15_session_caps.SessionCapTests.test_first_record_exact_boundary_at_reduced_limit"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-FIRST-RECORD",
+  "statement": "O0c / decision 382: the session first-record parser accepts an exact MAX_FIRST_RECORD_BYTES JSON record and refuses one byte beyond the production limit, including when the excess and newline arrive in the next read block."
  }
 }

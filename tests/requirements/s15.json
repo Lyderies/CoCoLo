@@ -8,7 +8,7 @@
   },
   {
    "id": "S15-O0C-GUARD",
-   "statement": "O0c: every lifetime-cap registry entry, including a stale site, must name a nonempty ends description and an existing test; new or increased count-limit sites must be registered.",
+   "statement": "Decision 382: every lifetime-cap registry entry has kind and nonempty ends; count, bytes and time bind an existing real past-limit test; validation, read_only and precondition require ends only. New/increased sites remain guarded; only six source-proven stale sites may be removed.",
    "source": "tests/requirements/s15.json#S15-O0C-GUARD"
   },
   {
@@ -40,6 +40,11 @@
    "id": "S15-O0C-BINDINGS",
    "statement": "O0c: real populations beyond reduced session directory, day, setup-project, rollout-read, fair-queue and SQLite cursor count limits demonstrate bounded work or refusal, with subsequent scanning/admission/read scopes usable.",
    "source": "tests/requirements/s15.json#S15-O0C-BINDINGS"
+  },
+  {
+   "id": "S15-O0C-FIRST-RECORD",
+   "statement": "O0c / decision 382: the session first-record parser accepts an exact MAX_FIRST_RECORD_BYTES JSON record and refuses one byte beyond the production limit, including when the excess and newline arrive in the next read block.",
+   "source": "tests/requirements/s15.json#S15-O0C-FIRST-RECORD"
   }
  ]
 }

@@ -4419,7 +4419,21 @@
     }
    ],
    "disposition": "listed-non-count",
-   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
+   "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound.",
+   "kind": "bytes",
+   "decision_382_evidence": {
+    "status": "product-defect-stop",
+    "test": "codex:tests.test_s15_session_caps.SessionCapTests.test_first_record_rejects_one_byte_past_its_real_byte_limit",
+    "limit": 8388608,
+    "stimulus_bytes": 8388609,
+    "newline_bytes": 1,
+    "exact_limit_accepted": true,
+    "expected": "SessionRefused",
+    "observed": "accepted dictionary; SessionRefused not raised",
+    "direct_run_seconds": 0.017,
+    "reason": "At size == MAX_FIRST_RECORD_BYTES, the <= loop reads another 65536 bytes; a newline in that block breaks before accounting or checking the appended JSON bytes.",
+    "scope": "Production limit, real file, actual parser; no patched reads, synthetic counter or SQL writes."
+   }
   },
   {
    "site": "session_guard.py::_last_turn_context",
@@ -4744,5 +4758,13 @@
    "disposition": "listed-non-count",
    "reason": "Matched lines bound bytes, elapsed time, scalar values, static shape/minimum evidence or allowed-set membership; they do not cap a population of live/retained entries. Registry retained unbound."
   }
- ]
+ ],
+ "decision_382_progress": {
+  "status": "STOP: product byte-cap defect",
+  "registry_kinds_completed": false,
+  "all_required_bindings_completed": false,
+  "matrix_completed": false,
+  "stale_sites_removed": [],
+  "guard_rule_controls": "new decision 382 control red before implementation, green after; full registry remains red"
+ }
 }

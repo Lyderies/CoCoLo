@@ -5,7 +5,10 @@ account_open_requests blocked every child of a project (ANALYSIS-0.4.0-lifetime-
 the runtime counts against a limit is listed in lifetime_caps.json, keyed by file and function. The
 places audited on 2026-11-21 are the baseline. A new place, or more limit checks in a listed function,
 fails this test until it is listed with how the counted things end and the test that proves a run past
-the limit still works (the 0.3.4 ResultLimitTests shape).
+the limit still works (the 0.3.4 ResultLimitTests shape). Decision 382 classifies the broad scan:
+every entry needs kind and ends; count/bytes/time need past-limit tests, while
+validation/read_only/precondition need ends only. Test-name existence is a static check, not
+a substitute for reviewing the bound test's real past-limit stimulus.
 """
 
 from __future__ import annotations
@@ -47,10 +50,18 @@ def runtime_sites() -> collections.Counter:
     return sites
 
 
+KINDS = frozenset(('count', 'bytes', 'time', 'validation', 'read_only', 'precondition'))
+BOUNDED_KINDS = frozenset(('count', 'bytes', 'time'))
+
+
 def problems(sites: collections.Counter, registry: dict, test_names: set[str]) -> list[str]:
     found = []
     for key, entry in sorted(registry.items()):
-        for field in ('ends', 'test'):
+        kind = entry.get('kind')
+        if not isinstance(kind, str) or kind not in KINDS:
+            found.append(f"{key}: missing or invalid 'kind'")
+        fields = ('ends', 'test') if isinstance(kind, str) and kind in BOUNDED_KINDS else ('ends',)
+        for field in fields:
             if not isinstance(entry.get(field), str) or not entry[field].strip():
                 found.append(f"{key}: missing non-empty '{field}'")
         if isinstance(entry.get('test'), str) and entry['test'].strip() and entry['test'] not in test_names:
@@ -97,18 +108,32 @@ class LifetimeCapGuardTests(unittest.TestCase):
         for field in ('ends', 'test'):
             for bad in (None, '', '  ', 0, [], {}):
                 with self.subTest(field=field, value=bad):
-                    entry = {'checks': 1, 'ends': 'freed after closure', 'test': 'test_past_limit'}
+                    entry = {'checks': 1, 'kind': 'count', 'ends': 'freed after closure', 'test': 'test_past_limit'}
                     entry[field] = bad
                     self.assertIn("missing non-empty '" + field + "'",
                                   problems(collections.Counter(), {'stale.py::take': entry}, {'test_past_limit'})[0])
-            entry = {'checks': 1, 'ends': 'freed after closure', 'test': 'test_past_limit'}
+            entry = {'checks': 1, 'kind': 'count', 'ends': 'freed after closure', 'test': 'test_past_limit'}
             del entry[field]
             self.assertIn("missing non-empty '" + field + "'",
                           problems(collections.Counter(), {'stale.py::take': entry}, {'test_past_limit'})[0])
 
+    def test_kinds_require_bounds_only_for_count_bytes_and_time(self):
+        for kind in ('count', 'bytes', 'time', 'validation', 'read_only', 'precondition'):
+            with self.subTest(kind=kind):
+                entry = {'checks': 1, 'kind': kind, 'ends': 'temporary scope ends on return'}
+                found = problems(collections.Counter(), {'m.py::take': entry}, set())
+                self.assertEqual(kind in ('count', 'bytes', 'time'), bool(found))
+                entry['test'] = 'test_past_limit'
+                self.assertEqual([], problems(collections.Counter(), {'m.py::take': entry}, {'test_past_limit'}))
+        for kind in (None, '', 'exempt', [], 1):
+            with self.subTest(invalid_kind=kind):
+                entry = {'checks': 1, 'kind': kind, 'ends': 'return', 'test': 'test_past_limit'}
+                self.assertTrue(any('kind' in issue for issue in
+                                    problems(collections.Counter(), {'m.py::take': entry}, {'test_past_limit'})))
+
     def test_a_listed_test_must_exist(self):
         sites = collections.Counter({"m.py::take": 1})
-        entry = {"m.py::take": {"checks": 1, "ends": "purged at close", "test": "test_missing_one"}}
+        entry = {"m.py::take": {"checks": 1, "kind": "count", "ends": "purged at close", "test": "test_missing_one"}}
         self.assertIn("does not exist", problems(sites, entry, set())[0])
         self.assertEqual([], problems(sites, entry, {"test_missing_one"}))
 

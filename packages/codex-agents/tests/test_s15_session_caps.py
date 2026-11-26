@@ -12,6 +12,42 @@ from codex_agents import session_guard as guard
 
 @requirements('S15-O0C-BINDINGS', why_not_scenario='Real temporary directories and rollout files exceed reduced scan limits; no process or socket.')
 class SessionCapTests(GuardTestCase):
+    @requirements('S15-O0C-FIRST-RECORD', why_not_scenario='Real file at the production byte limit and one byte beyond; direct session parser, no process or socket.')
+    def test_first_record_rejects_one_byte_past_its_real_byte_limit(self):
+        # Use the production limit, not a smaller limit than the read block.
+        # The newline terminates the record and is not part of its JSON bytes.
+        prefix, suffix = b'{"payload":{"padding":"', b'"}}'
+        limit = guard.MAX_FIRST_RECORD_BYTES
+        path = self.base / 'first-record.jsonl'
+        for size in (limit, limit + 1):
+            raw = prefix + b'x' * (size - len(prefix) - len(suffix)) + suffix
+            self.assertEqual(size, len(raw))
+            path.write_bytes(raw + b'\n')
+            with path.open('rb') as stream:
+                if size == limit:
+                    self.assertEqual(size - len(prefix) - len(suffix),
+                                     len(guard._first_record(stream.fileno())['payload']['padding']))
+                else:
+                    with self.assertRaises(guard.SessionRefused):
+                        guard._first_record(stream.fileno())
+
+    @requirements('S15-O0C-FIRST-RECORD', why_not_scenario='Real files at a reduced limit below one read block: exactly the cap accepted, cap+1 refused, with and without a newline.')
+    def test_first_record_exact_boundary_at_reduced_limit(self):
+        prefix, suffix = b'{"payload":{"padding":"', b'"}}'
+        path = self.base / 'first-record-small.jsonl'
+        with mock.patch.object(guard, 'MAX_FIRST_RECORD_BYTES', 200):
+            for tail in (b'\n', b'\nmore\n', b''):
+                for size, ok in ((200, True), (201, False), (199, True)):
+                    raw = prefix + b'x' * (size - len(prefix) - len(suffix)) + suffix
+                    path.write_bytes(raw + tail)
+                    with path.open('rb') as stream:
+                        if ok:
+                            self.assertEqual(size - len(prefix) - len(suffix),
+                                             len(guard._first_record(stream.fileno())['payload']['padding']))
+                        else:
+                            with self.assertRaises(guard.SessionRefused):
+                                guard._first_record(stream.fileno())
+
     def test_folder_entry_scan_stops_with_more_real_entries_than_the_limit(self):
         for name in ('1', '2', '3'):
             (self.base / name).touch()

@@ -96,3 +96,25 @@
 - The audit lists non-count/configuration/read-only/consistency/stale sites for
   primary review; it does not weaken the registry guard or claim those rows
   have past-limit tests. This pass is explicitly incomplete.
+
+
+## Decision 382 finish attempt — stopped on first-record byte defect
+
+- Guard rule old: every entry requires `ends` and `test`, with no kind check
+  -> new: every entry requires one of count/bytes/time/validation/read_only/
+  precondition and nonempty `ends`; count/bytes/time additionally require an
+  existing `test`. Decision **382** expressly authorizes this rule change.
+  The new control was RED (8 subtest failures) before implementation and GREEN
+  afterward. The live registry equality assertion is unchanged and remains RED;
+  the registry-wide kind migration was not completed before the required STOP.
+- Existing malformed-field and missing-test fixtures old: implicitly untyped
+  entries -> new: explicit `kind: count`; their expected diagnostics and all
+  assertions are unchanged. Validation/read_only/precondition now get the
+  decided ends-only treatment. No existing test assertion was removed.
+- `session_guard.py::_first_record`: generic audited/BOUNDED ends, no kind/test
+  -> `kind: bytes`, concrete temporary scope and registered failing production
+  boundary witness. This records the defect, not a passing cap binding.
+- New witness adds assertions only: exact 8,388,608-byte JSON is accepted;
+  8,388,609-byte JSON followed by newline must raise SessionRefused. The latter
+  assertion fails with the actual parser and real file. Product code untouched;
+  STOP per the user brief. Six stale entries remain present and unmodified.

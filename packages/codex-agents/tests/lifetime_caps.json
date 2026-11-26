@@ -1910,7 +1910,9 @@
   },
   "session_guard.py::_first_record": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "Temporary first-record JSON bytes end on parser return/refusal. S15 stop witness: exact production 8-MiB JSON is accepted, but 8 MiB + 1 byte followed by newline is incorrectly accepted too; no product fix made.",
+   "kind": "bytes",
+   "test": "test_first_record_rejects_one_byte_past_its_real_byte_limit"
   },
   "session_guard.py::_last_turn_context": {
    "checks": 1,

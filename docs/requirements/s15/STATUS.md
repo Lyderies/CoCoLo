@@ -1,3 +1,58 @@
+# Decision 382 finish attempt — STOP: production first-record byte-cap defect
+
+Current work is **INCOMPLETE; do not merge as finished S15**. No commit was
+made, no product code changed, and no socket was opened. Owner decisions
+132/377 and the original B0-2 skip remain intact. Container carry-ins
+S27a/S27b/S27c/S27d remain listed in the retained status below.
+
+## FIXED: session_guard._first_record accepted bytes past its limit (S15-O0C-FIRST-RECORD)
+
+Root cause: the loop was `while size <= MAX_FIRST_RECORD_BYTES` with a fixed 65,536-byte read. At exactly the limit
+it read one more block; a newline in that block broke out before the bytes were counted, so a record of limit+1 bytes
+(and any record whose newline arrived in the next block) was accepted. Fix: read only up to MAX+1 bytes in total
+(`min(65536, MAX+1-size)`); no newline within MAX+1 bytes -> the existing UNKNOWN_SHAPE refusal. A record of exactly MAX
+bytes (newline at byte MAX+1, or end of file) is accepted. Memory stays bounded.
+Other readers audited with the same pattern: write_merge `_Seen` hashing (1 MiB blocks, size > limit -> no sha; correct
+at the boundary), service_enrollment proof read (reads limit+1, refuses len > limit; correct), core_api `_LineReader`
+(limit+1 read, `len(line) > limit` refused; correct). No assertion changed. Witness
+`test_first_record_rejects_one_byte_past_its_real_byte_limit` RED -> GREEN; new
+`test_first_record_exact_boundary_at_reduced_limit` (limit 200: 199/200 accepted, 201 refused, with newline, newline+more, and
+no newline) RED -> GREEN. Remaining RED: S15-O0C-GUARD (Codex finish work: 552 kind migrations, 58 open count caps).
+
+## Decision 382 progress and exact remaining work
+
+- New kind-rule control RED (8 subtest failures) -> GREEN; guard implementation
+  now requires a valid kind and ends for every entry, with existing test names
+  additionally required for count/bytes/time. No kind named exempt exists.
+- Existing malformed-field fixtures explicitly use count; expected diagnostics
+  and assertions are unchanged. Old -> new rule is recorded in assertions.md.
+- Only the newly failing first-record entry has been assigned kind=bytes and
+  bound here. The other **552 entries still need kind migration**. The 58 open
+  count caps and remaining bytes/time bindings are not completed. The full
+  registry guard is RED; it has not been bypassed or presented as green.
+- Six stale entries remain present. No stale-site deletion was performed; each
+  still needs current-source grep evidence in the audit before removal.
+- Hold-kind × failure-exit matrix and mutations were not extended in this
+  attempt before the defect STOP; all previous unfinished rows remain below.
+
+## Verification
+
+Final named-module runner: **metadata_errors: [], budget_failures: []**;
+11 tests, 9 passed, 2 failed (first-record defect and incomplete registry).
+Elapsed 0.918 s; worker total 0.913 s; discovery 2.307 s; preflight 7.401 s.
+Session module 0.177 s, guard module 0.736 s, both below 60 s.
+Durable result: `decision-382-stop-results.json` (selected requirements only).
+Command: `PY -B scripts/parallel_tests.py --module codex:tests.test_lifetime_cap_guard
+--module codex:tests.test_s15_session_caps --jobs 1 --keep`.
+No run is left in flight. The runner's unrelated catalogue regeneration was
+removed while preserving both S15 registration changes.
+The first check found one catalogue-link error: a method-specific requirement
+overrides its class requirement. The spurious S15-O0C-BINDINGS link was removed;
+the witness stays registered to its own S15-O0C-FIRST-RECORD requirement.
+Both affected modules already have layer, stage and timing registrations.
+
+---
+
 # S15 finish pass — INCOMPLETE (2026-11-26, base 28d24d58)
 
 The strict guard is unchanged and remains **RED**. Do not merge this pass as

@@ -202,8 +202,10 @@ def _open_record(folder: int, name: str) -> int:
 
 def _first_record(descriptor: int) -> dict:
     chunks, size = [], 0
-    while size <= MAX_FIRST_RECORD_BYTES:
-        chunk = os.pread(descriptor, 65536, size)
+    # A record of up to MAX_FIRST_RECORD_BYTES is accepted; its terminating newline may be byte MAX + 1. Never read
+    # past that one byte, so a longer record is refused without being held in memory.
+    while size < MAX_FIRST_RECORD_BYTES + 1:
+        chunk = os.pread(descriptor, min(65536, MAX_FIRST_RECORD_BYTES + 1 - size), size)
         if not chunk:
             break
         end = chunk.find(b"\n")
