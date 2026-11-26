@@ -263,7 +263,8 @@ class ReadGrowthTests(unittest.TestCase):
                 'release_digest': "'" + 'f'*64 + "'"})
             # The ordinary source triggers create released run_holds tombstones.
             self.assertEqual(0, self.ledger._connection.execute(
-                "SELECT COUNT(*) FROM run_holds WHERE identity LIKE 'e%' AND state<>'released'").fetchone()[0])
+                "SELECT COUNT(*) FROM run_holds WHERE substr(identity,1,50)=printf('e%049x',0) "
+                "AND state<>'released'").fetchone()[0])
         proof_owner = self.reference.base.worker.base
         grow(SMALL)
         small = self.callbacks(proof_owner.proof)
