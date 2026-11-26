@@ -4376,5 +4376,79 @@
   ],
   "source": "tests/requirements/s13d.json#S13d-4",
   "statement": "Diagnose claim and crash-loop timing flakes and tolerate an already-exited enumerated host without weakening existing guarantees."
+ },
+ "S9-HM4-1": {
+  "source": "tests/requirements/s9.json#S9-HM4-1",
+  "statement": "Report corruption through read-only quick checks and full checks on consistent copies; healthy stores are quiet.",
+  "checks": [
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_corrupted_copy_reported_without_private_text",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_failed_full_scan_reported_without_completion",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_full_corruption_latches_until_full_clean_result",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_healthy_copy",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_quick_check_every_visit"
+  ]
+ },
+ "S9-HM4-2": {
+  "source": "tests/requirements/s9.json#S9-HM4-2",
+  "statement": "Report ledger and project size at 8 GiB and growth strictly over 1 GiB per day; never refuse runs.",
+  "checks": [
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_completed_clock_and_growth_survive_restart",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_growth_rate_boundary_and_clock",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_size_boundary_report_only",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_warning_reaches_owner_attention"
+  ]
+ },
+ "S9-HM4-3": {
+  "source": "tests/requirements/s9.json#S9-HM4-3",
+  "statement": "Report full check completion more than 24 hours ago as overdue, with strict boundary and completion-only timestamps.",
+  "checks": [
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_completed_clock_and_growth_survive_restart",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_daily_completion_boundaries",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_incomplete_copy_does_not_complete_full_check"
+  ]
+ },
+ "S9-HM4-4": {
+  "source": "tests/requirements/s9.json#S9-HM4-4",
+  "statement": "Reload configurable warning thresholds and show the effective defaults or changed values in status.",
+  "checks": [
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_default_settings_are_editable_outside_protected_runtime",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_effective_defaults_shown_before_first_pass",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_invalid_settings_visible",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_past_byte_and_integer_limits",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_reload_and_status",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_symlink_is_reported_without_following"
+  ]
+ },
+ "S9-HM4-5": {
+  "source": "tests/requirements/s9.json#S9-HM4-5",
+  "statement": "Use the ledger owner for every live ledger access, bounded shared owner time, resumable page copies and full scans.",
+  "checks": [
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_busy_queue_uses_shorter_slice_without_starving_copy",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_copy_past_page_limit",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_expired_pass",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_full_scan_resumes_after_quantum",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_import_does_not_open_files_or_databases",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_incomplete_copy_does_not_complete_full_check",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_one_pass_advances_many_copy_pages_with_shared_deadline",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_owner_thread_and_total_budget",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_past_observation_cache_limit_still_reports_old_project_status",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_project_enumeration_past_page",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_saved_state_past_byte_limit_is_reported_and_rechecked",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_symlink_is_reported_without_following",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_wal_copy_allows_writer_between_page_slices"
+  ]
+ },
+ "S9-HM4-6": {
+  "source": "tests/requirements/s9.json#S9-HM4-6",
+  "statement": "Expose report-only scoped findings, fair project enumeration, retained warnings and deferred register hook.",
+  "checks": [
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_deleted_projects_drop_retained_observations",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_full_corruption_latches_until_full_clean_result",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_past_observation_cache_limit_still_reports_old_project_status",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_project_enumeration_past_page",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_registration_and_project_scope",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_warning_reaches_owner_attention",
+   "codex:tests.test_health_ledger.LedgerHealthTests.test_warning_survives_other_visit"
+  ]
  }
 }

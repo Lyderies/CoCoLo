@@ -83,6 +83,28 @@ sandbox_mode = "workspace-write"
 network_access = true
 ```
 
+## Ledger health warnings
+
+The account state folder can contain an optional `health-limits.json`. Edit it to
+change ledger and project-store warnings without restarting the collector or
+changing the installed runtime. The default state folder is listed above;
+`XDG_STATE_HOME` can move it as described below.
+
+```json
+{
+  "store_size_bytes": 8589934592,
+  "store_growth_bytes_per_day": 1073741824
+}
+```
+
+These defaults warn at 8 GiB, or growth over 1 GiB per day. They report to status
+and its owner attention list; new runs remain allowed. Both settings use positive
+integer bytes. Either key can be omitted to use its default. The next health pass
+reloads changes, and the health summary displays the values in force. Project
+measurements refresh as the bounded scan visits them. An invalid file produces a
+plain warning and uses the defaults. Use an ordinary file owned by your account;
+symlinks and special files are reported as invalid.
+
 ## Environment
 
 | Variable | Effect |

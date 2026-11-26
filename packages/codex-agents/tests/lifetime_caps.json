@@ -2157,6 +2157,56 @@
    "checks": 2,
    "ends": "S12 N3: three non-transient record failures per unknown job, then denial; busy SQL never consumes the budget. Failed denial retries without repeating exhausted record attempts. Settled jobs never retry. The counter ends with the job at account replacement.",
    "test": "test_record_retry_limit_denies_once_and_later_passes_do_not_retry_records"
+  },
+  "health_ledger.py::_load": {
+   "checks": 1,
+   "ends": "Per-store health metadata reads at most 1024 bytes plus the excess-byte probe; invalid metadata is reported and a new full check is scheduled. Observations and saved state for removed projects are pruned after a bounded registry scan.",
+   "test": "test_saved_state_past_byte_limit_is_reported_and_rechecked"
+  },
+  "health_ledger.py::reload_settings": {
+   "checks": 2,
+   "ends": "The user settings read ends at 4096 bytes plus one probe. Positive signed-64-bit values are report-only thresholds, never admission or lifetime caps; changes replace the active values on the next pass.",
+   "test": "test_settings_past_byte_and_integer_limits"
+  },
+  "health_ledger.py::measure": {
+   "checks": 1,
+   "ends": "Size and rate thresholds only report; no hold, record or admission is refused. Growth comparisons renew their sample window; current values replace observations.",
+   "test": "test_size_boundary_report_only"
+  },
+  "health_ledger.py::completion_findings": {
+   "checks": 1,
+   "ends": "The 24-hour completion clock raises a warning only. Completing the full copy check clears overdue; starting or pausing never does.",
+   "test": "test_daily_completion_boundaries"
+  },
+  "health_ledger.py::visit": {
+   "checks": 1,
+   "ends": "A full copy is scheduled before the daily deadline; one active copy continues across slices until complete. No project is excluded by database size or age.",
+   "test": "test_incomplete_copy_does_not_complete_full_check"
+  },
+  "health_ledger.py::step": {
+   "checks": 1,
+   "ends": "Each native backup step reads at most 8 pages, retaining progress for the next step/pass; SQLite releases source locks between steps. A writer can commit between slices, including in WAL mode.",
+   "test": "test_copy_past_page_limit"
+  },
+  "health_ledger.py::_progress": {
+   "checks": 1,
+   "ends": "The full integrity VM pauses after its current pass quantum and resumes on the next grant; one worker and one private copy are retained until completion or shutdown.",
+   "test": "test_full_scan_resumes_after_quantum"
+  },
+  "health_ledger.py::_copy_slice": {
+   "checks": 1,
+   "ends": "A shared owner deadline bounds copying; a pending foreground queue reduces the copy quantum to 150 ms. Work resumes in later passes and uses spare time when idle.",
+   "test": "test_busy_queue_uses_shorter_slice_without_starving_copy"
+  },
+  "health_ledger.py::_retain": {
+   "checks": 1,
+   "ends": "The 32-store in-memory cache evicts old observations to bounded per-store metadata. Status loads the requested project independently, and registry traversal continues past the cache ceiling. Project metadata lives with that project and is deleted with it.",
+   "test": "test_past_observation_cache_limit_still_reports_old_project_status"
+  },
+  "health_ledger.py::_select": {
+   "checks": 1,
+   "ends": "One indexed project identity per pass, using a keyset cursor; registry exhaustion restarts the scan. Projects beyond the page are checked on later passes.",
+   "test": "test_project_enumeration_past_page"
   }
  }
 }
