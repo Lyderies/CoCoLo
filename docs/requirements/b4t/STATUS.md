@@ -1,5 +1,35 @@
 # S5 B4t build status — Final fix
 
+## 0.8.69 install refusal (decision 372, plan step 1) — read first
+
+Branch `fix/0869-takeover-proof`, base `77bca2e5` (0.8.69 candidate). The owner's `./setup.sh --update` refused with
+`predecessor_unproven` ("running 0 child runs ... When that run ends") against the installed, idle 0.8.68 service.
+
+- **Root cause (A1.4 I3, the entry of the argument check).** The installed service runs from its protected launch copy:
+  `ps` shows `Python -I -B -S -X pycache_prefix=/dev/null ~/.codex/agent-orchestration/cdccdfce300a/28435b17.../.codex/
+  orchestration/project_host.py --state-root ~/.local/state/codex-agents --project-root <project>`. Peer pid, uid,
+  owner-only directory, interpreter flags, state and project roots all match. `read_plan` tried the candidate trees in
+  order (project root, then the recorded `launch_copy`) and stopped at the FIRST trusted tree: the project root, also
+  0.8.68 with the same digest. Its entry is `<project>/.codex/orchestration/project_host.py`, so `_trusted` failed on
+  the entry path, and because 0.8.68 has `service.stop_for_update` (`stop_op`) the failure raised
+  `predecessor_unproven` even with 0 children; the launch copy was never tried. A1.4 I3 names the entry as "the
+  H2a-verified install or launch copy", so the copy is in A1. The S5 native witnesses launched their archived service
+  from the project tree, never from a launch copy, so they could not see it.
+- **Why idle did not take the signal-free path.** The `hint` fallback (A1.5 row 4) is only for pre-B4t services;
+  for a `stop_op` service any I3 failure was a refusal (row 7 keeps I3 "as built"). Row 7 is unchanged: with the
+  correct entry the idle 0.8.68 service is stopped by its own `service.stop_for_update`, no signal.
+- **Fix.** `takeover_preflight.read_plan`: a live candidate whose identity check fails moves on to the next trusted
+  tree; only when none matches does the old outcome apply to the first trusted tree (busy or `stop_op`: refuse
+  write-free; idle pre-B4t: `hint`). No new process is read: the same one candidate pid, the same I1-I4.
+  `update_takeover.TakeoverError` gains `pid`; an idle (0 runs) `predecessor_unproven` no longer says "when that run
+  ends" and names `ps -o pid,lstart,command -p <pid>` and `kill <pid>` as the step (A1_IDLE_UNPROVEN). The busy text
+  (A1.9) is unchanged. docs/troubleshooting.md "Update hand-over" says so.
+- **Tests.** New `tests.test_b4t_native_p68` (vendored `tests/fixtures/b4t/0.8.68-native-package.tar.gz`, sha256
+  `e05a6860...b765`): real 0.8.68 collector whose starter launches the recorded copy; red output in
+  [evidence/0869-refusal/red.txt](evidence/0869-refusal/red.txt) (the owner's exact sentence), green after the fix.
+  No existing assertion changed. Runtime files changed, so the runtime digest moves: VERSION and digests are left for
+  the primary (no bump here).
+
 Branch `feat/b4t-takeover`, review head `44f16529` / product `146955fc`, base
 `ce81bd96` (0.8.67). Accepted Amendment A1, including A1.15 (decision 337), is
 the authority for this one fix round. Changes are left in the worktree: no

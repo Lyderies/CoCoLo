@@ -255,6 +255,11 @@ def read_plan(state, project_root, *, runtime_locked=False):
         candidates = [root]
         if row.get('launch_copy'):
             candidates.append(Path(row['launch_copy']))
+        # Decision 372: an installed service runs from its recorded launch copy, and the project tree holds the
+        # same trusted runtime. A1.4 I3's entry is "the install or launch copy": a live candidate whose launch line
+        # does not name this tree's entry moves on to the next trusted tree. Only when no trusted tree's entry
+        # matches does the unproven outcome apply, to the first trusted tree, exactly as before.
+        unproven = None
         for candidate in candidates:
             try:
                 identity = trusted_package(candidate, releases=releases)
@@ -281,7 +286,7 @@ def read_plan(state, project_root, *, runtime_locked=False):
                 info = directory.lstat()
                 if (endpoint.parent != directory or info.st_uid != os.getuid()
                         or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700):
-                    raise TakeoverError('predecessor_unproven')
+                    raise TakeoverError('predecessor_unproven', lost=children.get(row['project_id'], 0))
                 api = candidate / '.codex/orchestration/codex_agents/history_api.py'
                 stop_op = api.is_file() and any(isinstance(node, ast.Constant) and node.value == 'service.stop_for_update'
                                                for node in ast.walk(ast.parse(api.read_bytes())))
@@ -307,14 +312,22 @@ def read_plan(state, project_root, *, runtime_locked=False):
                 except (OSError, TakeoverError) as error:
                     if isinstance(error, TakeoverError) and error.code == 'project_store_busy':
                         raise
-                    if stop_op or children.get(row['project_id'], 0):
-                        raise TakeoverError('predecessor_unproven', lost=children.get(row['project_id'], 0)) from None
-                    stop = 'hint'
+                    if unproven is None:
+                        unproven = (service, stop_op, pid, endpoint, scope)
+                    service = None
+                    continue
                 service.update(stop_op=stop_op, service_stop=stop, directory=str(directory),
                                project_endpoint=str(endpoint), service_generation=scope.supervisor_generation)
                 if process is not None:
                     service.update(pid=pid, birth=process['birth'])
             break
+        if service is None and unproven is not None:
+            service, stop_op, pid, endpoint, scope = unproven
+            lost = children.get(row['project_id'], 0)
+            if stop_op or lost:
+                raise TakeoverError('predecessor_unproven', lost=lost, pid=pid)
+            service.update(stop_op=stop_op, service_stop='hint', directory=str(directory),
+                           project_endpoint=str(endpoint), service_generation=scope.supervisor_generation)
         if live and service is None:
             raise TakeoverError('predecessor_unverified')
         if owner_digest is not None and owner_digest != COLLECTOR_RUNTIME_DIGEST and service is None:

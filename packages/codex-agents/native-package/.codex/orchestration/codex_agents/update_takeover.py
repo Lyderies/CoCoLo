@@ -17,8 +17,22 @@ A1_WRITE_FREE = {
 }
 
 
+# Decision 372: an idle service has no run to wait for, so the busy text's "when that run ends" is false for it.
+A1_IDLE_UNPROVEN = {
+    True: ("The update stopped (predecessor_unproven): this project's old service has no child run in progress, but "
+           "it could not be confirmed to be this project's own service, so it was not stopped. Nothing was changed. "
+           "Check it with: ps -o pid,lstart,command -p {pid}. If that line names this project's project_host.py "
+           "with this project's folder, stop it with: kill {pid}. Then run ./setup.sh --update. "
+           "See docs/troubleshooting.md, 'Update hand-over'."),
+    False: ("The update stopped (predecessor_unproven): this project's old service has no child run in progress, but "
+            "its process could not be read, so it could not be confirmed to be this project's own service and it "
+            "was not stopped. Nothing was changed. Wait a minute and run ./setup.sh --update again; if it stops the "
+            "same way, see docs/troubleshooting.md, 'Update hand-over'."),
+}
+
+
 class TakeoverError(RuntimeError):
-    def __init__(self, code, *, phase=None, undone=False, lost=0, update_message=None):
+    def __init__(self, code, *, phase=None, undone=False, lost=0, update_message=None, pid=None):
         self.code, self.phase, self.undone = code, phase, undone
         if phase is None:
             detail = {
@@ -48,7 +62,9 @@ class TakeoverError(RuntimeError):
                            'Run ./setup.sh --update to finish.')
             if code == 'predecessor_lock_inherited':
                 message += " Another program still holds this project's records lock; the update goes on when it ends."
-        if phase is None and code in A1_WRITE_FREE:
+        if phase is None and code == 'predecessor_unproven' and not lost:
+            message = A1_IDLE_UNPROVEN[type(pid) is int and pid > 0].format(pid=pid)
+        elif phase is None and code in A1_WRITE_FREE:
             message = A1_WRITE_FREE[code].format(n=lost, runs='child run' if lost == 1 else 'child runs')
         elif phase is not None and not undone and code == 'service_still_finishing':
             message = ("The update stopped partway (service_still_finishing): this project's old service was told to stop "
