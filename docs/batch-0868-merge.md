@@ -135,3 +135,21 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Modules (15, 30 units, 465 tests, ~112 s wall, 0 failed, metadata_errors []): test_s14b_upgrade_indexes, test_run_retention, test_run_retention_scale, test_learning_store, test_rsf_s3_resumable, test_rsf_s6_classify, test_rsf_s2_regressions, test_b4t_takeover, test_project_start, test_state_location, test_learning_migration, test_learning_cli, test_upgrade_handover, test_history_service_upgrade, test_lifetime_cap_guard. No VERSION bump.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+## Full run (bump 325d8427, 0.8.68)
+
+Command: `parallel_tests.py --base ce81bd96 --save-timings docs/batch-0868-full-run-timings.json` (output docs/batch-0868-full-run.txt). Exit 1. 549 units, 8179 tests (claude 134, codex 6851, root 1194). Elapsed 613 s (16 jobs, 5974 job seconds); preflight 7.5 s vs tests ~605 s. metadata_errors: none. Budget failures: 2 over-budget lines (test_project_start integration/scenario 189 s, test_run_retention_scale 70 s, budget 60 s) plus the usual debt list. requirement_failures: S8-HM3-5, RS-B-B4t-0, RS-B-B4t-9.
+
+Wiring (step 1) not done: the S8 holds registration (health_monitor) and S11 `health_workspaces.register` (learning_store.py) are product code, not registry JSON.
+
+Bump (step 2) note: the 0.8.67 bump also recorded the previous Claude bundle in packages/claude-agents/previous-releases.json (+ packaging.py PINNED_RELEASE_DIGESTS, test_previous_release_catalogue count). Not done in 325d8427 (needs compiling 0.8.67's Claude bundle from its source); only VERSION, runtime-releases.json, CHANGELOG were bumped.
+
+| Unit | Result | Classification |
+|------|--------|----------------|
+| claude:tests.test_previous_release_recorded | fails alone: 0.8.67 Claude bundle not in previous-releases.json | regression from the incomplete bump (bookkeeping to finish) |
+| codex:tests.test_b4t_takeover#1 | test_released_0859_owner_upgrade_preserves_project_local_enumeration expects runtime_floor (1,'0.8.67'), now 0.8.68 (module needs the test_framework path, so it only runs via parallel_tests) | regression from the bump: hardcoded version literal in the test (needs owner/primary choice: derive from VERSION) |
+| codex:tests.test_account_observation_schema | 4 of 7 fail alone: "fixture must match genuine prior-source layout" (layout differs); passes on base ce81bd96 | regression from the batch (probably the schema 18 retention indexes/S14b), not a flake |
+| codex:tests.test_health_holds | test_unrelated_lifetime_caps_bytes_are_preserved: lifetime_caps site project_holds_report.py::_ended_by_update `test` name changed (B7_2... -> B4t_runtime_change...); test not on base | merge interaction (a batch step re-pointed the base entry's `test`); guard needs an owner/primary decision |
+| root:test_test_framework_affected | ModuleNotFoundError: coverage | environmental (venv lacks coverage; also on base) |
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
