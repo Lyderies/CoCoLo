@@ -3582,15 +3582,12 @@ class LearningLedger:
         bounded page at a time and prunes only when a cycle has seen all history."""
         from .runtime_lineage import CustodyScan, live_ledger_custody, prune_lineage
         with self._held():
-            if paged:
+            if paged:  # S14F-1/-4/-5/-6: every pass (scan, walk and deletes) is bounded in total work
                 scan = self.__dict__.setdefault('_custody_scan', CustodyScan())
-                custody = scan.step(self._connection, now)
-                if custody is None:
-                    return 0
-            else:
-                custody = live_ledger_custody(self._connection, now)
-            return prune_lineage(self._connection, custody, COLLECTOR_RUNTIME_DIGEST,
-                                 transaction=self._account_transaction)
+                return scan.advance(self._connection, now, COLLECTOR_RUNTIME_DIGEST,
+                                    transaction=self._account_transaction)
+            return prune_lineage(self._connection, live_ledger_custody(self._connection, now),
+                                 COLLECTOR_RUNTIME_DIGEST, transaction=self._account_transaction)
 
     def _validate_current_ledger(self):
         """Keep every predecessor coverage refusal on ordinary schema-18 opens."""
@@ -13702,6 +13699,10 @@ class LearningLedger:
         except sqlite3.Error as exc:
             raise LedgerError("ledger maintenance could not be finalized") from exc
         finally:
+            # S14F-6: VACUUM may renumber rowids under a custody cycle's cursor; that cycle is never used.
+            scan = self.__dict__.get('_custody_scan')
+            if scan is not None:
+                scan.reset()
             self._connection.execute("PRAGMA busy_timeout = 5000")
             self.state.harden_database_files()
 

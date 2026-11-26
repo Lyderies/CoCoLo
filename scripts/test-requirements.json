@@ -5507,7 +5507,7 @@
    "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_1_an_edge_set_change_or_a_fallen_rowid_never_releases_a_stale_answer"
   ],
   "source": "tests/requirements/s14f.json#S14F-1",
-  "statement": "The sole-owner account retention sweep computes lineage custody in bounded passes (at most CUSTODY_PASS_ROWS history rows per pass, rowid windows), releases an answer only when one cycle has seen every row, and that answer equals the exact custody restricted to lineage edge keys; a live run is never missed at any position or bound; a changed edge set or fallen rowid discards the cycle."
+  "statement": "The sole-owner account retention sweep computes lineage custody in bounded passes (at most CUSTODY_PASS_ROWS history rows per pass, rowid windows), releases an answer only when one cycle has seen every row, and that answer equals the exact custody restricted to lineage edge keys; a live run is never missed at any position or bound; a cycle the change watch invalidates is discarded (S14F-6)."
  },
  "S14F-2": {
   "checks": [
@@ -5529,5 +5529,37 @@
   ],
   "source": "tests/requirements/s14f.json#S9-WAIT",
   "statement": "Exclusive maintenance waits at most MAINTENANCE_READER_WAIT_S for health-copy readers; a stalled worker fails the attempt with a plain LedgerError, leaves the store unchanged and the reader registered, and a later attempt succeeds once the worker ends."
+ },
+ "S14F-4": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyClockTests.test_S14F_4_a_clock_rollback_mid_cycle_never_completes_short_of_the_whole_custody",
+   "codex:tests.test_s14f_owner_bounds.CustodyClockTests.test_S14F_4_a_forward_jump_keeps_the_cycle_start_cutoff_and_still_converges"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-4",
+  "statement": "One cutoff per custody cycle, fixed at its start: a later clock judges against the earlier (more protective) cutoff, and a pass whose clock is before the cycle start restarts the cycle, so neither a clock rollback nor a forward jump lets a completed or pruning cycle hold less than the whole custody at that time."
+ },
+ "S14F-5": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyWorkTests.test_S14F_5_every_pass_bounds_its_total_work_on_a_long_overlapping_chain",
+   "codex:tests.test_s14f_owner_bounds.CustodyWorkTests.test_S14F_5_the_whole_prune_walks_each_edge_once_on_overlapping_chains"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-5",
+  "statement": "Every owner pass bounds its total work (lineage edges read by key page, history rows, protected-path walk steps with one visited set, deletions) to CUSTODY_PASS_ROWS units; a long overlapping chain completes over many passes each within the bound and equals the whole-scan prune; the whole prune walks each edge once."
+ },
+ "S14F-6": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyInvalidationTests.test_S14F_6_a_delete_and_reinsert_behind_the_cursor_restoring_the_max_rowid_is_still_found",
+   "codex:tests.test_s14f_owner_bounds.CustodyInvalidationTests.test_S14F_6_a_vacuum_or_another_connection_commit_mid_cycle_discards_the_cycle",
+   "codex:tests.test_s14f_owner_bounds.CustodyInvalidationTests.test_S14F_6_ledger_maintenance_vacuum_resets_the_owner_scan"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-6",
+  "statement": "A cycle continues only while a per-connection TEMP change watch (any change that could add custody for an edge key, or any lineage insert/update), PRAGMA data_version and main.schema_version are unchanged on the same connection: a delete+reinsert behind the cursor restoring the max rowid is still found, a VACUUM or another connection's commit mid-cycle discards the cycle, and ledger maintenance VACUUM resets the owner scan."
+ },
+ "S14F-7": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyPropertyTests.test_S14F_7_random_interleavings_never_let_the_paged_answer_fall_short_of_the_whole"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-7",
+  "statement": "Under fixed-seed random interleavings of inserts, releases, deletes, delete+reinsert, binding/hold changes, new edges, clock moves and VACUUM between passes, every completed paged answer covers the whole answer and no pruning pass deletes an edge the whole computation protects at that moment; once quiet, the paged prune equals the whole prune."
  }
 }

@@ -317,16 +317,17 @@ def main():
         db.execute('BEGIN')
         try:
             db.execute('INSERT INTO runtime_lineage VALUES(?,?,?,?,1,?,1)', (digest[0], '0.0.1', '0' * 64, '0.0.2', '1' * 32))
-            scan, passes, worst, started = runtime_lineage.CustodyScan(), [], 0.0, time.perf_counter()
-            while True:
+            # S14F-5: the whole owner cycle (edges, history, walk, deletes) as the sweep runs it; deletes stay in
+            # this rolled-back transaction (nullcontext, so nothing commits).
+            import contextlib
+            scan, passes, removed, started = runtime_lineage.CustodyScan(), [], 0, time.perf_counter()
+            while scan.cycles == 0 and len(passes) <= 100000:
                 tick = time.perf_counter()
-                answer = scan.step(db, now)
+                removed += scan.advance(db, now, 'f' * 64, transaction=contextlib.nullcontext)
                 passes.append(time.perf_counter() - tick)
-                if answer is not None or len(passes) > 100000:
-                    break
             report['paged_custody'] = {'passes': len(passes), 'worst_pass_seconds': round(max(passes), 5),
                                        'total_seconds': round(time.perf_counter() - started, 4), 'rows_per_pass': runtime_lineage.CUSTODY_PASS_ROWS,
-                                       'digests': len(answer or ())}
+                                       'edges_removed': removed}
         finally:
             db.execute('ROLLBACK')
     # ---- per-run lookups (sampled handles), plans

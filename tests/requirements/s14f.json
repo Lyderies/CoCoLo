@@ -3,7 +3,7 @@
  "requirements": [
   {
    "id": "S14F-1",
-   "statement": "The sole-owner account retention sweep computes lineage custody in bounded passes (at most CUSTODY_PASS_ROWS history rows per pass, rowid windows), releases an answer only when one cycle has seen every row, and that answer equals the exact custody restricted to lineage edge keys; a live run is never missed at any position or bound; a changed edge set or fallen rowid discards the cycle.",
+   "statement": "The sole-owner account retention sweep computes lineage custody in bounded passes (at most CUSTODY_PASS_ROWS history rows per pass, rowid windows), releases an answer only when one cycle has seen every row, and that answer equals the exact custody restricted to lineage edge keys; a live run is never missed at any position or bound; a cycle the change watch invalidates is discarded (S14F-6).",
    "source": "tests/requirements/s14f.json#S14F-1"
   },
   {
@@ -15,6 +15,26 @@
    "id": "S14F-3",
    "statement": "sweep_account_retention uses the paged scan and never the whole-history custody; open and the upgrade still compute custody whole (S14E-1/2 pin that query).",
    "source": "tests/requirements/s14f.json#S14F-3"
+  },
+  {
+   "id": "S14F-4",
+   "statement": "One cutoff per custody cycle, fixed at its start: a later clock judges against the earlier (more protective) cutoff, and a pass whose clock is before the cycle start restarts the cycle, so neither a clock rollback nor a forward jump lets a completed or pruning cycle hold less than the whole custody at that time.",
+   "source": "tests/requirements/s14f.json#S14F-4"
+  },
+  {
+   "id": "S14F-5",
+   "statement": "Every owner pass bounds its total work (lineage edges read by key page, history rows, protected-path walk steps with one visited set, deletions) to CUSTODY_PASS_ROWS units; a long overlapping chain completes over many passes each within the bound and equals the whole-scan prune; the whole prune walks each edge once.",
+   "source": "tests/requirements/s14f.json#S14F-5"
+  },
+  {
+   "id": "S14F-6",
+   "statement": "A cycle continues only while a per-connection TEMP change watch (any change that could add custody for an edge key, or any lineage insert/update), PRAGMA data_version and main.schema_version are unchanged on the same connection: a delete+reinsert behind the cursor restoring the max rowid is still found, a VACUUM or another connection's commit mid-cycle discards the cycle, and ledger maintenance VACUUM resets the owner scan.",
+   "source": "tests/requirements/s14f.json#S14F-6"
+  },
+  {
+   "id": "S14F-7",
+   "statement": "Under fixed-seed random interleavings of inserts, releases, deletes, delete+reinsert, binding/hold changes, new edges, clock moves and VACUUM between passes, every completed paged answer covers the whole answer and no pruning pass deletes an edge the whole computation protects at that moment; once quiet, the paged prune equals the whole prune.",
+   "source": "tests/requirements/s14f.json#S14F-7"
   },
   {
    "id": "S9-WAIT",

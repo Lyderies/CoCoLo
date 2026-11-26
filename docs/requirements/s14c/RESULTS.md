@@ -76,3 +76,13 @@ Before = whole-history `live_ledger_custody` on the owner thread (the S14e figur
 | 259 | 12,356 | 0.024 | 96 | 0.0005 | 0.026 | 28.6 s |
 | 514 | 24,353 | 0.053 | 190 | 0.0006 | 0.059 | 78.6 s |
 The per-pass owner time is constant (about 0.5 ms; bounded by the row budget, not history size) and the cycle total is linear, as before. Open and the 17->18 upgrade keep the whole computation (S14e).
+
+### After S14f fix round (r1 NOT-READY: clock, total work, invalidation; the sweep now runs the whole prune cycle in bounded passes, `CustodyScan.advance`)
+Same script and runner defaults (raw: `after-s14f-256.json`, `after-s14f-512.json`, overwritten). Each pass now does at most 256 units of ALL its work
+(lineage edges read by key page, history rows, protected-path walk steps, deletions); the timed cycle is the full owner cycle including walk and deletes.
+| MiB | runs | whole custody per sweep (s) | paged: passes | worst pass (s) | whole cycle (s) | run wall |
+|---|---|---|---|---|---|---|
+| 259 | 12,204 | 0.025 | 96 | 0.0007 | 0.028 | 30.9 s |
+| 515 | 24,260 | 0.095 | 190 | 0.0012 | 0.101 | 85.6 s |
+The worst pass stays about 1 ms (bounded by the unit budget, not history size); the cycle total is linear. The change watch (TEMP triggers) adds no
+measurable pass cost. 17->18 upgrade at 512 MiB not run (disk cap, as before).
