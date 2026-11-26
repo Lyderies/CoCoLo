@@ -107,3 +107,38 @@ reached the intended rebuilding assertion and failed before runtime edits.
   This protects the new cursor and numeric project references from VACUUM rowid
   changes. Fifteen original-store backup/migration/expiry assertions are unchanged
   and rerun green alongside this case and the new restore case.
+
+## Regression fix (primary gate exception)
+
+No base assertion was edited, removed or weakened. The four affected-run failures
+(`test_ledger_lock_limits`, `test_account_observation_schema` x3,
+`test_lifetime_cap_guard`) pass unchanged; the changes are in product code and in
+tests that this branch added.
+
+- `RunRetentionTests.setUp` and the five `RunRetentionIntegrationTests` setups
+  (old -> new): the persistent retention indexes existed after any ordinary open;
+  no open creates them (two base layout tests forbid it), so each fixture first plays
+  the consented upgrade step (`run_retention.ensure_indexes(ledger)`, what
+  `create_retention_indexes()` does). Every functional assertion is unchanged.
+- `RunRetentionTests.test_typed_history_and_years_of_summaries_use_indexed_membership`
+  moved unchanged in name and assertions to the new registered module
+  `test_run_retention_scale.RunRetentionScaleTests` (budget). Differences: the
+  first 2,000 of the 365,000 summaries still enter through the whole product
+  append; the other 363,000 are each validated with `validate_learning_record`,
+  serialised and digested by the product functions, indexed by the product
+  `_summary_members`, and written in one batch with the same columns. The
+  `<= 40 bytes/member`, old-scan-refused, typed/not-found and rebuild assertions
+  are the same. `scripts/test-requirements.json` (S14b-4 check id),
+  `test-layers.json`, `test-stages.json`, `test-timings.json` register the module.
+- New cap registrations: `lifetime_caps.json` entries for
+  `run_retention.py::advance_import_history` (2 checks, test
+  `test_import_rebuild_pages_resume_and_preserve_digest_answers`, 71 imported
+  summaries past the 32-row page) and `run_retention.py::rows` (1 check, test
+  `test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe`, 70 summaries).
+  The guard also flagged the nested `rows` page reader, not only the function the
+  primary named.
+- New `test_plain_open_makes_no_index_and_the_consented_step_enables_retention_with_a_silent_idle`
+  (registered under S14b-3): a plain open has none of the five indexes and an idle
+  retention pass runs no statement; after `create_retention_indexes()` there are five,
+  a pass before the earliest expiry still runs no statement, and one at the cutoff
+  sweeps.

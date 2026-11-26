@@ -407,5 +407,6 @@
  "codex:tests.test_ledger_owner_wiring": "integration",
  "codex:tests.test_u1_orchestration_lifetime": "integration",
  "codex:tests.test_run_retention": "integration",
- "codex:tests.test_run_retention_integration": "integration"
+ "codex:tests.test_run_retention_integration": "integration",
+ "codex:tests.test_run_retention_scale": "integration"
 }

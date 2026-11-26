@@ -169,3 +169,49 @@ Runtime: `learning_store.py`, `run_retention.py`, `project_history.py`,
 Requirements and evidence: `docs/requirements/s14b.md`, this STATUS,
 [assertions.md](assertions.md), `final-*-evidence.json`,
 `final-measurement.json`, `final-index-measurement.json`.
+
+## Regression fix
+
+Gate exception from the primary's unsandboxed `--affected ce81bd96` run
+(`evidence/affected-after-final.txt`). Only these four regressions were changed.
+VERSION, schema version (17), record layouts and the digest catalogue are untouched;
+`test_runtime_release` still needs the primary's digest bookkeeping because three
+runtime files changed (learning_store, run_retention, cli).
+
+1. **RS-A-G6 idle read.** Maintenance now knows whether it is due without any
+   statement. At open one indexed read stores
+   `_run_retention_due_ms` (earliest retainable expiry) and `_retention_ready`.
+   Appends lower the due time in `_append_checked_locked`; an empty walk from the
+   start raises it to the next expiry. `sweep()` compares two Python numbers first
+   and returns with no SQL (no `SELECT n FROM retention_revision`, no PRAGMAs) when
+   nothing can be due. The idle path is the base cheap read again.
+2. **No writes on open.** Two base tests pin the stored layout from both sides
+   (a fresh default open must equal the schema-11 layout after the known additive
+   indexes are dropped, and a consented upgrade open must equal a fresh open), so
+   no open of any kind may add a persistent object. The five retention/protection
+   indexes are now created only by `LearningLedger.create_retention_indexes()`,
+   which `cli.py` calls in the `--upgrade-ledger` registration step (drained offline
+   owner, after the whole-ledger copy when the ledger is behind). It is refused
+   while a collector is active or for a sole-owner ledger. A default open makes only
+   TEMP objects, so the schema digest and the refuse-without-writes, rollback and
+   byte-identical checks are as on base. Without all five indexes maintenance does
+   nothing (no SQL). `test_plain_open_makes_no_index_and_the_consented_step_enables_retention_with_a_silent_idle`
+   covers both halves. **Open point for the primary:** a ledger never put through
+   `--upgrade-ledger` runs no retention; if the owner wants a same-version ledger to
+   gain the indexes without that flag, that is a decision beyond this exception.
+3. **Unlisted cap.** `lifetime_caps.json` registers `advance_import_history` and the
+   nested `rows` page reader with their `ends` and past-the-limit tests (see
+   assertions.md).
+4. **Module budget.** The 365,000-summary test (48.9 of the module's 50 s) is its own
+   registered module `test_run_retention_scale` (36 s here); `test_run_retention` is
+   now about 3 s. No ceiling was raised.
+
+Evidence, unsandboxed, short TMPDIR, `env -i`: the four modules plus
+`test_run_retention*`, `test_learning_store`, `test_learning_migration` and
+`test_history_service_upgrade` were green (216 tests, metadata_errors [],
+budget_failures []). Five-year backup projection re-measured with the real
+signature worker: **15.198 GiB** at 774 runs/day (0.802 GiB below the 16 GiB
+ceiling); live database estimate 16.425 GiB, reported separately as before
+([regression-measurement.json](regression-measurement.json)). Index scale:
+365,001 summaries, 27.95 bytes/entry, three lookups 0.4 ms
+([regression-index-measurement.json](regression-index-measurement.json)).

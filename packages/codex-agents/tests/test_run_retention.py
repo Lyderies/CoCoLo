@@ -10,7 +10,7 @@ from test_framework import requirements
 from tests import test_learning_store as legacy
 from tests.support import REPOSITORY_ROOT
 from tests.learning_support import verification_outcome, event_record
-from codex_agents import learning_store
+from codex_agents import learning_store, run_retention
 from codex_agents.contracts import ContractError
 from codex_agents.learning_contracts import validate_learning_record
 
@@ -51,6 +51,7 @@ class RunRetentionTests(unittest.TestCase):
         self.ledger = self.fixture.ledger
         self.project = self.fixture.project_a_id
         self.db = self.ledger._connection
+        run_retention.ensure_indexes(self.ledger)  # a consented owner open creates them; a plain open never does
 
     def append(self, record, source='provider'):
         return store_product_row(self.ledger, self.project, record, source)
@@ -397,71 +398,28 @@ class RunRetentionTests(unittest.TestCase):
                     reader.record('never-written', 'provider_identity')
         bounded.assert_called_once()
 
-    @requirements('S14b-4')
-    def test_typed_history_and_years_of_summaries_use_indexed_membership(self):
-        self.append(identity('first'))
-        self.sweep()
-        first = self.summaries()[0]
-        with self.ledger.repository(self.project) as reader:
-            with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
-                reader.record('first', 'outcome')
-        # Five years at about 200 batches/day. Each summary enters through the
-        # same validated product append and indexing path; no unlinked outcome.
-        import copy
-        from codex_agents.learning_contracts import content_digest
-        with self.ledger._account_transaction():
-            for i in range(365_000):
-                summary = copy.deepcopy(first)
-                summary.update(record_id=f'retsum-history-{i}', record_id_digests=[content_digest(f'history-{i}')])
-                self.append(summary, 'lifecycle')
-        from codex_agents import run_retention
-        # Build indexes against a years-sized ledger, with real detail in the
-        # partial index as well as summaries. All rows use product validation.
-        with self.ledger._account_transaction():
-            for i in range(50_000):
-                self.append(identity(f'index-detail-{i}', START+92*DAY))
-        size = self.db.execute('PRAGMA page_size').fetchone()[0] * self.db.execute('PRAGMA page_count').fetchone()[0]
-        ddl = (run_retention.RETENTION_INDEX, *run_retention.PROTECTION_INDEXES)
-        for sql in ddl:
-            self.db.execute('DROP INDEX '+sql.split('EXISTS ')[1].split(' ON ')[0])
-        started = time.perf_counter()
-        for sql in ddl:
-            self.db.execute(sql)
-        persistent_seconds = time.perf_counter()-started
-        started = time.perf_counter()
-        run_retention.rebuild_history_index(self.ledger)
-        pages = 0
-        while self.ledger._history_index_rebuilding:
-            self.sweep()
-            pages += 1
-        history_seconds = time.perf_counter()-started
-        index_bytes = (self.db.execute('PRAGMA temp.page_size').fetchone()[0]
-                       * self.db.execute('PRAGMA temp.page_count').fetchone()[0])
-        self.scale_measurements = dict(summary_count=365_001, detail_count=50_000, ledger_bytes=size,
-                                       persistent_index_build_seconds=persistent_seconds,
-                                       membership_index_build_seconds=history_seconds,
-                                       membership_index_bytes=index_bytes,
-                                       membership_bytes_per_entry=index_bytes/365_001,
-                                       membership_index_pages=pages)
-        self.assertLessEqual(index_bytes/365_001, 40)
-        # The reviewed implementation's JSON walk cannot reach the oldest
-        # member under the read budget. Keep this as the regression oracle.
-        from codex_agents.sql_read_budget import SQLReadError
-        def old_scan():
-            return self.db.execute("SELECT content FROM records r WHERE project_id=? AND record_type='retention_summary' "
-                                   "AND EXISTS(SELECT 1 FROM json_each(CAST(r.content AS TEXT),'$.record_id_digests') WHERE value=?) "
-                                   "ORDER BY source_sequence DESC LIMIT 1", (self.project, content_digest('first'))).fetchone()
-        with self.assertRaises(SQLReadError):
-            self.db.read_in_current_mode(run_retention.RUN_RETENTION_READ_LIMITS, old_scan)
-        started = time.perf_counter()
-        with self.ledger.repository(self.project) as reader:
-            self.assertEqual(first, reader.record('first', 'provider_identity'))
-            with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
-                reader.record('first', 'outcome')
-            with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
-                reader.record('typo-first', 'provider_identity')
-
-        self.scale_measurements['three_lookup_seconds'] = time.perf_counter()-started
+    @requirements('S14b-3')
+    def test_plain_open_makes_no_index_and_the_consented_step_enables_retention_with_a_silent_idle(self):
+        plain = legacy.LearningStoreTests(methodName='runTest')
+        plain.setUp()
+        self.addCleanup(plain.tearDown)
+        ledger, db = plain.ledger, plain.ledger._connection
+        names = ', '.join("'%s'" % n for n in run_retention.RETENTION_INDEX_NAMES)
+        self.assertEqual(0, db.execute(f"SELECT count(*) FROM sqlite_master WHERE name IN ({names})").fetchone()[0])
+        store_product_row(ledger, plain.project_a_id, identity('old'))
+        statements = []
+        db.set_trace_callback(statements.append)
+        self.assertEqual(0, ledger.sweep_run_retention(now_ms=START+91*DAY))
+        db.set_trace_callback(None)
+        self.assertEqual([], statements)  # not ready: no statement, so an idle pass stays the cheap read
+        ledger.create_retention_indexes()
+        self.assertEqual(5, db.execute(f"SELECT count(*) FROM sqlite_master WHERE name IN ({names})").fetchone()[0])
+        statements.clear()
+        db.set_trace_callback(statements.append)
+        self.assertEqual(0, ledger.sweep_run_retention(now_ms=START+89*DAY))
+        db.set_trace_callback(None)
+        self.assertEqual([], statements)  # nothing can have expired yet: still no statement
+        self.assertEqual(1, ledger.sweep_run_retention(now_ms=START+91*DAY))
 
     @requirements('S14b-2', 'S14b-3')
     def test_protected_tail_reaches_idle_and_does_not_wrap_on_short_pages(self):

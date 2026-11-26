@@ -407,5 +407,6 @@
  "codex:tests.test_ledger_owner_wiring": "scenario",
  "codex:tests.test_u1_orchestration_lifetime": "scenario",
  "codex:tests.test_run_retention": "scenario",
- "codex:tests.test_run_retention_integration": "scenario"
+ "codex:tests.test_run_retention_integration": "scenario",
+ "codex:tests.test_run_retention_scale": "scenario"
 }

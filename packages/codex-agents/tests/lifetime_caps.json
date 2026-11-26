@@ -2101,6 +2101,16 @@
    "ends": "Historical lookup seeks one proven, typed summary member under the existing 2048-callback/25-ms read budget. Missing IDs stay not found; a budget refusal propagates without inventing membership. The connection-local index rebuilds from permanent summaries.",
    "test": "test_typed_history_and_years_of_summaries_use_indexed_membership"
   },
+  "run_retention.py::advance_import_history": {
+   "checks": 2,
+   "ends": "Imported summaries are rebuilt into the connection-local lookup in pages of at most 32 on project-owner maintenance; the page cursor advances and then drops, so it is neither an admission cap nor accumulated history. Summaries stay permanent history.",
+   "test": "test_import_rebuild_pages_resume_and_preserve_digest_answers"
+  },
+  "run_retention.py::rows": {
+   "checks": 1,
+   "ends": "The ledger's lookup rebuild reads at most 32 permanent summaries per owner turn and resumes from its committed cursor; the cursor ends at the last summary. A page bound, never an admission cap.",
+   "test": "test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe"
+  },
   "run_retention.py::_component": {
    "checks": 1,
    "ends": "The bounded recursive page ends at batch+1; oversized linked groups stay full and later candidates advance. No admission capacity limit.",

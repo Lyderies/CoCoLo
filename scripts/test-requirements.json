@@ -3968,6 +3968,7 @@
  },
  "S14b-3": {
   "checks": [
+   "codex:tests.test_run_retention.RunRetentionTests.test_plain_open_makes_no_index_and_the_consented_step_enables_retention_with_a_silent_idle",
    "codex:tests.test_run_retention.RunRetentionTests.test_collector_maintenance_contains_failure_and_is_the_only_automatic_entry",
    "codex:tests.test_run_retention.RunRetentionTests.test_failed_fast_continuation_stops_and_batch_ceiling_never_limits_a_run",
    "codex:tests.test_run_retention.RunRetentionTests.test_historical_lookup_budget_failure_does_not_invent_membership",
@@ -3998,7 +3999,7 @@
    "codex:tests.test_run_retention.RunRetentionTests.test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe",
    "codex:tests.test_run_retention.RunRetentionTests.test_summary_contract_is_closed_and_old_vocabulary_remains_readable",
    "codex:tests.test_run_retention.RunRetentionTests.test_summary_stays_readable_when_live_writer_vocabulary_shrinks",
-   "codex:tests.test_run_retention.RunRetentionTests.test_typed_history_and_years_of_summaries_use_indexed_membership",
+   "codex:tests.test_run_retention_scale.RunRetentionScaleTests.test_typed_history_and_years_of_summaries_use_indexed_membership",
    "codex:tests.test_run_retention.RunRetentionTests.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer",
    "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_summary_survives_original_source_image_and_learning_transfer",
    "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_import_rebuild_pages_resume_and_preserve_digest_answers",

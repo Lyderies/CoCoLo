@@ -22,6 +22,11 @@ RETENTION_INDEX = (
     'CREATE INDEX IF NOT EXISTS records_run_retention ON records(expires_at_ms,project_id,source_sequence) '
     f'WHERE record_type IN ({DETAIL_SQL})'
 )
+# Persistent indexes change the stored layout, so only the consented upgrade flow
+# (setup --upgrade-ledger) creates them; no open ever writes them. Without all of them maintenance does nothing and runs no SQL.
+RETENTION_INDEX_NAMES = ('records_run_retention', 'record_links_retention_to', 'stored_files_retention_source',
+                         'consumed_grants_retention_promotion', 'account_open_retention_run')
+NEVER_DUE = 1 << 62
 PROTECTION_INDEXES = (
     'CREATE INDEX IF NOT EXISTS record_links_retention_to ON record_links(project_id,to_record_id)',
     'CREATE INDEX IF NOT EXISTS stored_files_retention_source ON stored_files(project_id,source_record_id)',
@@ -51,6 +56,43 @@ def rebuilding_answer():
     return {'record_type': 'history_index_rebuilding', 'detail': 'history index rebuilding'}
 
 
+def ensure_indexes(ledger):
+    """Create the persistent retention indexes. Only the consented upgrade flow (setup --upgrade-ledger,
+    after its whole-ledger copy, on the drained offline owner) may call this; no open ever does."""
+    db = ledger._connection
+    for sql in (RETENTION_INDEX, *PROTECTION_INDEXES):
+        db.execute(sql)
+    probe(ledger)
+
+
+def probe(ledger):
+    """Learn once (open, or after consented creation) whether retention can run and when it is next due.
+
+    The idle sweep then compares two numbers in Python: no statement runs until a retainable
+    record can have expired. Appends lower the due time; an empty page raises it.
+    """
+    db = ledger._connection
+    present = {row[0] for row in db.execute(
+        'SELECT name FROM sqlite_master WHERE type=? AND name IN (%s)' % ','.join('?'*len(RETENTION_INDEX_NAMES)),
+        ('index', *RETENTION_INDEX_NAMES))}
+    ledger._retention_ready = present == set(RETENTION_INDEX_NAMES)
+    ledger._run_retention_due_ms = _next_due(db, -1) if ledger._retention_ready else NEVER_DUE
+    ledger._run_retention_after = (-1, '', 0)
+
+
+def _next_due(db, after_ms):
+    row = db.execute(
+        'SELECT expires_at_ms FROM records INDEXED BY records_run_retention '
+        f'WHERE record_type IN ({DETAIL_SQL}) AND expires_at_ms>? ORDER BY expires_at_ms LIMIT 1',
+        (after_ms,)).fetchone()
+    return row[0] if row else NEVER_DUE
+
+
+def note_append(ledger, record_type, expires_at_ms):
+    if record_type in RETAINABLE_DETAIL_TYPES and expires_at_ms is not None:
+        ledger._run_retention_due_ms = min(ledger._run_retention_due_ms, expires_at_ms)
+
+
 def initialize(ledger):
     """Schedule derived state; no whole-history work runs while opening a ledger."""
     db = ledger._connection
@@ -67,6 +109,7 @@ def initialize(ledger):
         for operation in ('DELETE', 'UPDATE'):
             db.execute(f'CREATE TEMP TRIGGER retention_{table}_{operation} AFTER {operation} ON main.{table} '
                        'BEGIN UPDATE retention_revision SET n=n+1; END')
+    probe(ledger)
 
 
 def rebuild_history_index(ledger):
@@ -307,6 +350,8 @@ def sweep(ledger, now, batch):
             completed_page = advance_history_index(ledger)
             ledger._run_retention_more = completed_page and ledger._history_index_rebuilding
             return 0
+        if not ledger._retention_ready or now < ledger._run_retention_due_ms:
+            return 0  # nothing can be due: no statement runs (the idle check stays one cheap read)
         revision = db.execute('SELECT n FROM retention_revision').fetchone()[0]
         # Keep the high-water mark on short pages. Only a changed dependency or
         # a timed admission-window review starts another walk; quiet pinned ledgers
@@ -329,6 +374,8 @@ def sweep(ledger, now, batch):
         except SQLReadError:
             return 0
         if not rows:
+            if after == (-1, '', 0):  # a walk from the start found nothing expired
+                ledger._run_retention_due_ms = _next_due(db, now)
             return 0
         candidates, visited, oversized = {}, [], set()
         def select():

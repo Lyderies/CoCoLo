@@ -2398,10 +2398,8 @@ class LearningLedger:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS records_type_project ON records(record_type, project_id)"
             )
-            from .run_retention import RETENTION_INDEX, PROTECTION_INDEXES, initialize
-            self._connection.execute(RETENTION_INDEX)
-            for index in PROTECTION_INDEXES:
-                self._connection.execute(index)
+            # S14b: derived retention state; persistent indexes only via create_retention_indexes (upgrade flow).
+            from .run_retention import initialize
             initialize(self)
             # AP5-2: evidence names content identities, so seek just those within the project.
             # Additive and non-unique: existing ledgers and older same-schema readers stay valid.
@@ -2659,6 +2657,14 @@ class LearningLedger:
         ).fetchall():
             due.append((str(row["project_id"]), str(row["relative_path"])))
         return due
+
+    def create_retention_indexes(self) -> None:
+        """S14b: the consented upgrade flow's step; refused unless this is the drained offline owner."""
+        if self._collector_active is not False or self._sole_owner:
+            raise LedgerError("retention indexes are created only by the offline upgrade owner")
+        from .run_retention import ensure_indexes
+        with self._held():
+            ensure_indexes(self)
 
     def sweep_run_retention(self, *, now_ms: int | None = None, batch: int = 32) -> int:
         """S14b: one bounded page, off the run path, on the ledger owner."""
@@ -11274,8 +11280,11 @@ class LearningLedger:
         if checked['record_type'] == 'retention_summary':
             from .run_retention import index_summary
             index_summary(self, project_id, checked)
-        elif expires is not None and (expires, project_id, sequence) <= getattr(self, '_run_retention_after', (-1, '', 0)):
-            self._run_retention_after = (-1, '', 0)
+        if checked['record_type'] != 'retention_summary':
+            from .run_retention import note_append
+            note_append(self, checked['record_type'], expires)
+            if expires is not None and (expires, project_id, sequence) <= getattr(self, '_run_retention_after', (-1, '', 0)):
+                self._run_retention_after = (-1, '', 0)
         return {
             "stored": True,
             "duplicate": False,

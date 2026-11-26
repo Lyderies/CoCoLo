@@ -3100,5 +3100,6 @@
  "root:test_setup_wizard_terminal": 0.06,
  "root:test_test_stages": 2.03,
  "root:test_wizard_clock": 0.27,
- "codex:tests.test_run_retention_integration": 15.0
+ "codex:tests.test_run_retention_integration": 15.0,
+ "codex:tests.test_run_retention_scale": 30.0
 }

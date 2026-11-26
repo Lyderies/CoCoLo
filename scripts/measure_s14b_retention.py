@@ -23,10 +23,11 @@ def main():
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root/'packages/codex-agents'))
     from tests import test_run_retention_integration as tests
+    from tests import test_run_retention_scale as scale
     from codex_agents import signature_execution as execution
 
     if args.index_scale:
-        case = tests.retention.RunRetentionTests('test_typed_history_and_years_of_summaries_use_indexed_membership')
+        case = scale.RunRetentionScaleTests('test_typed_history_and_years_of_summaries_use_indexed_membership')
         result = unittest.TextTestRunner().run(unittest.TestSuite([case]))
         report = {**getattr(case, 'scale_measurements', {}), 'passed': result.wasSuccessful()}
         if args.output:

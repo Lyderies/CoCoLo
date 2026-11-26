@@ -11,7 +11,7 @@ from tests import test_ledger_owner_wiring as wiring
 from tests import test_learning_source_transfer as sources
 from tests import test_run_retention as retention
 from tests.learning_support import verification_outcome
-from codex_agents import learning_store, project_backup
+from codex_agents import learning_store, project_backup, run_retention
 from codex_agents.learning_contracts import content_digest
 
 
@@ -29,6 +29,7 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         ledger, db = fixture.ledger, fixture.ledger._connection
+        run_retention.ensure_indexes(ledger)  # a consented owner open creates the indexes
         project = fixture.reference.base.scope.project_id
         schema = db.execute('PRAGMA user_version').fetchone()[0]
         marks = {table: db.execute('SELECT coalesce(max(rowid),0) FROM '+table).fetchone()[0]
@@ -95,6 +96,7 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         fixture.start_owner()  # default sockets=False
+        fixture.owner.call(lambda: run_retention.ensure_indexes(fixture.owner.ledger))
         owner = fixture.owner
         def seed():
             retention.store_product_row(owner.ledger, fixture.project, retention.identity('old'))
@@ -110,7 +112,6 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         self.assertIsNot(threading.current_thread(), fixture.thread)
         # A restored/upgraded connection schedules the same rebuild on E1b's
         # owner; normal lookups have a plain answer until its maintenance turn.
-        from codex_agents import run_retention
         owner.call(lambda: run_retention.rebuild_history_index(owner.ledger))
         def lookup():
             with owner.ledger.repository(fixture.project) as reader:
@@ -132,6 +133,7 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         fixture.start_owner()
         owner = fixture.owner
+        owner.call(lambda: run_retention.ensure_indexes(owner.ledger))
         def seed():
             with owner.ledger._account_transaction():
                 for i in range(256):
@@ -159,6 +161,7 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         ledger = fixture.source
+        run_retention.ensure_indexes(ledger)
         ledger._connection.execute('INSERT OR IGNORE INTO record_links '
                                    "SELECT project_id,record_id,record_id,'evidence' FROM records")
         for i in range(70):
@@ -192,7 +195,6 @@ class RunRetentionIntegrationTests(unittest.TestCase):
             'source', content_digest(outcome), 'outcome', by_digest=True))
         self.assertIsNone(target.learning_import_history_record('source', 'never-written', 'provider_identity'))
         # The same full-digest verification rejects a forced candidate collision.
-        from codex_agents import run_retention
         with mock.patch.object(run_retention, 'digest_prefix', return_value=run_retention.digest_prefix(content_digest(outcome))):
             self.assertIsNone(target.learning_import_history_record(
                 'source', content_digest('foreign'), 'outcome', by_digest=True))
@@ -203,6 +205,7 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         ledger = fixture.source
+        run_retention.ensure_indexes(ledger)
         # This source fixture already carries historical provider observations.
         # Keep them explicitly cited so this test isolates the one new detail.
         ledger._connection.execute('INSERT OR IGNORE INTO record_links '
@@ -222,7 +225,6 @@ class RunRetentionIntegrationTests(unittest.TestCase):
             'source', 'old', 'provider_identity')['detail'])
         target.rebuild_learning_history_index()
         # Rebuild the original owner from the same durable summary as well.
-        from codex_agents import run_retention
         run_retention.rebuild_history_index(ledger)
         ledger.sweep_run_retention(now_ms=retention.START+91*retention.DAY)
         with ledger.repository(fixture.project) as reader:
