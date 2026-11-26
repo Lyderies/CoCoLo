@@ -381,7 +381,7 @@ def normalize_app_server(
 def load_client_capabilities(path: Path) -> dict[str, dict[str, Any]]:
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("client capability matrix is invalid") from exc
     if not isinstance(data, dict) or set(data) != {"version", "clients"} or data["version"] != 1:
         raise ContractError("client capability matrix is invalid")

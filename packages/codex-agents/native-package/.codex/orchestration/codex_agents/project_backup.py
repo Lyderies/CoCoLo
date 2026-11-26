@@ -339,7 +339,7 @@ def verify(path: Path, *, project_id: str, schema_version: int | None = None,
                     for content, digest in batch:
                         try:
                             record = validate_learning_record(json.loads(bytes(content)), stored=True)
-                        except (ContractError, json.JSONDecodeError, TypeError, ValueError):
+                        except (ContractError, json.JSONDecodeError, TypeError, ValueError, RecursionError):
                             raise _error("project backup contains a corrupt learning record") from None
                         if content_digest(record) != digest:
                             raise _error("project backup contains a corrupt learning record")
@@ -349,7 +349,7 @@ def verify(path: Path, *, project_id: str, schema_version: int | None = None,
                 _compare(compare, backup, project_id, ledger_version, manifest, exclude_file_id)
         except sqlite3.Error:
             raise _error("project backup is invalid") from None
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError, RecursionError):
             raise _error("project backup manifest is invalid") from None
     finally:
         backup.close()

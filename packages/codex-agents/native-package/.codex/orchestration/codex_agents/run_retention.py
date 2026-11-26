@@ -392,7 +392,7 @@ def sweep(ledger, now, batch):
                     continue
                 try:
                     run = json.loads(bytes(row['content'])).get('run_id')
-                except (ValueError, TypeError, AttributeError):
+                except (ValueError, TypeError, AttributeError, RecursionError):
                     visited.append(row)
                     continue
                 if run is not None:
@@ -412,7 +412,7 @@ def sweep(ledger, now, batch):
                         continue
                     try:
                         record = validate_learning_record(json.loads(bytes(member['content'])), stored=True)
-                    except (ValueError, TypeError, KeyError):
+                    except (ValueError, TypeError, KeyError, RecursionError):
                         continue
                     if (record['record_type'] != member['record_type'] or record['record_id'] != member['record_id']
                             or member['source'] not in SOURCES or content_digest(record) != member['content_digest']):

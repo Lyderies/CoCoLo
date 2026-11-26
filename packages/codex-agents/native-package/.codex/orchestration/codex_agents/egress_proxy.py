@@ -161,7 +161,7 @@ def load_policy(path: str) -> Optional[dict]:
     try:
         with open(path, encoding="utf-8") as handle:
             return validate_policy(json.load(handle))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
 
 
@@ -276,7 +276,7 @@ def read_records(directory: str, run_id: Optional[str] = None) -> list:
         for line in lines:
             try:
                 row = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):
                 continue
             if isinstance(row, dict) and (run_id is None or row.get("run") == run_id):
                 rows.append(row)
@@ -507,7 +507,7 @@ def main(argv=None, out: Callable[[str], object] = print) -> int:
     if args.set_policy is not None:
         try:
             policy = validate_policy(json.loads(args.set_policy))
-        except ValueError as error:
+        except (ValueError, RecursionError) as error:
             print(f"refused: {error}", file=sys.stderr)
             return 2
         out(write_policy(args.policy, policy))

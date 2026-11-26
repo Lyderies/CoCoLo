@@ -222,7 +222,7 @@ def _first_record(descriptor: int) -> dict:
 def _record(line: bytes) -> dict:
     try:
         value = json.loads(line)
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise SessionRefused(UNKNOWN_SHAPE) from exc
     _shape(isinstance(value, dict) and isinstance(value.get("payload"), dict))
     return value
@@ -256,7 +256,7 @@ def _turn_context(line: bytes) -> dict | None:
         return None
     try:
         value = json.loads(line)
-    except (UnicodeError, ValueError):
+    except (UnicodeError, ValueError, RecursionError):
         return None
     if isinstance(value, dict) and value.get("type") == "turn_context":
         _shape(isinstance(value.get("payload"), dict))
@@ -625,7 +625,7 @@ def bound_projects(codex_home: Path) -> list[Path]:
                         root = binding["project_root"]
                         if isinstance(root, str) and os.path.isabs(root):
                             projects.append(Path(os.path.normpath(root)))
-                    except (OSError, ValueError, KeyError, TypeError):
+                    except (OSError, ValueError, KeyError, TypeError, RecursionError):
                         continue
                     finally:
                         for item in opened:

@@ -41,7 +41,7 @@ def release_versions(*, project_root=None):
                 return {}
             versions[digest] = version
         return versions
-    except (OSError, UnicodeError, ValueError, TypeError):
+    except (OSError, UnicodeError, ValueError, TypeError, RecursionError):
         return {}
 
 

@@ -240,7 +240,7 @@ def takeover_report(history, *, run_handle=None):
         import json
         try:
             evidence = json.loads(row['evidence'])
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             evidence = {}
         report['finished_kept'] += int(evidence.get('reason') == 'legacy_finished_result')
         report['refused_unverifiable'] += int(evidence.get('reason') in

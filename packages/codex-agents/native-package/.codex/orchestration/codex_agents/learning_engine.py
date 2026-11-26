@@ -221,7 +221,7 @@ def _installed_managed_files(root: Path) -> tuple[list[str], dict[str, bytes]]:
     manifest_raw = _read_managed_bytes(root, manifest_relative)
     try:
         manifest = json.loads(manifest_raw)
-    except (UnicodeError, json.JSONDecodeError) as exc:
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("installed package manifest is invalid") from exc
     if (
         not isinstance(manifest, dict)

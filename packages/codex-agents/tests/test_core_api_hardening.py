@@ -317,7 +317,37 @@ class SlowSubscriberTests(CoreCase):
         deadline = time.monotonic() + 10
         while self.service._subs and time.monotonic() < deadline:
             time.sleep(0.1)
-        self.assertEqual([], self.service._subs)
+        self.assertEqual([], self.service._subs, self._slow_subscriber_diagnostics(s))
+
+    def _slow_subscriber_diagnostics(self, client):
+        """Failure-only evidence (G9): why the slow subscriber still holds its slot on this machine."""
+        lines = ["subscribers still registered: %d" % len(self.service._subs),
+                 "configured: write_seconds=%s event_buffer=%s" % (self.service.write_seconds, self.service.event_buffer)]
+        for sub in list(self.service._subs):
+            lines.append("sub: sent=%d queued=%d dropped=%s closed=%s last_seq=%s" % (
+                sub.sent, len(sub.live), sub.dropped, sub.closed, sub.last_seq))
+            conn = sub.session.connection
+            try:
+                lines.append("server socket SO_SNDBUF=%d connection alive=%s" % (
+                    conn.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF), conn.alive))
+            except (OSError, AttributeError) as error:
+                lines.append("server socket unreadable: %r" % (error,))
+        try:
+            lines.append("client SO_RCVBUF=%d" % client.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))
+            client.setblocking(False)
+            received = 0
+            while True:
+                chunk = client.recv(1 << 20)
+                if not chunk:
+                    break
+                received += len(chunk)
+            lines.append("bytes the server wrote before the bound (client closed)=%d" % received)
+        except BlockingIOError:
+            lines.append("bytes the server wrote before the bound (peer still open)=%d" % received)
+        except OSError as error:
+            lines.append("client socket unreadable: %r" % (error,))
+        lines.append("emitted: 40 events of about 60000 bytes each")
+        return "\n".join(lines)
 
 
 class EscapingTests(CoreCase):

@@ -411,7 +411,7 @@ def _open_store(store: Path | str, owner: _Owner) -> Path | Refusal:
         descriptor = os.open(location / STORE_MARKER, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(descriptor, "rb") as handle:
             marker = json.loads(handle.read(65_536))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return unusable("it is not a COCOLO private store")
     if not isinstance(marker, dict) or marker.get("format") != STORE_FORMAT:
         return unusable("it is not a COCOLO private store")

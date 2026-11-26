@@ -42,7 +42,7 @@ def _require_contained_file(path: Path, source_root: Path) -> None:
 def load_discovery_policy(path: Path) -> dict[str, Any]:
     try:
         policy = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise CatalogError(f"cannot load discovery policy {path}: {exc}") from exc
     if policy.get("duplicate_policy") != "error":
         raise CatalogError("duplicate_policy must be 'error'; use explicit resolutions")

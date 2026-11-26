@@ -807,7 +807,7 @@ class ProjectHistory:
             return
         try:
             evidence = {} if row['evidence'] is None else json.loads(row['evidence'])
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return  # Unknown historical evidence is not ours to replace.
         if type(evidence) is not dict or 'reason' in evidence:
             return
@@ -3224,7 +3224,7 @@ class ProjectHistory:
         if hold["release_kind"] == "crashed":
             try:
                 value = json.loads(evidence)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, RecursionError):
                 value = None
             if type(value) is dict and set(value) == cls._CRASH_EVIDENCE and type(value["closure"]) is str:
                 evidence = value["closure"]

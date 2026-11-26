@@ -494,7 +494,7 @@ class _Store:
         for line in data.splitlines():
             try:
                 number, name, identity = json.loads(line)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, RecursionError):
                 continue  # incomplete final append carries no authority
             if number in by_id:
                 by_id[number]['created'][name] = identity
@@ -516,7 +516,7 @@ class _Store:
                 stored = [json.loads(value) for (value,) in db.execute('SELECT value FROM rows ORDER BY id').fetchall()]
                 row = next(row for row in stored if row['id'] == expected_row['id'])
                 return _json(parts(row)[part])
-            except (ValueError, KeyError, IndexError, TypeError, StopIteration) as error:
+            except (ValueError, KeyError, IndexError, TypeError, StopIteration, RecursionError) as error:
                 raise _Refusal('corrupt_history') from error
         try:
             for table, values in (('rows', rows), ('queue', qs)):

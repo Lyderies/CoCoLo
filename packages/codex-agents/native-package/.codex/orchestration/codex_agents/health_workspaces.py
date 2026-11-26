@@ -557,7 +557,7 @@ class WorkspaceCheck(Check):
             os.close(descriptor)
         try:
             value = json.loads(data)
-        except ValueError:
+        except (ValueError, RecursionError):
             return None, None
         root = os.path.realpath(self._state_root)
         if (type(value) is not dict or set(value) != _MARKER_FIELDS or value['version'] != 1

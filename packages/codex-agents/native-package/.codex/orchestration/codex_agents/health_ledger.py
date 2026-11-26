@@ -287,7 +287,7 @@ class LedgerCheck(Check):
                 self._loaded_completion[project] = last
         except FileNotFoundError:
             pass
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, RecursionError):
             self._state_invalid = True
 
     def _save(self, project):

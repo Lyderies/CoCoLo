@@ -354,7 +354,7 @@ def _load_manifest(target: Target) -> dict | None:
         return None
     try:
         manifest = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise InstallError(f"invalid install manifest: {exc}") from exc
     if (
         not isinstance(manifest, dict)

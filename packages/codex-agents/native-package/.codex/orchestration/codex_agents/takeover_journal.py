@@ -167,7 +167,7 @@ class TakeoverJournal:
             if len(raw) > MAX_JOURNAL_BYTES:
                 raise JournalError('update intent exceeds its byte limit')
             return validate(json.loads(raw, object_pairs_hook=_unique))
-        except (OSError, UnicodeError, ValueError) as error:
+        except (OSError, UnicodeError, ValueError, RecursionError) as error:
             if isinstance(error, JournalError):
                 raise
             raise JournalError('update intent is unsafe or unreadable; keep it for recovery') from None

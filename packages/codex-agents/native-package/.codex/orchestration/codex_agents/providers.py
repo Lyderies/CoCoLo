@@ -155,7 +155,7 @@ def parse_claude_auth_status(
 
     try:
         data = json.loads(raw)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise ContractError("Claude auth status is not JSON") from exc
     if not isinstance(data, dict):
         raise ContractError("Claude auth status is not an object")
@@ -530,7 +530,7 @@ class AppServerSession:
                         continue
                     try:
                         message = json.loads(line)
-                    except ValueError as exc:
+                    except (ValueError, RecursionError) as exc:
                         raise ContractError("Codex app-server output is invalid") from exc
                     # Server notifications are ignored; only our reply matters.
                     if isinstance(message, dict) and message.get("id") == identifier:

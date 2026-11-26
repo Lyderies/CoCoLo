@@ -336,7 +336,7 @@ def parse_bounded_json_value(
         )
     except UnicodeDecodeError as exc:
         raise ContractError("record input must be UTF-8 JSON") from exc
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("record input is invalid JSON") from exc
     return value
 
@@ -607,7 +607,7 @@ def load_released_candidate_digests(
 
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("learning release registry is invalid") from exc
     if not isinstance(data, dict) or set(data) != {
         "version", "candidate_digests", "signature_b64"

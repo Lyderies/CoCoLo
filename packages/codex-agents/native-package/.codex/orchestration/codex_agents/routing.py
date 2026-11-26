@@ -625,7 +625,7 @@ def load_effective_policy(
 def load_policy(path: Path) -> dict[str, Any]:
     try:
         policy = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise PolicyError(f"cannot load routing policy {path}: {exc}") from exc
     required = {
         "version",

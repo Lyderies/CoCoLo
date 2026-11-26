@@ -109,7 +109,7 @@ def _validate_evaluation(
     path = root / ".codex" / "orchestration" / relative
     try:
         report = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         errors.append(f"cannot load evaluation evidence: {exc}")
         return
     if report.get("ready") is not True:
@@ -277,7 +277,7 @@ def _validate_schemas(root: Path, errors: list[str]) -> None:
     for path in sorted(schema_root.glob("*.json")):
         try:
             data = json.loads(path.read_text())
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:
             errors.append(f"{path.relative_to(root)}: invalid JSON: {exc}")
             continue
         if data.get("type") != "object" or data.get("additionalProperties") is not False:
@@ -422,7 +422,7 @@ def _validate_learning_producers(root: Path, errors: list[str]) -> None:
     path = root / ".codex" / "orchestration" / "config" / "learning-producers.json"
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         errors.append(f"cannot load learning producer matrix: {exc}")
         return
     producers = data.get("producers") if isinstance(data, dict) else None
@@ -547,7 +547,7 @@ def _validate_learning_hooks(root: Path, errors: list[str]) -> None:
         return
     try:
         data = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         errors.append(f"cannot load learning hook configuration: {exc}")
         return
     if not isinstance(data, dict) or set(data) != {"description", "hooks"}:
@@ -619,7 +619,7 @@ def _validate_learning_overhead(root: Path, errors: list[str]) -> None:
     path = root / ".codex" / "orchestration" / "config" / "learning-overhead.json"
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         errors.append(f"cannot load learning overhead limits: {exc}")
         return
     expected_fields = {

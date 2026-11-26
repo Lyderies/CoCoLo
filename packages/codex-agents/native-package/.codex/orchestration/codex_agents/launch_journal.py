@@ -935,7 +935,7 @@ def _read_recovery(path):
             return None
         raw = os.read(descriptor, MAX_RECOVERY_REPORT_BYTES + 1)
         value = json.loads(raw)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     finally:
         os.close(descriptor)

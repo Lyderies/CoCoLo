@@ -119,7 +119,7 @@ def account_rows(connection):
             "'provider_billing','provider_headroom')"):
         try:
             record = json.loads(bytes(content))
-        except ValueError:
+        except (ValueError, RecursionError):
             record = {}
         rows.append((rowid, project, kind, source, observed, len(content), record))
     return rows

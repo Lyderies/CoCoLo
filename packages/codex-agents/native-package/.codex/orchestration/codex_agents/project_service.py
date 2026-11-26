@@ -189,7 +189,7 @@ def pending_cleanups(state):
         try:
             with open(directory / name) as handle:
                 found.append((name, json.load(handle)['project_root']))
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, RecursionError):
             continue
     return found
 

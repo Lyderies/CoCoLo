@@ -525,7 +525,7 @@ def pending_workspaces_detail(state_root):
         for evidence in rows:
             try:
                 facts = json.loads(evidence or '{}')
-            except ValueError:
+            except (ValueError, RecursionError):
                 return None, 'evidence_unreadable:' + _project_label(name)
             if not isinstance(facts, dict):
                 return None, 'evidence_unreadable:' + _project_label(name)

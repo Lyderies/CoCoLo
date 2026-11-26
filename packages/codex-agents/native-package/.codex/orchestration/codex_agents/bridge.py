@@ -1132,7 +1132,7 @@ def result_schema_for(schema: bytes, assignment: Any) -> bytes:
         return schema
     try:
         parsed = json.loads(schema)
-    except ValueError:
+    except (ValueError, RecursionError):
         return schema  # the ordinary schema parse refuses it
     if not isinstance(parsed, dict):
         return schema
@@ -1727,7 +1727,7 @@ def codex_schemas(schema: bytes) -> tuple[dict[str, Any], bytes]:
     """Use the same schema parse/conversion before readiness and execution."""
     try:
         original_schema = json.loads(schema)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise BridgeRefused("result schema is invalid") from exc
     return original_schema, json.dumps(strict_output_schema(original_schema), sort_keys=True).encode()
 

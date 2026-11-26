@@ -91,13 +91,7 @@ def validate_collector_runtime(cli_path: Path) -> dict[str, str | int]:
             "runtime_version": version,
             "runtime_digest": digest,
         }
-    except (
-        ContractError,
-        OSError,
-        UnicodeError,
-        json.JSONDecodeError,
-        IndexError,
-    ) as exc:
+    except (ContractError, OSError, UnicodeError, json.JSONDecodeError, IndexError, RecursionError) as exc:
         raise CollectorAuthorizationError(
             "installed package integrity validation failed",
             code="runtime_integrity_invalid",
@@ -134,7 +128,7 @@ def _collector_runtime_authorization(
         if len(raw) > 1024:
             raise StateError("collector runtime authorization is invalid")
         value = json.loads(raw)
-    except (OSError, StateError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, StateError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise CollectorAuthorizationError(
             "collector runtime authorization is invalid",
             code="runtime_authorization_invalid",
@@ -242,7 +236,7 @@ def _client_health_data(state: CollectorPaths) -> dict[str, Any]:
         if len(raw) > CLIENT_HEALTH_READ_BYTES:
             raise StateError("client health state is invalid")
         value = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise StateError("client health state is invalid") from exc
     if (
         not isinstance(value, dict)

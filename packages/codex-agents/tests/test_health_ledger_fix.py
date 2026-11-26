@@ -348,3 +348,65 @@ sys.exit(1)
              mock.patch.object(hm.os, 'open', side_effect=AssertionError('import file IO')), \
              mock.patch.object(sqlite3, 'connect', side_effect=AssertionError('import SQLite')):
             importlib.reload(user_settings)
+
+
+class JsonLoaderDeepNestingTests(unittest.TestCase):
+    """S9-HM4-4 as a class: deeply nested JSON is malformed JSON on every supported Python.
+
+    Python 3.11 raises RecursionError from json.loads on deep nesting (newer Pythons do not), and
+    RecursionError is not a ValueError, so a loader that handles malformed input but names only
+    ValueError/JSONDecodeError lets it escape as a crash."""
+
+    ROOTS = ('native-package/.codex/orchestration', 'scripts', '../claude-agents/src')
+    COVERS = {'ValueError', 'JSONDecodeError'}
+    CATCHES = {'RecursionError', 'RuntimeError', 'Exception', 'BaseException'}
+
+    def sites(self):
+        import ast
+        from pathlib import Path
+        package = Path(__file__).resolve().parents[1]
+        found = []
+        for root in self.ROOTS:
+            for path in sorted((package / root).rglob('*.py')):
+                tree = ast.parse(path.read_text())
+                parent = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr in ('loads', 'load') and ast.unparse(node.func.value) == 'json'):
+                        continue
+                    child = node
+                    while child in parent:
+                        outer = parent[child]
+                        if isinstance(outer, ast.Try) and child in outer.body:
+                            names = [{ast.unparse(item).split('.')[-1] for item in
+                                      (h.type.elts if isinstance(h.type, ast.Tuple) else [h.type])}
+                                     if h.type is not None else {'Exception'} for h in outer.handlers]
+                            if any(n & self.COVERS for n in names):
+                                if not any(n & self.CATCHES for n in names):
+                                    found.append('%s:%d' % (path.name, node.lineno))
+                                break
+                        child = outer
+        return found
+
+    @requirements('S9-HM4-4', why_not_scenario='A static scan of product sources: no process boundary is involved.')
+    def test_no_loader_that_handles_malformed_json_lets_recursion_error_escape(self):
+        self.assertEqual([], self.sites())
+
+    @requirements('S9-HM4-4', why_not_scenario='The parser raises its refusal in-process on a patched decoder; no service or CLI boundary is involved.')
+    def test_shared_bounded_parser_refuses_recursion_error_as_invalid_json(self):
+        from codex_agents import learning_contracts
+        with mock.patch.object(learning_contracts.json, 'loads', side_effect=RecursionError('deep')):
+            with self.assertRaises(learning_contracts.ContractError):
+                learning_contracts.parse_bounded_json_value(b'[[0]]')
+
+    @requirements('S9-HM4-4', why_not_scenario='The reader refuses in-process on a patched decoder; no service or CLI boundary is involved.')
+    def test_claude_settings_reader_refuses_recursion_error_as_unreadable(self):
+        import tempfile
+        from pathlib import Path
+        from codex_agents import claude_host
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'settings.json'
+            path.write_text('{}')
+            with mock.patch.object(claude_host.json, 'loads', side_effect=RecursionError('deep')):
+                with self.assertRaises(claude_host.ClaudeHostDenied):
+                    claude_host._settings(path)
