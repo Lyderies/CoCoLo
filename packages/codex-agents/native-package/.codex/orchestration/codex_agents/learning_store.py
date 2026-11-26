@@ -13857,7 +13857,7 @@ class CollectorServer:
         if self._ledger_owner is not None:
             self.health_monitor.register_state_checks(self.state, sweep_interval_seconds=WORKER_RESULT_SWEEP_SECONDS)
         health_workspaces.register(self.health_monitor, self.state.root,
-                                   pending=lambda root=self.state.root: memory_holds.pending_workspaces(root))
+                                   pending=memory_holds.pending_workspaces_reader(self.state.root))
         # HM-6 (S10): low disk under the state folder and memory pressure, reported to status. Registering reads nothing.
         health_resources.register(self.health_monitor, self.state)
         self._clients = client_capabilities or load_client_capabilities(

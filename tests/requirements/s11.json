@@ -55,6 +55,16 @@
    "id": "HM2A-11",
    "source": "tests/requirements/s11.json#HM2A-11",
    "statement": "The collector registers the workspaces check with a read-only pending reader over the project histories (no I/O at registration); a pass removes an orphan folder and keeps a live driver's folder."
+  },
+  {
+   "id": "HM2A-12",
+   "source": "tests/requirements/s11.json#HM2A-12",
+   "statement": "A project whose history has no project_holds table (an older but valid store) owes no removals: it counts zero and does not fail the whole pending read; a corrupt or unreadable store still does."
+  },
+  {
+   "id": "HM2A-13",
+   "source": "tests/requirements/s11.json#HM2A-13",
+   "statement": "Every remaining unknown pending read names its reason (too_many_projects, projects_unreadable:<Class>, history_unreadable:<Class>:<project id>, too_many_pending:<project id>, deadline); the workspaces finding carries it in its text and subject with a plain next step, within the existing length bounds. No dedupe exists in the health monitor for findings (it shows the last pass's findings), so none was added."
   }
  ]
 }

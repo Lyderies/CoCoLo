@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import re
+import sqlite3
 import stat
 import time
 from pathlib import Path
@@ -435,25 +436,35 @@ def _read_pending(history, deadline):
         else:
             raise sqlite3.DatabaseError('history identity is not a single project')
         rows = []
-        for (evidence,) in history.execute(query, arguments):
-            if _monotonic() > deadline:
-                raise _PendingExpired
-            rows.append(evidence)
-            if len(rows) > MAX_PENDING_REMOVALS:
-                break
+        try:
+            for (evidence,) in history.execute(query, arguments):
+                if _monotonic() > deadline:
+                    raise _PendingExpired
+                rows.append(evidence)
+                if len(rows) > MAX_PENDING_REMOVALS:
+                    break
+        except sqlite3.OperationalError as error:
+            if not _is_missing_table(error, 'project_holds'):
+                raise
+            return []  # a store written before project_holds existed owes nothing (decision 365); a corrupt one raises
         return rows
     finally:
         history.set_progress_handler(None, 0)
 
 
-def pending_workspaces(state_root):
-    """HM-2a (S11): the preparation folders any project of `state_root` still owes a removal for, as a set of paths.
+def _project_label(name):
+    """A project folder's name as a reason detail: only plain id characters, bounded; never a path."""
+    return name if re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', name) else 'unnamed_project'
 
-    Read-only: every project history is opened as its own read-only snapshot (as the holds check does), nothing is
-    created, written or migrated. None means the records could not be read completely (a history that does not
-    open, more projects or pending rows than the bounds, or the one deadline of this read passing while SQLite or
-    the Python loop was still working), so the workspaces check removes nothing that pass. Never a partial set."""
-    import sqlite3
+
+def _is_missing_table(error, table):
+    return isinstance(error, sqlite3.OperationalError) and f'no such table: {table}' in str(error)
+
+
+def pending_workspaces_detail(state_root):
+    """(paths, None) when every project's records were read, else (None, reason). Decision 365: the reason names
+    what is left (too_many_projects, projects_unreadable:<Class>, deadline, history_unreadable:<Class>:<project id>,
+    too_many_pending:<project id>, evidence_unreadable:<project id>); a project id is the only name it carries."""
     from contextlib import closing
     from .health_holds import open_reader
     deadline = _monotonic() + PENDING_DEADLINE_SECONDS
@@ -463,33 +474,64 @@ def pending_workspaces(state_root):
         with os.scandir(projects) as listing:
             for entry in listing:
                 if _monotonic() > deadline:
-                    return None
+                    return None, 'deadline'
                 names.append(entry.name)
                 if len(names) > MAX_PENDING_READ_PROJECTS:
-                    return None
+                    return None, 'too_many_projects'
     except FileNotFoundError:
-        return set()
-    except OSError:
-        return None
+        return set(), None
+    except OSError as error:
+        return None, 'projects_unreadable:' + type(error).__name__
     found = set()
     for name in sorted(names):
         if _monotonic() > deadline:
-            return None
+            return None, 'deadline'
         database = projects / name / 'history.sqlite3'
         if not database.is_file():
             continue
         try:
             with closing(open_reader(database)) as history:
                 rows = _read_pending(history, deadline)
-        except (OSError, sqlite3.Error, _PendingExpired):
-            return None
+        except _PendingExpired:
+            return None, 'deadline'
+        except sqlite3.OperationalError as error:
+            if _monotonic() > deadline and 'interrupted' in str(error):
+                return None, 'deadline'
+            return None, f'history_unreadable:{type(error).__name__}:{_project_label(name)}'
+        except (OSError, sqlite3.Error) as error:
+            return None, f'history_unreadable:{type(error).__name__}:{_project_label(name)}'
         if len(rows) > MAX_PENDING_REMOVALS:
-            return None
+            return None, 'too_many_pending:' + _project_label(name)
         for evidence in rows:
             try:
                 facts = json.loads(evidence or '{}')
             except ValueError:
-                return None
+                return None, 'evidence_unreadable:' + _project_label(name)
             if facts.get('removal') == 'pending' and isinstance(facts.get('workspace'), str):
                 found.add(facts['workspace'])
-    return found
+    return found, None
+
+
+def pending_workspaces(state_root):
+    """HM-2a (S11): the preparation folders any project of `state_root` still owes a removal for, as a set of paths.
+
+    Read-only: every project history is opened as its own read-only snapshot (as the holds check does), nothing is
+    created, written or migrated. None means the records could not be read completely (a history that does not
+    open, more projects or pending rows than the bounds, or the one deadline of this read passing while SQLite or
+    the Python loop was still working), so the workspaces check removes nothing that pass. Never a partial set.
+    A store without the project_holds table (an older but valid store) owes nothing (decision 365)."""
+    return pending_workspaces_detail(state_root)[0]
+
+
+class pending_workspaces_reader:
+    """The collector's pending reader: calling it is `pending_workspaces(state_root)`; after a None, `reason` names
+    why (decision 365), None after a full read. One health pass calls it at a time."""
+
+    reason = None
+
+    def __init__(self, state_root):
+        self._state_root = state_root
+
+    def __call__(self):
+        found, self.reason = pending_workspaces_detail(self._state_root)
+        return found

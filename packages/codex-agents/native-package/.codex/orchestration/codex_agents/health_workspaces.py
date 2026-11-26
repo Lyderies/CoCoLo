@@ -217,6 +217,17 @@ _UNSAFE = {
 }
 
 
+# Decision 365: what the person can do about each unknown reason of the pending records (kept short: findings are 240 characters).
+_STEPS = {
+    'deadline': 'No action needed; it is tried again next pass.',
+    'too_many_projects': 'No action needed yet; report it if it lasts.',
+    'too_many_pending': 'It stays until the extra records clear; report it if it lasts.',
+    'projects_unreadable': 'Check the CoCoLo state folder is readable; report it if it lasts.',
+    'history_unreadable': 'That project history cannot be read; report it if it lasts.',
+    'evidence_unreadable': 'A removal record is damaged; report it if it lasts.',
+}
+
+
 class _Budget:
     """What one pass may still spend on removal: entries removed so far, and its deadline."""
 
@@ -477,7 +488,8 @@ class WorkspaceCheck(Check):
         try:
             value = reader()
             if value is None:
-                return None, None
+                reason = getattr(reader, 'reason', None)  # decision 365: a reader may say why (a plain code)
+                return None, (reason if type(reason) is str and SUBJECT.fullmatch(reason) else None)
             paths, items = set(), 0
             for item in value:
                 items += 1
@@ -489,6 +501,19 @@ class WorkspaceCheck(Check):
         except Exception as error:
             return None, type(error).__name__
         return paths, None
+
+    @staticmethod
+    def _records_finding(what, error):
+        """The one 'records unreadable' finding. `error` is an exception class name or, from the pending reader
+        (decision 365), a reason code; a reason code is also the subject, so the status line shows what is left."""
+        step = _STEPS.get((error or '').split(':')[0])
+        if step:  # a named reason: short, so the longest (a project id and an error class) fits 240 characters
+            text = f'Owed folder removals could not be fully read ({error}), so nothing was removed. {step}'
+        else:
+            text = (f'The records of {what} are incomplete or could not be read'
+                    + (f' ({error})' if error else '') + ', so no leftover preparation folder was removed. '
+                    'It is tried again at the next pass.')
+        return _finding(error if step else 'records', 'reported', 'records_unreadable', text)
 
     def _owner(self, container, name, ident):
         """('stopped', marker time) when the folder's owner is proven gone, ('running', None) when its owner holds its
@@ -581,11 +606,7 @@ class WorkspaceCheck(Check):
         if live is None or pending is None:
             what = 'which preparation folders are in use' if live is None else 'which removals a driver still owes'
             error = live_error if live is None else pending_error
-            findings.append(_finding('records', 'reported', 'records_unreadable',
-                                     f'The records of {what} are incomplete or could not be read'
-                                     + (f' ({error})' if error else '')
-                                     + ', so no leftover preparation folder was removed. It is tried again at '
-                                       'the next pass.'))
+            findings.append(self._records_finding(what, error))
         now = context.now_ms / 1000
         candidates, seen_pending = [], {}
         for name in names:
