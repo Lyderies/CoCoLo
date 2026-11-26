@@ -22,6 +22,10 @@ from tests.support import ORCHESTRATION_ROOT  # noqa: E402 -- capture markers be
 # replaced by an immediate end; the product code around them (the wait, the health counter, the refusal) still
 # runs. Real starts keep their own tests (test_project_start, test_learning_cli, test_host_commands).
 NO_SERVICE_SPAWN = 'COCOLO_TEST_ENDED_SERVICE_STARTS'
+# S10 HM-6 (decision 363): a new run's open asks the project host's run driver `run.check` and fails closed without
+# one. A fixture with no run driver opts in (this variable) to a protocol-valid `ready` answer for that one
+# operation; the real `_run_driver` and its reply validation still run, and every other driver call still fails.
+RUN_CHECK_READY = 'COCOLO_TEST_RUN_CHECK_READY'
 
 
 class _EndedProcess:
@@ -53,6 +57,26 @@ def _ended_service_starts(stack):
 
     stack.enter_context(mock.patch.object(collector_runtime, 'subprocess', new=Shim(subprocess, Popen=popen)))
     stack.enter_context(mock.patch.object(project_host_client, 'os', new=Shim(os, posix_spawn=spawn)))
+
+
+def _run_check_ready(stack):
+    from codex_agents import client_runtime
+    from codex_agents.learning_contracts import canonical_json, parse_bounded_json
+    real_enroll = client_runtime.enroll_clients
+
+    def enroll(*args, **kwargs):
+        endpoints = args[3] if len(args) > 3 else ()
+        if 'account' not in kwargs and len(endpoints) == 2 and Path(endpoints[1]).name == 'run.sock':
+            return {}
+        return real_enroll(*args, **kwargs)
+
+    def transport(path, raw, **options):
+        if parse_bounded_json(raw, max_bytes=4_096)['operation'] != 'run.check':
+            raise OSError('no run driver in this fixture')
+        return canonical_json({'protocol': 1, 'state': 'ready', 'reason_code': None})
+
+    stack.enter_context(mock.patch.object(client_runtime, 'enroll_clients', new=enroll))
+    stack.enter_context(mock.patch.object(client_runtime, 'exchange_frame', new=transport))
 
 
 def main():
@@ -95,6 +119,8 @@ def main():
         with contextlib.ExitStack() as stack:
             if os.environ.get(NO_SERVICE_SPAWN) == '1':
                 _ended_service_starts(stack)
+            if os.environ.get(RUN_CHECK_READY) == '1':
+                _run_check_ready(stack)
             stack.enter_context(mock.patch.object(providers, 'observe_codex', new=forbidden))
             stack.enter_context(mock.patch.object(providers, 'observe_claude', new=forbidden))
             stack.enter_context(mock.patch.object(bridge, 'claude_billing_probe', new=forbidden))

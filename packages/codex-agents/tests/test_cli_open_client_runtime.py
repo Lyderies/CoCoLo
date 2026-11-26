@@ -113,7 +113,13 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-claude-primary')
         if metered_backend:
             env['CLAUDE_CODE_USE_BEDROCK'] = '1'
+        env['COCOLO_TEST_RUN_CHECK_READY'] = '1'  # decision 363: this fixture has no run driver; see dispatch_cli_fixture
         env['COCOLO_TEST_ENDED_SERVICE_STARTS'] = '1'  # TESTSPEED-3: no service runs here, so its start ends at once
+        # Decision 363: the open's `run.check` needs the run driver's endpoint to exist and answer. This fixture has no
+        # driver, so the file is present only while the open runs (later dispatch behaves differently when it exists).
+        driver_endpoint = self.account_path.parent/'run.sock'
+        driver_endpoint.touch()
+        self.addCleanup(lambda: driver_endpoint.unlink(missing_ok=True))
         process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.bytecode, '-m', 'tests.dispatch_cli_fixture',
             'learning-open-host-run',
             '--project-root', str(self.bridge.project), '--state-root', str(self.bridge.state.root),
@@ -122,6 +128,7 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         self.clients.append(process)
         self.wait_api(lambda: process.poll() is not None)
         output, errors = process.communicate(timeout=2)
+        driver_endpoint.unlink(missing_ok=True)
         self.assertEqual(b'', errors)
         return process.returncode, json.loads(output)
 

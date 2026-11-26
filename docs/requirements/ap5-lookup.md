@@ -10,13 +10,13 @@ ANALYSIS-0.4.0-p38-inventory slice 4, rows AP3, AP5-2 and AP5-3.
 - **AP5-3:** Preserve admission answers, refusal precedence, linked-evidence order
   and record history order on mixed fixtures, including missing and other-project
   evidence, mismatched champions, owner feedback and duplicate admission.
-- **AP3:** Add only an index, with no schema version or owner action. An indexed
-  account-ledger copy must open, read, validate and append with the recorded
-  same-schema previous release's actual code in a separate process, then reopen
-  correctly with this version. Retain the existing append/type index checks.
-  Decision 348 (follows B4t H1d, T-5): the previous release is the newest recorded one with the same ledger
-  schema; while none exists (B4t makes schema 18), the check asserts the current schema is newer than every
-  released one and that released 0.8.61 refuses the indexed copy with zero ledger writes.
+- **AP3:** Add only an index, with no schema version or owner action. The indexed account-ledger copy must be
+  refused by the newest recorded previous release's actual code (same or older ledger schema) in a separate process,
+  with every ledger and artifact file byte-identical afterwards (`collector.lock` excluded: the old fence stamps it
+  first). Retain the existing append/type index checks.
+  Decision 362 (supersedes 348's same-schema open branch; B4t H1d, T-5): the floor is PACKAGE_VERSION, raised when the
+  current build writes, so an older build never opens a ledger this build has written, whatever its schema. The
+  "same-schema release opens, reads, appends" branch is removed; a missing previous source still fails, never skips.
 
 The focused lookup and compatibility checks live in
 [`CandidateEvidenceLookupTests`](../../packages/codex-agents/tests/test_candidate_evidence_lookup.py).
@@ -47,7 +47,7 @@ The focused lookup and compatibility checks live in
 | AP5-3 | `test_AP5_3_mixed_evidence_answers_and_link_order_match_former_scan` | Baseline and replacement pass the same expected answer matrix; preserves input link order, refusal precedence and history. Includes foreign/missing evidence, mismatched task/champion and owner feedback. |
 | AP5-3 | `test_AP5_3_public_admission_duplicates_and_history_order_match` | Baseline and replacement accept an actual verified 40-outcome cohort identically, return identical duplicate answers, and expose identical mixed record history and source sequence order in paired projects. |
 | AP3 | `test_AP3_digest_index_is_additive_on_first_open` | Red before implementation; green after. Drop only the new index, reopen, compare every other schema object and `user_version`. |
-| AP3 | `test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release` | Red for absent index; green with real recorded 0.8.61 source (`782a7eed`). Isolated subprocess reads all retained records/order/late values, validates candidate evidence, appends, checks integrity and reopens; current code then reads the same copy correctly. |
+| AP3 | `test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release` | Decision 362: newest recorded previous release (derived from `previous-releases.json`) refuses the indexed copy (`LedgerError`), zero ledger/artifact writes. Test name kept for the registry; the open/read/append branch was removed. |
 | AP3 | `test_AP3_first_open_builds_index_used_by_candidate_lookups` | Final targeted fix: first-open index and exact columns; actual validator and invalidation queries both use project/digest index seeks. Module 0.4 s. |
 | AP3 | `scripts/measure_candidate_index.py` (manual measurement) | Fix round MED-1: 230,000 public appends; 286.461 MiB compacted pre-index ledger. First open 0.205403 s, index build 0.198591 s, reopen 0.005369 s; index adds 24.984 MiB. |
 | AP3, AP5-3 | `test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers` | Fix round MED-2: drop, normal reopen, both queries preserve accepted and owner-invalidated answers against the former validator. |

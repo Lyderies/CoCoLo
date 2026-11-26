@@ -284,21 +284,17 @@ class CandidateEvidenceLookupTests(AppendLookupTests):
                                      capture_output=True, check=True, timeout=20)
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             raise unavailable(baseline) from None
-        schemas = {r['release']: schema_of(r) for r in releases}
-        same_schema = [r for r in releases if schemas[r['release']] == current_schema]
-        if same_schema:
-            previous = same_schema[-1]  # newest recorded release with the same ledger schema
-            try:
-                archive = subprocess.run(['git', 'archive', '--format=zip', previous['source_commit'],
-                                          'packages/codex-agents/native-package'], cwd=root,
-                                         capture_output=True, check=True, timeout=20)
-            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                raise unavailable(previous) from None
-        else:
-            # B4t H1d / T-5: no released build has the current schema, so every one must refuse it.
-            self.assertGreater(current_schema, max(schemas.values()))
-            self.assertEqual(17, schemas[baseline['release']])
-            previous = baseline
+        # Decision 362 (supersedes 348's same-schema branch): B4t H1d raises the floor to PACKAGE_VERSION when the
+        # current build writes, so every older release, same schema or older, refuses the indexed copy. The newest
+        # recorded previous release is the one checked; its schema is derived, never guessed, and never above the current.
+        previous = releases[-1]
+        self.assertLessEqual(schema_of(previous), current_schema)
+        try:
+            archive = subprocess.run(['git', 'archive', '--format=zip', previous['source_commit'],
+                                      'packages/codex-agents/native-package'], cwd=root,
+                                     capture_output=True, check=True, timeout=20)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            raise unavailable(previous) from None
         extracted = Path(self.store.temporary.name) / 'previous-source'
         with zipfile.ZipFile(io.BytesIO(archive.stdout)) as bundle:
             bundle.extractall(extracted)
@@ -313,15 +309,14 @@ class CandidateEvidenceLookupTests(AppendLookupTests):
         copied = Path(self.store.temporary.name) / 'indexed-copy'
         shutil.copytree(self.store.state.root, copied)
         self.reopen()
-        if not same_schema:
-            self.assertEqual(current_schema, version)
+        self.assertEqual(current_schema, version)
 
-            def snapshot():
-                return {str(f.relative_to(copied)): hashlib.sha256(f.read_bytes()).hexdigest()
-                        for f in sorted(copied.rglob('*')) if f.is_file()}
+        def snapshot():
+            return {str(f.relative_to(copied)): hashlib.sha256(f.read_bytes()).hexdigest()
+                    for f in sorted(copied.rglob('*')) if f.is_file()}
 
-            before = snapshot()
-            refuse = '''
+        before = snapshot()
+        refuse = '''
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
@@ -330,63 +325,19 @@ assert Path(learning_store.__file__).resolve().is_relative_to(Path(sys.argv[1]).
 assert learning_store.PACKAGE_VERSION == sys.argv[3]
 learning_store.LearningLedger(learning_store.LearningState(Path(sys.argv[2])))
 '''
-            result = subprocess.run([sys.executable, '-B', '-I', '-c', refuse,
-                                     str(old_bundle / '.codex/orchestration'), str(copied), previous['release']],
-                                    capture_output=True, text=True, timeout=30,
-                                    env={k: v for k, v in os.environ.items() if not k.startswith('PYTHON')})
-            self.assertNotEqual(0, result.returncode, 'released build must refuse a newer ledger schema')
-            self.assertIn('LedgerError', result.stderr)
-            after = snapshot()
-            # The old build's writer fence stamps the lock file before it reads the schema version, so
-            # collector.lock may change; every ledger and artifact file must stay byte-identical (T-5).
-            ledger_files = {k for k in before.keys() | after.keys() if k != 'collector.lock'}
-            self.assertIn('learning.sqlite3', ledger_files)
-            self.assertEqual({k: before.get(k) for k in ledger_files}, {k: after.get(k) for k in ledger_files},
-                             'refusal must leave the ledger store byte-identical (zero writes)')
-            return
-        script = '''
-import json, sys
-from pathlib import Path
-sys.path.insert(0, sys.argv[1])
-from codex_agents import learning_store
-data = json.load(sys.stdin)
-assert Path(learning_store.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve())
-assert learning_store.PACKAGE_VERSION == sys.argv[3]
-assert learning_store.LEDGER_SCHEMA_VERSION == data['version']
-state = learning_store.LearningState(Path(sys.argv[2]))
-ledger = learning_store.LearningLedger(state)
-assert ledger._connection.execute('PRAGMA user_version').fetchone()[0] == data['version']
-indexes = {r[0] for r in ledger._connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-assert {'records_project_digest', 'records_type_project', 'records_observed_at'} <= indexes
-assert ledger._records_for_project(data['project'], None) == data['expected']
-ledger._validate_evidence_links_locked(data['project'], data['candidate'])
-reply = ledger.append(data['project'], data['event'], producer='hook', now_ms=300)
-assert reply['stored'] and reply['source_sequence'] == len(data['expected']) + 1 and reply['late']
-assert ledger._connection.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
-ledger.close()
-ledger = learning_store.LearningLedger(state)
-assert ledger._records_for_project(data['project'], None)[:-1] == data['expected']
-ledger.close()
-print(json.dumps({'release': learning_store.PACKAGE_VERSION, 'reply': reply}))
-'''
-        event = event_record('previous-release-write', observed_at_ms=2)
-        result = subprocess.run([sys.executable, '-B', '-I', '-c', script,
+        result = subprocess.run([sys.executable, '-B', '-I', '-c', refuse,
                                  str(old_bundle / '.codex/orchestration'), str(copied), previous['release']],
-                                input=json.dumps({'project': self.project, 'version': version,
-                                                  'expected': expected, 'candidate': proposed, 'event': event}),
                                 capture_output=True, text=True, timeout=30,
                                 env={k: v for k, v in os.environ.items() if not k.startswith('PYTHON')})
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(previous['release'], json.loads(result.stdout)['release'])
-        with_copy = LearningLedger(LearningState(copied))
-        try:
-            records = with_copy._records_for_project(self.project, None)
-            self.assertEqual(expected, records[:-1])
-            self.assertEqual(event, {k: v for k, v in records[-1].items() if not k.startswith('_')})
-            self.assertEqual(version, with_copy._connection.execute('PRAGMA user_version').fetchone()[0])
-            with_copy._validate_evidence_links_locked(self.project, proposed)
-        finally:
-            with_copy.close()
+        self.assertNotEqual(0, result.returncode, 'a released build older than the current one must refuse (B4t H1d floor; decision 362)')
+        self.assertIn('LedgerError', result.stderr)
+        after = snapshot()
+        # The old build's writer fence stamps the lock file before it reads the schema version, so
+        # collector.lock may change; every ledger and artifact file must stay byte-identical (T-5).
+        ledger_files = {k for k in before.keys() | after.keys() if k != 'collector.lock'}
+        self.assertIn('learning.sqlite3', ledger_files)
+        self.assertEqual({k: before.get(k) for k in ledger_files}, {k: after.get(k) for k in ledger_files},
+                         'refusal must leave the ledger store byte-identical (zero writes)')
 
 
 def load_tests(loader, tests, pattern):

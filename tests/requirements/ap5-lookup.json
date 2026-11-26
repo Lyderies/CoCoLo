@@ -3,7 +3,7 @@
  "requirements": [
   {
    "id": "AP3",
-   "statement": "No schema version change and no owner step: an older release with the same ledger schema still opens, reads and appends to an indexed account-ledger copy; while none exists, older releases refuse with zero writes (B4t H1d; decision 348).",
+   "statement": "No schema version change and no owner step: the indexed account-ledger copy is refused by the newest recorded previous release (same or older ledger schema) with zero ledger or artifact writes (collector.lock excluded), because the B4t H1d floor is the current version; decision 362 supersedes decision 348's same-schema open branch.",
    "source": "tests/requirements/ap5-lookup.json#AP3"
   },
   {
