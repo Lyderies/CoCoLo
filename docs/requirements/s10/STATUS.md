@@ -20,3 +20,13 @@ test_publication_replay_driver (7, 24 s), test_trial_run_driver_bugs (20, 49 s),
 test_account_settlement_driver (16, 12 s), test_health_resources (14, 0.4 s).
 Known: test_runtime_release digest pin differs because runtime files changed (primary batch refreshes VERSION/digest;
 not edited here). test_reply_shape_live: see report.
+
+## Decision 355 follow-up
+- Own reason code `resource_low` (history_contracts.HISTORY_REASON_CODES, refusal_steps.EXACT step); run.register reply
+  carries `message`; client_runtime._run_driver accepts it only with resource_low; open report adds `resource_refusal`.
+- Wired: CollectorServer.__init__ registers health_resources (state folder + memory; the collector has no workspace root).
+- Changed assertion: test_health_containers CollectorWiringTests names/states gain 'resources' (assertions.md).
+- Also green: test_refusal_steps, test_contracts, test_history_api, test_reply_shape_compatibility,
+  test_dispatch_client_runtime, test_history_service_upgrade, test_dispatch_delivery_cli, test_project_host_open,
+  test_service_ownership_audit, test_learning_cli (83 s), test_required_host_open, test_backup_reply_private.
+- test_reply_shape_live: see commit message / report.

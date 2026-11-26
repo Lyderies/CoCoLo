@@ -71,22 +71,27 @@ def _check_folder(label, path, settings, usage):
 
 def problems(workspace_root, state_root, settings, usage=None) -> tuple:
     usage = usage or disk_usage
-    found = (_check_folder('workspace', Path(workspace_root), settings, usage),
+    # The collector serves every project and knows no workspace root; each run's own root is checked at registration.
+    found = (None if workspace_root is None else _check_folder('workspace', Path(workspace_root), settings, usage),
              _check_folder('state', Path(state_root), settings, usage))
     return tuple(p for p in found if p is not None)
 
 
 _LIMITS = 'Free some space, or change disk_free_bytes / disk_free_percent in user-settings.json (see docs/configuration.md).'
+_SHORT_LIMITS = 'Free space, or change disk_free_bytes or disk_free_percent in user-settings.json.'
 _NAMES = {'workspace': 'workspace folder', 'state': 'state folder'}
 
 
 def _sentence(problem: DiskProblem, *, short=False) -> str:
     name = _NAMES[problem.label]
     path = problem.path
-    if short and len(path) > 60:
-        path = path[:28] + '...' + path[-29:]
+    if short and len(path) > 50:
+        path = path[:14] + '...' + path[-33:]
     if problem.unreadable:
         return 'CoCoLo could not read the free space of the disk holding the %s (%s)' % (name, path)
+    if short:
+        return ('only %s is free on the disk of the %s (%s); %s is needed'
+                % (_amount(problem.free, problem.needed), name, path, _amount(problem.needed, problem.free)))
     return ('only %s is free on the disk holding the %s (%s) and at least %s is needed'
             % (_amount(problem.free, problem.needed), name, path, _amount(problem.needed, problem.free)))
 
@@ -134,7 +139,8 @@ class ResourceCheck(Check):
     name = CHECK_NAME
 
     def __init__(self, workspace_root, state_root, *, settings: Callable | None = None, usage=None, memory=None):
-        self.workspace_root, self.state_root = Path(workspace_root), Path(state_root)
+        self.workspace_root = None if workspace_root is None else Path(workspace_root)
+        self.state_root = Path(state_root)
         self._settings = settings or (lambda: user_settings.load(self.state_root))
         self._usage, self._memory = usage, memory
 
@@ -143,7 +149,7 @@ class ResourceCheck(Check):
         found = []
         for problem in problems(self.workspace_root, self.state_root, settings, self._usage):
             code = ('disk_unreadable_' if problem.unreadable else 'disk_low_') + problem.label
-            text = 'New runs are refused: %s. %s' % (_sentence(problem, short=True), _LIMITS)
+            text = 'New runs are refused: %s. %s' % (_sentence(problem, short=True), _SHORT_LIMITS)
             found.append(Finding(CHECK_NAME, 'machine', problem.label, 'reported', code, text[:MAX_TEXT]))
         low = memory_pressure(settings, self._memory)
         if low is not None:
@@ -153,8 +159,8 @@ class ResourceCheck(Check):
         return found
 
 
-def register(monitor, state, workspace_root, **options):
-    """Primary wiring (deferred, like S8/S9): health_resources.register(monitor, state, workspace_root)."""
+def register(monitor, state, workspace_root=None, **options):
+    """Wiring (CollectorServer.__init__): health_resources.register(monitor, state); no workspace root there."""
     check = ResourceCheck(workspace_root, Path(state.root), **options)
     monitor.register(check)
     return check

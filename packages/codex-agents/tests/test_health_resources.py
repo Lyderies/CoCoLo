@@ -126,14 +126,18 @@ class ResourceTests(unittest.TestCase):
             low = both((100 * GIB, GIB), (100 * GIB, 50 * GIB))
             with mock.patch.object(hr, 'disk_usage', low):
                 replies, register = self.register(driver)
-            self.assertEqual([{'state': 'refused', 'reason_code': 'history_service_unavailable'}], replies)
+            self.assertEqual(1, len(replies))
+            self.assertEqual({'state': 'refused', 'reason_code': 'resource_low'}, {k: replies[0][k] for k in ('state', 'reason_code')})
+            self.assertEqual({'state', 'reason_code', 'message'}, replies[0].keys())
+            self.assertIn(str(WORKSPACE), replies[0]['message'])
+            self.assertIn('user-settings.json', replies[0]['message'])
             register.assert_not_called()
             self.assertEqual({}, driver._runs)
             self.assertEqual([], list(Path(state).iterdir()))
             with mock.patch.object(hr, 'disk_usage', low):
                 with self.assertRaises(HistoryError) as caught:
                     driver._resource_preflight(('hrn_' + 'b' * 48, 1))
-            self.assertEqual('history_service_unavailable', caught.exception.reason_code)
+            self.assertEqual('resource_low', caught.exception.reason_code)
             self.assertIn(str(WORKSPACE), str(caught.exception))
             self.assertNotIn('Traceback', str(caught.exception))
 
@@ -149,6 +153,21 @@ class ResourceTests(unittest.TestCase):
             probe.assert_not_called()
             register.assert_called_once()
             self.assertEqual([{'state': 'registered'}], replies)
+
+    @requirements('S10-HM6-4')
+    def test_reason_code_is_registered_and_the_client_reply_carries_the_text(self):
+        from codex_agents import client_runtime
+        from codex_agents.history_contracts import HISTORY_REASON_CODES
+        self.assertIn('resource_low', HISTORY_REASON_CODES)
+        self.assertEqual('resource_low', HistoryError('resource_low').reason_code)
+        reply = {'protocol': 1, 'state': 'refused', 'reason_code': 'resource_low', 'message': 'No new run was started: x.'}
+        with mock.patch.object(client_runtime, 'exchange_frame', return_value=json.dumps(reply).encode()):
+            got = client_runtime._run_driver({}, '/x/control', 'run.register', 'hrn_' + 'a' * 48, 1, 'd' * 64, {}, timeout=1)
+        self.assertEqual('No new run was started: x.', got['message'])
+        bad = dict(reply, extra=1)
+        with mock.patch.object(client_runtime, 'exchange_frame', return_value=json.dumps(bad).encode()):
+            with self.assertRaises(ValueError):
+                client_runtime._run_driver({}, '/x/control', 'run.register', 'hrn_' + 'a' * 48, 1, 'd' * 64, {}, timeout=1)
 
     @requirements('S10-HM6-5')
     def test_settings_file_overrides_limits(self):
@@ -239,6 +258,41 @@ class ResourceTests(unittest.TestCase):
                 'assert m.disk_usage is boom or callable(m.disk_usage)\n') % str(ORCHESTRATION_ROOT)
         result = subprocess.run([sys.executable, '-B', '-I', '-c', code], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
+
+
+class CollectorWiringTests(unittest.TestCase):
+    __why_not_scenario__ = 'In-process collector object with an injected disk probe; no sockets or providers.'
+
+    def server(self):
+        from tests import test_learning_store as store_tests
+        from codex_agents import learning_store
+        store = store_tests.LearningStoreTests(methodName='runTest')
+        store.setUp()
+        self.addCleanup(store.tearDown)
+        return store, learning_store.CollectorServer(store.ledger)
+
+    @requirements('S10-HM6-8')
+    def test_collector_health_pass_reports_a_low_disk(self):
+        store, server = self.server()
+        self.assertIn('resources', [check.name for check in server.health_monitor._checks])
+        root = Path(store.ledger.state.root)
+        low = lambda path: (100 * GIB, 99 * GIB, GIB)
+        with mock.patch.object(hr, 'disk_usage', low), mock.patch.object(hr, 'read_memory', lambda: None):
+            server._run_health_pass()
+        view = server.health_monitor.view(store.project_a_id)
+        found = [f for f in view['findings'] if f['check'] == 'resources']
+        self.assertEqual(['disk_low_state'], [f['reason_code'] for f in found])
+        self.assertIn('user-settings.json', found[0]['text'])
+        self.assertEqual('findings', {c['check']: c['state'] for c in view['checks']}['resources'])
+
+    @requirements('S10-HM6-8')
+    def test_collector_health_pass_is_quiet_on_a_healthy_disk(self):
+        store, server = self.server()
+        fine = lambda path: (100 * GIB, 50 * GIB, 50 * GIB)
+        with mock.patch.object(hr, 'disk_usage', fine), mock.patch.object(hr, 'read_memory', lambda: None):
+            server._run_health_pass()
+        view = server.health_monitor.view(store.project_a_id)
+        self.assertEqual([], [f for f in view['findings'] if f['check'] == 'resources'])
 
 
 if __name__ == '__main__':

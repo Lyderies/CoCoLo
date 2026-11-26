@@ -607,7 +607,9 @@ class RunDriver:
             else:
                 self._recorded(key, request['inputs_digest'], context, enrolled.host_client)
         except HistoryError as error:
-            self._reply(connection, {'state': 'refused', 'reason_code': error.reason_code})
+            # S10: the one refusal that carries its plain reason (folder, free, needed, how to change the limit).
+            extra = {'message': str(error)} if error.reason_code == 'resource_low' else {}
+            self._reply(connection, {'state': 'refused', 'reason_code': error.reason_code, **extra})
             return
         run = self._runs[key]
         if request['operation'] != 'run.prepare' or run.state in _AFTER or run.state == 'failed':
@@ -656,13 +658,13 @@ class RunDriver:
 
     def _resource_preflight(self, key):
         """S10 HM-6: a NEW run is refused, before any state exists, when the workspace or state folder disk is low or
-        unreadable. A retry of a known registration is not checked again. The reply keeps its existing code; the plain
+        unreadable. A retry of a known registration is not checked again. Its own code, `resource_low`; the plain
         reason (folder, free, needed, how to change it) is the message, and the health check shows it in status."""
         if key in self._runs:
             return
         stop = health_resources.refusal(self._root, self._state.root, user_settings.load(self._state.root))
         if stop is not None:
-            raise HistoryError('history_service_unavailable', message=stop.text)
+            raise HistoryError('resource_low', message=stop.text)
 
     def _register(self, key, inputs_digest, value, host_client):
         # The host class is the enrolled one; the context may only repeat it.

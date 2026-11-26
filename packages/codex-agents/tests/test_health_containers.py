@@ -453,7 +453,7 @@ class CollectorWiringTests(unittest.TestCase):
         self.addCleanup(store.tearDown)
         server = learning_store.CollectorServer(store.ledger)
         names = [check.name for check in server.health_monitor._checks]
-        self.assertEqual(['self_check', 'containers'], names)
+        self.assertEqual(['self_check', 'containers', 'resources'], names)  # S10 wiring adds the resources check
         check = server.health_monitor._checks[1]
         self.assertIsInstance(check, hc.ContainerCheck)
         self.assertEqual(store.ledger.state.root / 'projects', check.projects)
@@ -462,7 +462,8 @@ class CollectorWiringTests(unittest.TestCase):
         server._run_health_pass()
         view = server.health_monitor.view(store.project_a_id)
         self.assertEqual([], view['findings'])
-        self.assertEqual({'self_check': 'ok', 'containers': 'ok'}, {c['check']: c['state'] for c in view['checks']})
+        self.assertEqual({'self_check': 'ok', 'containers': 'ok', 'resources': 'ok'},
+                         {c['check']: c['state'] for c in view['checks']})
 
 
 # --------------------------------------------------------------------------------------------

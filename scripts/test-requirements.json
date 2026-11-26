@@ -4948,6 +4948,7 @@
    "codex:tests.test_health_resources.ResourceTests.test_driver_refuses_before_any_state_exists",
    "codex:tests.test_health_resources.ResourceTests.test_driver_retry_of_registered_run_is_not_rechecked",
    "codex:tests.test_health_resources.ResourceTests.test_just_below_amounts_are_distinguishable",
+   "codex:tests.test_health_resources.ResourceTests.test_reason_code_is_registered_and_the_client_reply_carries_the_text",
    "codex:tests.test_health_resources.ResourceTests.test_refusal_is_plain_and_complete"
   ],
   "source": "tests/requirements/s10.json#S10-HM6-4",
@@ -4977,6 +4978,8 @@
  },
  "S10-HM6-8": {
   "checks": [
+   "codex:tests.test_health_resources.CollectorWiringTests.test_collector_health_pass_is_quiet_on_a_healthy_disk",
+   "codex:tests.test_health_resources.CollectorWiringTests.test_collector_health_pass_reports_a_low_disk",
    "codex:tests.test_health_resources.ResourceTests.test_check_reports_low_and_unreadable_folders_only",
    "codex:tests.test_health_resources.ResourceTests.test_import_does_no_io"
   ],

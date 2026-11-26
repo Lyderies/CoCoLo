@@ -1486,7 +1486,10 @@ def _run_driver(contexts, control, operation, run_handle, attempt, inputs_digest
     raw = exchange_frame(driver, canonical_json({'protocol': 1, 'operation': operation, 'run_handle': run_handle,
         'attempt': attempt, 'inputs_digest': inputs_digest}), timeout=timeout, response_limit=4_096)
     value = parse_bounded_json(raw, max_bytes=4_096)
-    if (value.keys() != {'protocol', 'state', 'reason_code'} or value['protocol'] != 1
+    # S10: a refusal for low disk space (`resource_low`) also carries its plain reason, as one bounded printable line.
+    plain = (value.keys() == {'protocol', 'state', 'reason_code', 'message'} and value['reason_code'] == 'resource_low'
+             and type(value['message']) is str and 1 <= len(value['message']) <= 1_000 and value['message'].isprintable())
+    if ((value.keys() != {'protocol', 'state', 'reason_code'} and not plain) or value['protocol'] != 1
             or value['state'] not in {'preparing', 'ready', 'failed', 'refused'}):
         raise ValueError()
     return value
@@ -1648,19 +1651,23 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
         raise RuntimeOpenError(error.reason_code) from None
     opened = reply['state'] == 'opened'
     registered = False
+    resource_refusal = None
     if opened:
         # The project host keeps the run's originals for its dispatch; the account
         # run is open either way, and an unregistered run is refused at dispatch.
         try:
             contexts = enroll_clients(state, project_root, scope, (endpoints[0], Path(endpoints[0]).parent / 'run.sock'),
                                       host_client=host_client)
-            registered = _run_driver(contexts, endpoints[0], 'run.register', reply['run_handle'], assignment['attempt'],
+            answer = _run_driver(contexts, endpoints[0], 'run.register', reply['run_handle'], assignment['attempt'],
                 digest, {'purpose': 'register', 'orchestration_handle': orchestration_handle, 'run_id': reply['run_id'],
-                         'host_client': host_client, **originals}, timeout=10)['state'] != 'refused'
+                         'host_client': host_client, **originals}, timeout=10)
+            registered = answer['state'] != 'refused'
+            if answer.get('reason_code') == 'resource_low':  # S10: low disk; say why, in plain words
+                resource_refusal = {'reason_code': 'resource_low', 'message': answer['message']}
         except Exception:
             registered = False
     # The legacy open report's fields, projected from the account receipt.
-    return {'ready': opened, **reply, 'admission': 'admitted' if opened else 'denied',
+    return {'ready': opened, **reply, **({'resource_refusal': resource_refusal} if resource_refusal else {}), 'admission': 'admitted' if opened else 'denied',
             'status': 'started' if opened else 'denied',
             'observation_started_at_ms': reply['recorded_at_ms'] if opened else None,
             # Only a bridged Claude child's reads are contained (its client enforces the tool set).

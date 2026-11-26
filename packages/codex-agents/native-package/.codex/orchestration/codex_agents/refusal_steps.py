@@ -54,6 +54,9 @@ EXACT = {
                                          "orchestration (learning-open-orchestration).",
     'preparation_managed_configuration': "A managed Codex configuration applies here and this child cannot run under "
                                          "it: ask the configuration's owner for an approved setting.",
+    # S10 HM-6 (decision 355): the disk of the workspace or state folder is low or unreadable.
+    'resource_low': "Free space on the disk named in the message, or change disk_free_bytes or disk_free_percent in "
+                    "user-settings.json (see the configuration guide), then open the run again.",
     'claim_busy': "Every run slot is in use: wait for a running child to finish, then try again.",
     'probe_cooldown': "A fresh billing probe is not allowed within five minutes of the last one that passed: wait "
                       "until then, then run provider-observe again.",

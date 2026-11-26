@@ -159,6 +159,7 @@ from .result_contracts import MAX_RESULT_BODY_BYTES
 from .sql_read_budget import SQLReadConnection, SQLReadError
 from . import ledger_waits
 from .health_containers import ContainerCheck
+from . import health_resources
 from .health_monitor import HealthMonitor
 from .ledger_waits import LEDGER_LOCK_WAIT_MS, LEDGER_REQUEST_WAIT_MS  # noqa: F401 -- E1a, named here too
 from .account_claim_contracts import (
@@ -13849,6 +13850,8 @@ class CollectorServer:
         self.health_monitor = HealthMonitor.with_builtin_checks(sweep_interval_seconds=WORKER_RESULT_SWEEP_SECONDS)
         # HM-1: every COCOLO run container belongs to a live run, over the journals under this state root.
         self.health_monitor.register(ContainerCheck(self.state.root))
+        # HM-6 (S10): low disk under the state folder and memory pressure, reported to status. Registering reads nothing.
+        health_resources.register(self.health_monitor, self.state)
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
         )
