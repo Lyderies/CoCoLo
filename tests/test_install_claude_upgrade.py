@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -24,6 +26,34 @@ from setup_wizard import steps  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parents[1] / "packages" / "claude-agents"
 MANIFEST = ".claude/claude-agents/install-manifest.json"
+
+
+# TESTSPEED-2 (as test_setup_straight): the installers this module starts use one bytecode cache
+# instead of recompiling the same modules in every process (the production flags keep bytecode off).
+_BYTECODE = tempfile.mkdtemp(prefix="claude-upgrade-pyc")
+atexit.register(shutil.rmtree, _BYTECODE, True)
+
+
+_REAL_OWNER_ONLY = installer.owner_only_commands
+_OWNER_ONLY: dict = {}
+
+
+def _owner_only_commands_once(*args):
+    """The owner-only command list reads the orchestrator's source (an AST walk, ~55 ms) on every plan;
+    the repository's own source does not change inside this module, so it is read once per process."""
+
+    if args not in _OWNER_ONLY:
+        _OWNER_ONLY[args] = _REAL_OWNER_ONLY(*args)
+    return list(_OWNER_ONLY[args])
+
+
+def fast_installers(test: unittest.TestCase) -> None:
+    for patcher in (
+        mock.patch.object(installer.attest, "PYTHON_FLAGS", ("-I", "-S", "-X", "pycache_prefix=" + _BYTECODE)),
+        mock.patch.object(installer, "owner_only_commands", _owner_only_commands_once),
+    ):
+        patcher.start()
+        test.addCleanup(patcher.stop)
 
 
 def canonical(value: dict) -> bytes:
@@ -44,6 +74,7 @@ def failed_with_writes(report: dict, **fields) -> dict:
 class ClaudeUpgradeTests(unittest.TestCase):
     def setUp(self) -> None:
         # The install and the previous release's files are built once per process and restored by copy.
+        fast_installers(self)
         self.base, self.codex_options = installed_base(self, "claude-upgrade", self.build_previous_release)
         self.target = self.base / "target"
 
@@ -724,6 +755,7 @@ class ClaudeUpgradeTests(unittest.TestCase):
 
 class FreshInstallFailureTests(unittest.TestCase):
     def setUp(self) -> None:
+        fast_installers(self)
         self.base = Path(tempfile.mkdtemp(dir=os.path.realpath(tempfile.gettempdir())))
         self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
         isolate_home(self, self.base / "home")
