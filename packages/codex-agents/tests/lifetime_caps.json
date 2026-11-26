@@ -4,9 +4,9 @@
  "sites": {
   "admission_capture_content.py::pack_content": {
    "checks": 1,
-   "ends": "S14a: per-record 64-KiB input/reconstruction ceilings; one bounded temporary record is released after capture or decode. No cumulative history or admission counter.",
+   "ends": "Compression eligibility precondition: oversized values pass through untouched to the caller's header refusal. This is not an allocation/admission cap; original bytes remain caller-owned. S14a: per-record 64-KiB input/reconstruction ceilings; one bounded temporary record is released after capture or decode. No cumulative history or admission counter.",
    "test": "test_packed_content_is_lossless_bounded_and_rejects_corruption",
-   "kind": "bytes"
+   "kind": "precondition"
   },
   "admission_capture_content.py::unpack_content": {
    "checks": 4,
@@ -69,13 +69,13 @@
   "account_billing_admission.py::close_expired_reserved": {
    "checks": 1,
    "ends": "A due sweep with limit 1 releases one expired reservation per pass. Repeated real reservations past the reduced request cap expire while an actually running probe remains charged.",
-   "test": "test_a_running_model_stays_charged_while_reservations_expire",
+   "test": "test_reaudited_probe_expiry_pages_past_one_reserved_or_orphaned_admitted_row",
    "kind": "count"
   },
   "account_billing_admission.py::close_orphaned_admitted": {
    "checks": 1,
    "ends": "O0c P6: an admitted probe no original of this process holds is closed as a denial once its deadline plus 5 minutes has passed",
-   "test": "test_O0c_P6_an_admitted_probe_of_an_earlier_collector_holds_its_slot_no_longer_than_deadline_plus_grace",
+   "test": "test_reaudited_probe_expiry_pages_past_one_reserved_or_orphaned_admitted_row",
    "kind": "count"
   },
   "account_billing_admission.py::reserve": {
@@ -93,7 +93,7 @@
   "account_billing_jobs.py::submit": {
    "checks": 1,
    "ends": "O0c M9: a job ends when taken ready; one left unknown faults the billing lane, and the self-restart (H1c) ends it once every child is proven gone",
-   "test": "test_M9_two_unknown_billing_jobs_in_a_project_restart_the_account_and_a_probe_succeeds",
+   "test": "test_reaudited_billing_submit_crosses_max_projects_before_any_second_reservation",
    "kind": "count"
   },
   "account_claim_contracts.py::checked_claim_receipt": {
@@ -198,7 +198,7 @@
   },
   "account_original_open.py::<module>": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "ends": "IN_FLIGHT_OPENS reads only pending opens whose observation deadline is still live; completion or expiry removes them from the counted population. Four full lifecycles at limit two remain usable.",
    "test": "test_OP_1_more_finished_opens_than_every_open_limit_never_refuse",
    "kind": "count"
   },
@@ -308,7 +308,7 @@
    "kind": "time"
   },
   "admission_metadata.py::evaluate_admission": {
-   "checks": 2,
+   "checks": 1,
    "ends": "Actual fixture admission/launch calculations cross billing age MAX+1; identity selection crosses its exact horizon and one millisecond past; paid/spend-control evidence remains at its horizon and disappears one millisecond beyond while future evidence still restricts. Per-decision snapshots end on return.",
    "kind": "time",
    "test": "test_admission_identity_billing_and_restriction_ages_cross_each_horizon"
@@ -344,7 +344,7 @@
    "test": "test_admission_identity_billing_and_restriction_ages_cross_each_horizon"
   },
   "attestation_capture.py::sweep": {
-   "checks": 3,
+   "checks": 2,
    "ends": "P9: per-pass scan, deletion and stale-cache cleanup batches, not a lifetime quota. The cursor advances past cited rows; exact verified later rows permit uncited deletion. TEMP results vanish on connection close and are rebuilt; cited history is omitted from capture without deletion.",
    "test": "test_public_claim_with_two_attestation_limit_keeps_cited_tied_history",
    "kind": "count"
@@ -364,7 +364,7 @@
   "billing_probe_worker.py::prepare": {
    "checks": 1,
    "ends": "O0c M10: a worker is freed when its job retires; one held unknown faults the probe worker lane; its admitted row is settled once its child is proven gone, and the self-restart (H1c) frees the worker",
-   "test": "test_M10_M5_an_unknown_probe_execution_keeps_its_records_restarts_and_the_next_probe_reuses_them",
+   "test": "test_reaudited_probe_worker_prepare_crosses_its_input_byte_cap",
    "kind": "bytes"
   },
   "billing_probe_worker.py::probe_payload": {
@@ -499,7 +499,7 @@
    "kind": "count"
   },
   "claude_activity.py::_partial": {
-   "checks": 3,
+   "checks": 2,
    "ends": "Real stream fragments are coalesced inside PARTIAL_ACTIVITY_SECONDS; time then reaches the interval and advances through five further intervals. New fragments count while repeated frames never become new activity. Stream partial state ends when its message completes.",
    "kind": "time",
    "test": "test_partial_fragments_of_the_requested_model_count_at_most_once_per_interval"
@@ -578,9 +578,9 @@
   },
   "codex_worker.py::_safe_raw_answer": {
    "checks": 1,
-   "ends": "VF-INV-a: a fixed-size report field validated against the per-answer byte cap; nothing accumulates (the kept file ends with the worker-result retention)",
+   "ends": "Closed raw-answer metadata validation (the reported byte integer), not a byte buffer/population. No past-limit buffer claim. VF-INV-a: a fixed-size report field validated against the per-answer byte cap; nothing accumulates (the kept file ends with the worker-result retention)",
    "test": "test_an_invalid_answer_on_the_worker_path_is_kept_owner_only_with_its_digest",
-   "kind": "bytes"
+   "kind": "validation"
   },
   "codex_worker.py::_safe_report": {
    "checks": 1,
@@ -613,13 +613,13 @@
   },
   "collector_runtime.py::_client_health_data": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "test": "test_P11_client_health_never_fills_and_drops_the_oldest_project",
+   "ends": "Per-call client-health input buffer ends on return/refusal. A valid real file at its exact reduced ceiling is accepted; a one-byte-smaller read ceiling refuses before parsing.",
+   "test": "test_reaudited_health_state_reader_crosses_its_own_byte_cap",
    "kind": "bytes"
   },
   "collector_runtime.py::_client_health_payload": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "ends": "Serialized project-health working set evicts the oldest project counters until the write budget fits; replacement writes and explicit clearing end prior values. 1000 real project roots exceed the working set and later writes still succeed.",
    "test": "test_P11_client_health_never_fills_and_drops_the_oldest_project",
    "kind": "bytes"
   },
@@ -629,10 +629,10 @@
    "kind": "validation"
   },
   "container_runtime.py::_timeout_backstop": {
-   "checks": 1,
-   "ends": "not a count of anything kept: one comparison of podman's reported version with MIN_TIMEOUT_PODMAN_VERSION at each launch with a deadline (decision 49); nothing accumulates",
+   "checks": 0,
+   "ends": "Version compatibility precondition only. No deadline, elapsed-time or population cap remains in _timeout_backstop. not a count of anything kept: one comparison of podman's reported version with MIN_TIMEOUT_PODMAN_VERSION at each launch with a deadline (decision 49); nothing accumulates",
    "test": "test_an_old_client_gets_no_timeout_and_the_reason_is_recorded",
-   "kind": "time"
+   "kind": "precondition"
   },
   "control_api.py::__init__": {
    "checks": 1,
@@ -754,7 +754,7 @@
   "core_api.py::_rewrite_tokens": {
    "checks": 2,
    "ends": "a byte cap on the token store (tokens.json); a larger store is refused on read and a write that would exceed it is refused before replacing, so the file stops at the cap; revoking a token removes its row (an unknown token is refused exactly like a revoked one) and the next mint also drops any row still marked revoked, so revoked tokens never use up the store",
-   "test": "test_revoked_tokens_leave_the_store_and_stay_refused",
+   "test": "test_the_token_store_size_is_checked_before_it_is_replaced",
    "kind": "bytes"
   },
   "core_api.py::_subscribe": {
@@ -766,7 +766,7 @@
   "core_api.py::_take_push_allowance": {
    "checks": 1,
    "ends": "a per-token rate limit of PUSH_PER_WINDOW notes per window; times older than the window are dropped on each call; on each call every other token's list is also removed when its window is empty or its token is revoked or unknown, so only tokens with a note in the last window keep a list",
-   "test": "test_push_windows_leave_when_empty_revoked_or_unknown",
+   "test": "test_api17_rate_cap_resets_with_time",
    "kind": "count"
   },
   "core_api.py::_tokens_used": {
@@ -794,9 +794,9 @@
   },
   "core_api.py::readline": {
    "checks": 1,
-   "ends": "a per-line byte cap on one request line; a longer line is refused too_large and the connection closed, the read buffer never exceeds the limit",
+   "ends": "Line reader counts buffered bytes, not rows. 9000 unterminated bytes exceed the frame ceiling. a per-line byte cap on one request line; a longer line is refused too_large and the connection closed, the read buffer never exceeds the limit",
    "test": "test_api24_unterminated_oversize_line_is_refused_then_closed",
-   "kind": "count"
+   "kind": "bytes"
   },
   "dispatch_api.py::__init__": {
    "checks": 1,
@@ -840,9 +840,9 @@
   },
   "event_shapes.py::_room": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "ends": "Recorded frame files and their bytes leave by oldest-first pruning before admitting new recordings. Five actual recordings at MAX_FILES=3 evict oldest files and keep the newest; no lifetime recording count fills.",
    "test": "test_P12_a_full_folder_drops_its_oldest_records_and_keeps_recording",
-   "kind": "bytes"
+   "kind": "count"
   },
   "event_shapes.py::frame": {
    "checks": 1,
@@ -958,7 +958,7 @@
   "health_monitor.py::register": {
    "checks": 1,
    "ends": "HM-0: registered checks, set at start-up by code (none are added at run time by input); a pass runs at most max_checks of them, the rest first at the next pass",
-   "test": "test_HM_0_1_one_pass_runs_at_most_max_checks_and_every_check_gets_its_turn",
+   "test": "test_reaudited_health_registration_exceeds_the_registration_cap",
    "kind": "count"
   },
   "health_monitor.py::run": {
@@ -1130,7 +1130,7 @@
   "learning_cycle_core.py::_snapshot": {
    "checks": 2,
    "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
-   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle",
+   "test": "test_reaudited_core_snapshot_and_selected_case_limits_are_independent",
    "kind": "bytes"
   },
   "learning_cycle_core.py::plan_learning_cycle": {
@@ -1142,7 +1142,7 @@
   "learning_cycle_core.py::select_mining_outcomes": {
    "checks": 1,
    "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
-   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle",
+   "test": "test_reaudited_core_snapshot_and_selected_case_limits_are_independent",
    "kind": "count"
   },
   "learning_eligibility.py::check_candidate_eligibility": {
@@ -1203,9 +1203,9 @@
   },
   "learning_engine.py::_security_findings": {
    "checks": 2,
-   "ends": "a per-scan cap on stderr bytes read and on records kept (a cut final line is dropped); the records live in one check report that goes with its QA result retention, nothing accumulates across scans",
+   "ends": "Mixed site: MAX_QA_FINDING_RECORDS+1 actual parsed lines cross the findings count. No MAX_QA_FINDING_BYTES claim. a per-scan cap on stderr bytes read and on records kept (a cut final line is dropped); the records live in one check report that goes with its QA result retention, nothing accumulates across scans",
    "test": "test_findings_past_the_record_limit_are_cut_at_the_limit",
-   "kind": "bytes"
+   "kind": "count"
   },
   "learning_engine.py::_snapshot_runtime_libraries": {
    "checks": 1,
@@ -1394,12 +1394,12 @@
   },
   "learning_store.py::account_holds_due": {
    "checks": 1,
-   "ends": "O0c P6: reads at most the held originals + 1 overdue admitted probes; what it counts is closed by close_orphaned_admitted",
+   "ends": "Read-only due-work predicate, not admission: bounded query asks whether any orphan is due; live originals are excluded. No release/population ceiling claim. O0c P6: reads at most the held originals + 1 overdue admitted probes; what it counts is closed by close_orphaned_admitted",
    "test": "test_O0c_P6_an_admitted_probe_this_collector_still_holds_is_never_closed_by_time",
-   "kind": "count"
+   "kind": "read_only"
   },
   "learning_store.py::account_holds_status": {
-   "checks": 2,
+   "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
    "kind": "read_only"
   },
@@ -1448,7 +1448,7 @@
    "kind": "count"
   },
   "learning_store.py::ingestion_snapshot": {
-   "checks": 4,
+   "checks": 3,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
    "kind": "read_only"
   },
@@ -1529,7 +1529,7 @@
   "lost_run_closure.py::checked_lost_run_closure": {
    "checks": 1,
    "ends": "BOUNDED: a size check on one message (the account's lost-run closure, at most MAX_LOST_RUN_CLOSURE_BYTES); it counts bytes of a single reply, nothing accumulates (B4s, RS-B-B4-1)",
-   "test": "test_B4_1_the_closure_is_bounded",
+   "test": "test_reaudited_lost_closure_checker_crosses_size_with_a_valid_closure",
    "kind": "bytes"
   },
   "lost_run_closure.py::verify_lost_run_closure": {
@@ -1611,26 +1611,26 @@
   "orchestration_store.py::<module>": {
    "checks": 4,
    "ends": "B6 (RS-B-B6-4): _UNATTENDED_SELECT's LIMIT is a per-pass batch (UNATTENDED_CLOSE_BATCH = 4), not a count of kept things; a row not selected (or refused and backed off) is selected by a later pass. B6 final fix (decision 210, item 1): _HELD_LEASES and _HELD_LEASE_ROWS read at most MAX_LEASE_ROWS + 1 LIVE leases and held lease rows only; a lease leaves both when it is released (withdrawn, bound, denied, fenced, lost), and released ones are never read. Decision 212: _HELD_RESERVATION_ROWS reads at most MAX_LEASE_ROWS + 1 held or releasing reservation register rows; each leaves when its reservation is released (completed, settled), and released ones are never read",
-   "test": "test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close",
+   "test": "test_reaudited_live_lease_and_reservation_verifiers_cross_their_row_limits",
    "kind": "count"
   },
   "orchestration_store.py::_verify_held_reservations": {
    "checks": 1,
    "ends": "Decision 212: the bound counts held or releasing reservation register rows only (each ends at its reservation's release: account release acknowledgement or settlement); finished rows, however many are kept, never count",
-   "test": "test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close",
+   "test": "test_reaudited_live_lease_and_reservation_verifiers_cross_their_row_limits",
    "kind": "count"
   },
   "orchestration_store.py::_held_leases": {
    "checks": 1,
    "ends": "B6 final fix (decision 210, item 1): the bound counts live leases and held lease register rows only (each ends at its lease's release); finished rows, however many are kept, never count",
-   "test": "test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close",
+   "test": "test_reaudited_live_lease_and_reservation_verifiers_cross_their_row_limits",
    "kind": "count"
   },
   "orchestration_store.py::_open_count": {
    "checks": 1,
-   "ends": "B6 (RS-B-B6-8): COUNT(*) of open orchestrations only, by the indexed state column; every close (primary, update, unattended) sets state closed in its own transaction, so a closed one frees its place at once",
+   "ends": "Read-only open-orchestration COUNT; actual admission cap is independently registered in apply. B6 (RS-B-B6-8): COUNT(*) of open orchestrations only, by the indexed state column; every close (primary, update, unattended) sets state closed in its own transaction, so a closed one frees its place at once",
    "test": "test_034_R8_more_lifecycles_than_every_limit_never_fail_on_history",
-   "kind": "count"
+   "kind": "read_only"
   },
   "orchestration_store.py::_positions": {
    "checks": 2,
@@ -1640,21 +1640,21 @@
   },
   "orchestration_store.py::apply": {
    "checks": 2,
-   "ends": "Only open orchestrations count toward admission; completed orchestration tombstones do not consume the open quota. Repeated real open/close lifecycles cross the reduced cap.",
+   "ends": "Mixed site: this binding crosses max_orchestrations, not checkpoint bytes. Label the demonstrated population count. Only open orchestrations count toward admission; completed orchestration tombstones do not consume the open quota. Repeated real open/close lifecycles cross the reduced cap.",
    "test": "test_034_R6_the_orchestration_limit_counts_only_open_ones",
-   "kind": "bytes"
+   "kind": "count"
   },
   "orchestration_store.py::end_idle": {
-   "checks": 2,
+   "checks": 0,
    "ends": "O0c P5: an open orchestration idle 24 hours is ended interrupted by the service's cleanup pass",
    "test": "test_O0c_P5_abandoned_orchestrations_end_after_24_hours_idle_so_a_new_one_opens",
    "kind": "time"
   },
   "orchestration_store.py::open_counts": {
    "checks": 2,
-   "ends": "s2fix round 2 (L14.1): learning-status's reading; it verifies at most max_orchestrations + 1 rows that are not closed (the open limit keeps active and paused ones at that many, and a closed one is removed after ORCHESTRATION_RETENTION_MS by purge_closed); BOUNDED",
+   "ends": "Read-only status projection of active/paused/closed orchestrations, not admission/refusal. s2fix round 2 (L14.1): learning-status's reading; it verifies at most max_orchestrations + 1 rows that are not closed (the open limit keeps active and paused ones at that many, and a closed one is removed after ORCHESTRATION_RETENTION_MS by purge_closed); BOUNDED",
    "test": "test_L14_1_the_counts_read_only_the_open_ones_and_never_verify_a_closed_one",
-   "kind": "count"
+   "kind": "read_only"
   },
   "orchestration_store.py::purge_closed": {
    "checks": 1,
@@ -1727,9 +1727,9 @@
   },
   "project_driver.py::_advance": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; B3 adds REGISTERED_IDLE_SECONDS, a time threshold: an idle registered run is retired and withdrawn once it passes it",
+   "ends": "A registered run idle beyond REGISTERED_IDLE_SECONDS is withdrawn and retired through the ordinary driver advance. The bound test uses .5 seconds and waits for the actual idle release; no retired-map overflow is claimed.",
    "test": "test_W5_an_idle_registered_run_is_retired_and_withdrawn",
-   "kind": "count"
+   "kind": "time"
   },
   "project_driver.py::_authorize_dispatch": {
    "checks": 1,
@@ -1780,7 +1780,7 @@
    "kind": "count"
   },
   "project_driver.py::_retry_cleanup": {
-   "checks": 1,
+   "checks": 0,
    "ends": "PREPCLEAN-2 (decision 309): retries have no attempt limit. The saved pause doubles from one second to the existing sixty-second cap; only the capped pause and next deadline are retained. Observed folder removal and retirement delete retry state. The past-the-limit test makes twenty due requests and checks exact capped monotone pauses and no early request.",
    "test": "test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff",
    "kind": "time"
@@ -1908,7 +1908,7 @@
    "checks": 1,
    "max_closure_bytes": 8192,
    "ends": "RSF-S7 decision 214 rejects the former 'no total bound' policy. BOUNDED evidence: one authenticated canonical ASCII closure per settled attempt, at most 8192 bytes inclusive (batch 4, decision 219: for `crashed`, the closure plus B5a's minimal process proof in one canonical JSON value, together at most 8192 bytes, else history_invalid_input with nothing written), on its reservation hold if bound or lease hold if unbound; retries reuse the row. Rows have evidence cleared strictly after released_at_ms + max(MAX_RESULT_RETENTION_MS, TOMBSTONE_MS) + TOMBSTONE_MS (eight days); permanent hold identity and other fields remain. expire_results runs _purge_settlement_evidence each pass, reading at most limit * PURGE_SCAN_FACTOR scalar candidate positions and clearing at most limit evidence rows, limit 1..100, with a fair cursor. Attempt pruning removes the settlement-table copy and never backfills expired evidence. Replay after the window refuses with history_result_not_reserved, including before the purge. See docs/requirements/rsf-s7.md for constant file:line references.",
-   "test": "test_retained_hold_closure_has_an_inclusive_byte_ceiling_and_a_bounded_window",
+   "test": "test_reaudited_retained_settlement_evidence_crosses_the_history_writers_own_cap",
    "boundary_test": "test_retained_closure_window_boundary_and_fixed_refusal",
    "purge_test": "test_evidence_expiry_pass_is_bounded_and_eventually_clears_all_rows",
    "kind": "bytes"
@@ -1957,9 +1957,9 @@
   },
   "project_holds_schema.py::custody_consistent": {
    "checks": 1,
-   "ends": "D1: the custody validator checks each live context's size and the live total against their limits, over live rows only (partial index); the rows it checks end as the budget's do",
+   "ends": "SH-7 consistency precondition over authenticated contexts/register/material. Returns a boolean, acquires nothing; actual context admission budget is independently registered in _check_budget. D1: the custody validator checks each live context's size and the live total against their limits, over live rows only (partial index); the rows it checks end as the budget's do",
    "test": "test_O5_the_live_context_budget_admits_exactly_what_fits_and_a_refusal_leaves_nothing",
-   "kind": "bytes"
+   "kind": "precondition"
   },
   "project_ingress.py::__post_init__": {
    "checks": 1,
@@ -2020,9 +2020,9 @@
   },
   "project_learning_corpus.py::import_records": {
    "checks": 2,
-   "ends": "Each read returns at most its requested page count; a real multi-row staged import at limit 1 returns the first source sequence and the next read resumes after it. No cumulative admission counter.",
+   "ends": "Mixed site: two imported records are paged at limit=1; the inherited test does not cross MAX_CHUNK_BYTES. Classify the demonstrated row limit as count. Each read returns at most its requested page count; a real multi-row staged import at limit 1 returns the first source sequence and the next read resumes after it. No cumulative admission counter.",
    "test": "test_reads_are_bounded_and_resume_by_original_source_sequence",
-   "kind": "bytes"
+   "kind": "count"
   },
   "project_learning_identity.py::_outcomes": {
    "checks": 1,
@@ -2057,13 +2057,13 @@
   "project_learning_live.py::read_cycle_rows": {
    "checks": 8,
    "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
-   "test": "test_P7_candidates_past_the_retention_do_not_count_against_the_corpus_limit",
+   "test": "test_corpus_over_its_bound_is_refused_not_truncated",
    "kind": "count"
   },
   "project_learning_live.py::take": {
    "checks": 1,
    "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
-   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle",
+   "test": "test_corpus_over_its_bound_is_refused_not_truncated",
    "kind": "bytes"
   },
   "project_learning_owner.py::corpus_records": {
@@ -2075,7 +2075,7 @@
   "project_learning_owner.py::purge_old_learning": {
    "checks": 1,
    "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
-   "test": "test_P7_the_cleanup_pass_removes_unpromoted_cases_and_candidates_past_the_retention",
+   "test": "test_P7_purge_batches_are_bounded_and_every_pass_makes_progress",
    "kind": "count"
   },
   "project_learning_owner.py::record_feedback": {
@@ -2132,8 +2132,8 @@
   },
   "project_orchestration_report.py::_orchestration": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "test": "test_P10_the_report_finds_its_orchestration_however_many_the_project_has",
+   "ends": "Per-query handle and checkpoint windows end when each bounded page is processed or the lookup returns. A forward handle cursor traverses three real orchestrations at _PAGE=2 and finds every external ID.",
+   "test": "test_reaudited_orchestration_lookup_pages_past_its_actual_page_size",
    "kind": "count"
   },
   "project_orchestration_report.py::orchestration_report": {
@@ -2214,15 +2214,15 @@
    "kind": "bytes"
   },
   "project_result_contexts.py::repairs": {
-   "checks": 3,
+   "checks": 1,
    "ends": "D3 (RS-D draft 3 \u00a74): three report bounds per page, over contexts in `repair_required`, over reservations in `retiring` that have no context row, and over contexts in `retiring`, in that order with a cursor for the next page; each ends `ended` or `expired` once the retry succeeds or an operator removes the directory under its fixed name",
-   "test": "test_M1_a_directory_under_a_reservation_only_body_name_is_shown_charged_retried_and_finished_when_removed",
+   "test": "test_R2_a_truncated_report_says_so_and_its_continuation_reaches_every_remaining_entry",
    "kind": "count"
   },
   "project_result_contexts.py::reservation_rows": {
    "checks": 1,
    "ends": "a page read inside repairs(): at most limit+1 retiring reservations without a context row after the cursor; rows leave as their retirement finishes; BOUNDED",
-   "test": "test_R2_a_reservation_only_directory_is_listed_before_earlier_retrying_contexts",
+   "test": "test_reaudited_reservation_only_repairs_page_past_their_own_row_limit",
    "kind": "count"
   },
   "project_runtime.py::__post_init__": {
@@ -2233,13 +2233,13 @@
   "project_usage_report.py::_by_run": {
    "checks": 1,
    "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
-   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused",
+   "test": "test_reaudited_by_run_reader_stops_at_its_actual_duplicate_record_limit",
    "kind": "count"
   },
   "project_usage_report.py::_record": {
    "checks": 1,
    "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
-   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused",
+   "test": "test_reaudited_usage_record_reader_crosses_its_record_byte_cap",
    "kind": "bytes"
   },
   "project_usage_report.py::_rows": {
@@ -2250,9 +2250,9 @@
   },
   "project_usage_report.py::usage_report": {
    "checks": 1,
-   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "ends": "Request scalar range validation (window_ms and caller limit), not retained population; allocation/paging sites remain separately registered. a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
    "test": "test_a_window_past_the_row_limit_is_truncated_not_refused",
-   "kind": "count"
+   "kind": "validation"
   },
   "project_usage_report.py::_service_reply": {
    "checks": 1,
@@ -2292,9 +2292,9 @@
   },
   "rate_limit_contracts.py::bounded_rate_limit_info": {
    "checks": 2,
-   "ends": "Per-event window ceiling folds overflow restrictions into the top-level status. MAX_WINDOWS + 2 real input windows retain exactly MAX_WINDOWS and preserve the rejected/unknown restriction; temporary facts end with the event.",
+   "ends": "Mixed site: MAX_WINDOWS+2 windows cross the retained-window count; no oversized canonical facts are tested. Classify count. Per-event window ceiling folds overflow restrictions into the top-level status. MAX_WINDOWS + 2 real input windows retain exactly MAX_WINDOWS and preserve the rejected/unknown restriction; temporary facts end with the event.",
    "test": "test_dropped_windows_never_make_the_event_less_restrictive",
-   "kind": "bytes"
+   "kind": "count"
   },
   "release_contracts.py::capture_cleanup_evidence": {
    "checks": 1,
@@ -2496,9 +2496,9 @@
   },
   "service_queue.py::offer": {
    "checks": 3,
-   "ends": "Pending items are removed by take_nowait; empty projects leave the fair queue. Two projects of two items reject an extra item and a third project, then drain and admit fresh work.",
+   "ends": "Mixed site: two projects/two items refuse a third, drain, then admit; classify count rather than bytes. Pending items are removed by take_nowait; empty projects leave the fair queue. Two projects of two items reject an extra item and a third project, then drain and admit fresh work.",
    "test": "test_both_population_caps_refuse_excess_and_drain_restores_admission",
-   "kind": "bytes"
+   "kind": "count"
   },
   "service_record.py::<module>": {
    "checks": 1,
@@ -2521,7 +2521,7 @@
   "service_record.py::record_pass": {
    "checks": 1,
    "ends": "the attempt count belongs to one sweep pass and resets on the next; the cursor advances on refusals and errors so later runs still get recorded",
-   "test": "test_a_request_above_the_attempt_cap_is_held_to_the_cap_and_the_window_follows_it",
+   "test": "test_health_signals_never_exceed_the_map_limit",
    "kind": "count"
   },
   "service_transport.py::exchange_frame": {
@@ -2631,7 +2631,7 @@
   "signature_job_intake.py::select_next": {
    "checks": 1,
    "ends": "O0c M8: a job ends when its worker confirms it stopped; one whose execution is unconfirmed faults the signature lane, and the account's self-restart (H1c) ends it once every child is proven gone",
-   "test": "test_M8_two_unconfirmed_signature_executions_restart_the_account_and_a_claim_succeeds",
+   "test": "test_round_robin_skips_busy_project_without_reordering_its_fifo",
    "kind": "count"
   },
   "signature_payloads.py::_check_payload": {
@@ -2743,10 +2743,10 @@
    "kind": "count"
   },
   "project_start.py::_record_child": {
-   "checks": 1,
-   "ends": "RS-E E2c-10 (review round 1, HIGH 2): SETTLE_TRIES tries to keep a child's pid on its claim, per start; past them the child is still timed, killed at twice the timeout and reaped by its worker",
-   "test": "test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped",
-   "kind": "time"
+   "checks": 0,
+   "ends": "Retry count (range(tries)); no former time-comparison site remains. New test exhausts two actual refused recording attempts. RS-E E2c-10 (review round 1, HIGH 2): SETTLE_TRIES tries to keep a child's pid on its claim, per start; past them the child is still timed, killed at twice the timeout and reaped by its worker",
+   "test": "test_reaudited_start_child_recording_exhausts_its_actual_retry_count",
+   "kind": "count"
   },
   "learning_store.py::__init__": {
    "checks": 1,
@@ -2821,10 +2821,10 @@
    "kind": "time"
   },
   "history_api.py::_validate_result": {
-   "checks": 1,
-   "ends": "PREPCLEAN-3: optional run_slots.cleanup_pending and run_slots.cleanup_unlocated share the existing 0..64 diagnostic wire range; no stored record or admission limit changes. The bound plus one (65), bool, negative and noninteger values are refused; observed retirement makes the diagnostics zero.",
+   "checks": 0,
+   "ends": "Wire scalar diagnostics validation (0..64), not a stored/admission population; explicit 65 rejection remains evidence. PREPCLEAN-3: optional run_slots.cleanup_pending and run_slots.cleanup_unlocated share the existing 0..64 diagnostic wire range; no stored record or admission limit changes. The bound plus one (65), bool, negative and noninteger values are refused; observed retirement makes the diagnostics zero.",
    "test": "test_PREPCLEAN_3_capacity_transport_warning_and_clear",
-   "kind": "count"
+   "kind": "validation"
   },
   "memory_holds.py::pending_removals": {
    "checks": 1,
@@ -2839,7 +2839,7 @@
    "kind": "count"
   },
   "memory_holds.py::pending_workspaces_detail": {
-   "checks": 3,
+   "checks": 2,
    "ends": "HM-2a wiring (S11): one health pass reads at most MAX_PENDING_READ_PROJECTS (256) project folders and at most MAX_PENDING_REMOVALS (64) pending removal records per project, through the primary-key range of that project's preparation rows (no full-table scan, no temporary sort), under one monotonic deadline (PENDING_DEADLINE_SECONDS, 2 s, checked by a SQLite progress handler cleared in finally and in each Python loop); nothing is kept between passes, and a read that meets a bound or the deadline answers unknown (None), never a partial set, so the workspaces check removes nothing that pass and says so. No state, count or record is stored; each pass reads afresh.",
    "test": "test_HM2A_11_the_pending_reader_goes_past_its_bounds_and_says_unknown",
    "kind": "count"
@@ -2881,10 +2881,10 @@
    "kind": "count"
   },
   "health_holds.py::_legacy_deadline": {
-   "checks": 1,
-   "ends": "Two matching retained intents prove ambiguity, so later matches cannot change the answer. The existing records_run index seeks the run, and the two-row evidence window is rebuilt for each check. Three matching rows still yield ambiguous, and removing two restores the single-intent answer.",
+   "checks": 0,
+   "ends": "Consistency precondition: at most two indexed legacy intents decide ambiguity; no lifetime/admission population ceiling. Two matching retained intents prove ambiguity, so later matches cannot change the answer. The existing records_run index seeks the run, and the two-row evidence window is rebuilt for each check. Three matching rows still yield ambiguous, and removing two restores the single-intent answer.",
    "test": "test_past_legacy_evidence_limit",
-   "kind": "count"
+   "kind": "precondition"
   },
   "health_workspaces.py::_pass": {
    "checks": 4,
@@ -2931,7 +2931,7 @@
   "health_workspaces.py::_finish": {
    "checks": 1,
    "ends": "HM-2a: MAX_MARKER_BYTES is a size check on the owner marker read once more just before it is removed (to put it back if the folder's rmdir fails); not a count, nothing is kept",
-   "test": "test_HM2A_6_a_folder_rmdir_failing_after_its_marker_went_is_still_resumed",
+   "test": "test_reaudited_workspace_finish_checks_marker_bytes_before_unlink",
    "kind": "bytes"
   },
   "account_billing_jobs.py::_settle_ended": {
@@ -2965,22 +2965,22 @@
    "kind": "time"
   },
   "health_ledger.py::step": {
-   "checks": 1,
-   "ends": "Each grant advances eight pages of the same Python backup VM, on one exclusive snapshot worker. Its read transaction pins the WAL snapshot across passes; WAL writers keep committing.",
-   "test": "test_copy_past_page_limit",
-   "kind": "count"
+   "checks": 0,
+   "ends": "Deadline of one granted copy slice. COPY_PAGES is owned by the backup runner, not step; new expired-deadline row checks no grant. Each grant advances eight pages of the same Python backup VM, on one exclusive snapshot worker. Its read transaction pins the WAL snapshot across passes; WAL writers keep committing.",
+   "test": "test_reaudited_snapshot_step_with_an_expired_deadline_does_not_grant_work",
+   "kind": "time"
   },
   "health_ledger.py::_progress": {
-   "checks": 1,
-   "ends": "Backup and quick/full copy VMs pause between grants. One copy worker and one scan worker per check; cleanup joins before deletion and gates the next job.",
+   "checks": 0,
+   "ends": "Progress callbacks yield while their granted deadline is expired. Count increment is bookkeeping, not a count cap. Backup and quick/full copy VMs pause between grants. One copy worker and one scan worker per check; cleanup joins before deletion and gates the next job.",
    "test": "test_full_scan_resumes_after_quantum",
-   "kind": "count"
+   "kind": "time"
   },
   "health_ledger.py::_copy_slice": {
-   "checks": 1,
-   "ends": "A shared owner deadline bounds copying; a pending foreground queue reduces the copy quantum to 150 ms. Work resumes in later passes and uses spare time when idle.",
+   "checks": 0,
+   "ends": "Shared copy deadline, shortened under queue pressure to BUSY_COPY_SECONDS; inherited stub consumes time past that slice. A shared owner deadline bounds copying; a pending foreground queue reduces the copy quantum to 150 ms. Work resumes in later passes and uses spare time when idle.",
    "test": "test_busy_queue_uses_shorter_slice_without_starving_copy",
-   "kind": "count"
+   "kind": "time"
   },
   "health_ledger.py::_retain": {
    "checks": 1,
@@ -2989,10 +2989,10 @@
    "kind": "count"
   },
   "health_ledger.py::_select": {
-   "checks": 1,
-   "ends": "One indexed project identity per pass, using a keyset cursor; registry exhaustion restarts the scan. Projects beyond the page are checked on later passes.",
+   "checks": 0,
+   "ends": "Read-only indexed next-project lookup LIMIT 1 with a cursor; no project admission ceiling. One indexed project identity per pass, using a keyset cursor; registry exhaustion restarts the scan. Projects beyond the page are checked on later passes.",
    "test": "test_project_enumeration_past_page",
-   "kind": "count"
+   "kind": "read_only"
   },
   "user_settings.py::load": {
    "checks": 1,
@@ -3007,10 +3007,10 @@
    "kind": "count"
   },
   "run_retention.py::sweep": {
-   "checks": 5,
-   "ends": "One page at most 32 records; only maintenance, resumes after the page and skips readers/transactions. Not a run admission cap. SQL selection is limited to 2048 callbacks and 25 ms.",
+   "checks": 1,
+   "ends": "Scalar batch validation; actual bounded SQL work is independently registered as nested page. One page at most 32 records; only maintenance, resumes after the page and skips readers/transactions. Not a run admission cap. SQL selection is limited to 2048 callbacks and 25 ms.",
    "test": "test_past_batch_limit_and_protected_prefix_drain_without_starvation",
-   "kind": "count"
+   "kind": "validation"
   },
   "learning_contracts.py::validate_retention_summary": {
    "checks": 1,
@@ -3019,10 +3019,10 @@
    "kind": "validation"
   },
   "learning_store.py::_retention_detail": {
-   "checks": 1,
-   "ends": "Historical lookup seeks one proven, typed summary member under the existing 2048-callback/25-ms read budget. Missing IDs stay not found; a budget refusal propagates without inventing membership. The connection-local index rebuilds from permanent summaries.",
+   "checks": 0,
+   "ends": "Read-only indexed membership lookup; bounded query is nested read, no outer historical population ceiling remains. Historical lookup seeks one proven, typed summary member under the existing 2048-callback/25-ms read budget. Missing IDs stay not found; a budget refusal propagates without inventing membership. The connection-local index rebuilds from permanent summaries.",
    "test": "test_typed_history_and_years_of_summaries_use_indexed_membership",
-   "kind": "count"
+   "kind": "read_only"
   },
   "run_retention.py::advance_import_history": {
    "checks": 2,
@@ -3049,14 +3049,14 @@
    "kind": "bytes"
   },
   "runtime_lineage.py::successor_custody": {
-   "checks": 1,
+   "checks": 0,
    "test": "test_lineage_cycles_and_past_sixteen_links_are_refused_without_writes",
    "ends": "At most 16 immutable lineage links per verification, not a lifetime record cap; longer or cyclic paths keep custody.",
    "kind": "count"
   },
   "takeover_journal.py::validate": {
    "checks": 7,
-   "test": "test_prior_authorization_past_the_byte_limit_changes_nothing",
+   "test": "test_reaudited_takeover_validator_crosses_authorization_bytes_directly",
    "ends": "A1: fixed integer, version, path, authorization and at-most-64 listed-run widths; one journal ends at completion or pre-stop undo.",
    "kind": "bytes"
   },
@@ -3068,7 +3068,7 @@
   },
   "takeover_journal.py::write": {
    "checks": 1,
-   "test": "test_journal_past_the_run_and_byte_limits_changes_nothing",
+   "test": "test_reaudited_takeover_journal_writer_refuses_its_own_byte_limit",
    "ends": "Bounded intent bytes, not a lifetime run count; no replacement is made when it cannot fit.",
    "kind": "bytes"
   },
@@ -3085,7 +3085,7 @@
    "kind": "bytes"
   },
   "update_takeover.py::stop_until_excluded": {
-   "checks": 1,
+   "checks": 0,
    "test": "test_B4t_3_a_straggler_that_passed_its_check_is_caught",
    "ends": "At most three stop/probe rounds after the start barrier; an inherited lock leaves a resumable failure, never adoption.",
    "kind": "count"
@@ -3117,12 +3117,12 @@
   "takeover_preflight.py::_registry": {
    "checks": 2,
    "test": "test_update_check_replaces_only_the_running_child_refusal",
-   "ends": "COUNT(*) is a read-only diagnostic of live, unreleased child slots. It imposes no limit and refuses no update; normal authenticated settlement or crash grace ends each slot.",
-   "kind": "count"
+   "ends": "Read-only registry/status aggregation COUNT and schema-version compatibility; never compares a child population with a ceiling. The old CLI-message-only binding was wrong. COUNT(*) is a read-only diagnostic of live, unreleased child slots. It imposes no limit and refuses no update; normal authenticated settlement or crash grace ends each slot.",
+   "kind": "read_only"
   },
   "takeover_preflight.py::read_plan": {
    "checks": 1,
-   "test": "test_B4t_A1_held_store_lock_without_a_service",
+   "test": "test_reaudited_takeover_plan_refuses_oversize_prior_authorization_before_any_peer",
    "ends": "Five seconds for a starting service to publish a hint or release history/host flocks; absent service then project_store_busy. Authorization read remains capped at 1 KiB.",
    "kind": "bytes"
   },
@@ -3139,16 +3139,16 @@
    "kind": "validation"
   },
   "takeover_journal.py::reconcile": {
-   "checks": 2,
+   "checks": 1,
    "test": "test_B4t_A1_journal_stays_bounded_on_a_busy_project",
-   "ends": "Complete widest serialized journal <=16384 bytes; excess unsettled runs are counted durably, never dropped from totals.",
-   "kind": "bytes"
+   "ends": "Mixed site: 1070 launch rows are bounded to MAX_TAKEOVER_RUNS=64; classify demonstrated run count rather than bytes. Complete widest serialized journal <=16384 bytes; excess unsettled runs are counted durably, never dropped from totals.",
+   "kind": "count"
   },
   "takeover_journal.py::widest": {
    "checks": 0,
    "test": "test_B4t_A1_journal_stays_bounded_on_a_busy_project",
-   "ends": "Reserves all future fields at 2^63-1 before selecting runs; at most 64 copied rows per takeover.",
-   "kind": "count"
+   "ends": "Conservative widest-document construction is a serialization precondition used by reconcile; widest itself has no quota comparison or retained population. Reserves all future fields at 2^63-1 before selecting runs; at most 64 copied rows per takeover.",
+   "kind": "precondition"
   },
   "takeover_owner.py::stop_service": {
    "checks": 0,
@@ -3186,12 +3186,6 @@
    "ends": "takeover_runs drain with attempt replay retention (<=64 per update); orphan run rows expire by recorded_at_ms. Obligations end with hold/settlement evidence. Newest record and references stay, every complete unreferenced record except the newest 16 is removed in one separate atomic pass.",
    "kind": "count"
   },
-  "runtime_lineage.py::prune_lineage": {
-   "checks": 0,
-   "test": "test_lineage_retention_keeps_65_live_branches_and_18_successive_links",
-   "ends": "Every edge on a live or replayable custody path stays, without fixed/per-digest cap. No-live-custody paths are removed at owner open and maintenance. Bound: updates since oldest unreleased digest; unprotected rows <=64 (actually zero after a pass).",
-   "kind": "count"
-  },
   "runtime_lineage.py::lineage_status": {
    "checks": 1,
    "test": "test_lineage_retention_keeps_65_live_branches_and_18_successive_links",
@@ -3200,13 +3194,13 @@
   },
   "takeover_process.py::wait": {
    "checks": 0,
-   "test": "test_native_exec_before_and_after_I4_reaches_only_the_same_process",
+   "test": "test_reaudited_kernel_wait_crosses_its_birth_pin_deadline",
    "ends": "Both birth fallback and kqueue waits end at their passed deadline (30 seconds TERM / 5 seconds KILL). NOTE_EXEC is retained for I4 and never mistaken for exit or timeout.",
    "kind": "time"
   },
   "takeover_owner.py::_service_answers": {
    "checks": 0,
-   "test": "test_withdrawn_hint_does_not_hide_an_endpoint_that_still_answers",
+   "test": "test_reaudited_service_probe_applies_its_connect_timeout_and_retains_uncertainty",
    "ends": "A single scope-endpoint connect waits at most 0.2 seconds. An unreadable or timed-out endpoint remains live; only ENOENT/ECONNREFUSED proves it no longer answers. The enclosing stop deadline ends the loop.",
    "kind": "time"
   }

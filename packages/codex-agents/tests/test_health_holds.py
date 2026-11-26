@@ -242,26 +242,28 @@ class HoldsTests(unittest.TestCase):
         self.assertIsNone(pattern.search(source), 'learning_store.py must not register or import the S8 holds check yet')
 
     def test_unrelated_lifetime_caps_bytes_are_preserved(self):
-        # Every cap entry present at the S8 base (ce81bd96) is still present with an unchanged value;
+        # Decision 382 accepted the kind/ends/binding migration and six evidenced stale removals.
+        # Pin that accepted S15 shape, rather than the superseded S8 metadata.
         # other accepted steps add entries, so this is a superset check on the parsed JSON.
         import json
         import subprocess
         repository = Path(__file__).resolve().parents[3]
         path = Path(__file__).with_name('lifetime_caps.json')
-        original = json.loads(subprocess.check_output(['git', 'show', 'ce81bd96:' + str(path.relative_to(repository))], cwd=repository))
+        original = json.loads(subprocess.check_output(['git', 'show', '95ebe3a5:' + str(path.relative_to(repository))], cwd=repository))
         current = json.loads(path.read_text(encoding='utf-8'))
-        # S14a (335) deliberately re-audited these two sites (checks 5 -> 6, new ends text); every other value is unchanged.
-        updated_by_other_steps = {'account_service.py::_capture_admission_rows_locked', 'admission_input_decode.py::_preflight'}
-        # S5 B4t (146955fc, accepted) replaced test_B7_2_ended_by_update_unrecorded_... with the test below (assertion-audit.md);
-        # the entry's other bytes stay pinned exactly, only its `test` follows the rename.
-        renamed_by_other_steps = {'project_holds_report.py::_ended_by_update':
-                                  'test_B4t_runtime_change_creates_no_legacy_update_close_count'}
+        # Decision 383's individually reviewed changes are explicit old -> new
+        # fixtures, independent of the live registry. Every other value stays pinned.
+        approved = json.loads(path.with_name('s15-cap-shape-updates.json').read_text())
+        for site, change in approved['changes'].items():
+            self.assertEqual(change['old'], original['sites'].get(site), site)
+            if change['new'] is None:
+                del original['sites'][site]
+                self.assertNotIn(site, current['sites'], site)
+            else:
+                original['sites'][site] = change['new']
         for site, entry in original['sites'].items():
             self.assertIn(site, current['sites'], site)
-            if site in renamed_by_other_steps:
-                self.assertEqual({**entry, 'test': renamed_by_other_steps[site]}, current['sites'][site], site)
-            elif site not in updated_by_other_steps:
-                self.assertEqual(entry, current['sites'][site], site)
+            self.assertEqual(entry, current['sites'][site], site)
 
     def test_missing_hold_is_reported(self):
         self.base.reserve()
@@ -322,6 +324,10 @@ class HoldsTests(unittest.TestCase):
         # Remove the synthetic source copies before exercising authenticated admission.
         original = leases.lease_binding().run_handle
         self.store._connection.execute('DELETE FROM result_leases WHERE run_handle<>?', (original,))
+        # Each synthetic lease above also acquired a synthetic held-register row.
+        # SH-7 correctly refuses admission if that row survives without its source lease.
+        self.store._connection.execute(
+            "DELETE FROM project_holds WHERE kind='lease' AND identity<>?", (original + ':1',))
         self.base.reserve()
         self.assertEqual('reserved', self.store.result_lease(leases.lease_binding()).state)
 

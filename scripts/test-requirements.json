@@ -5183,10 +5183,11 @@
    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught",
    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end",
    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site",
-   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_kinds_require_bounds_only_for_count_bytes_and_time"
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_kinds_require_bounds_only_for_count_bytes_and_time",
+   "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_overlisted_and_zero_site_check_counts_are_caught"
   ],
   "source": "tests/requirements/s15.json#S15-O0C-GUARD",
-  "statement": "Decision 382: every lifetime-cap registry entry has kind and nonempty ends; count, bytes and time bind an existing real past-limit test; validation, read_only and precondition require ends only. New/increased sites remain guarded; only six source-proven stale sites may be removed."
+  "statement": "Decisions 382/383: every lifetime-cap registry entry has kind and nonempty ends; count, bytes and time bind an existing real past-limit test; validation, read_only and precondition require ends only. Listed checks must exactly equal the current source scan, including zero. Remove a stale cap only with complete-function evidence that its cap code is gone."
  },
  "S15-O0C-P3": {
   "checks": [
@@ -5284,6 +5285,27 @@
    "codex:tests.test_s15_owner_caps.OwnerCapTests.test_project_request_execution_bounds_real_response_and_frees_the_failed_slot",
    "codex:tests.test_s15_owner_caps.OwnerCapTests.test_qa_count_cap_refuses_a_genuine_pair_at_zero_then_restoration_commits_it",
    "codex:tests.test_s15_owner_caps.OwnerCapTests.test_qa_following_chunk_replay_and_record_contract_cross_byte_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_billing_submit_crosses_max_projects_before_any_second_reservation",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_by_run_reader_stops_at_its_actual_duplicate_record_limit",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_core_snapshot_and_selected_case_limits_are_independent",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_health_registration_exceeds_the_registration_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_health_state_reader_crosses_its_own_byte_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_kernel_wait_crosses_its_birth_pin_deadline",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_live_lease_and_reservation_verifiers_cross_their_row_limits",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_lost_closure_checker_crosses_size_with_a_valid_closure",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_orchestration_lookup_pages_past_its_actual_page_size",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_probe_expiry_pages_past_one_reserved_or_orphaned_admitted_row",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_probe_worker_prepare_crosses_its_input_byte_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_reservation_only_repairs_page_past_their_own_row_limit",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_retained_settlement_evidence_crosses_the_history_writers_own_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_service_probe_applies_its_connect_timeout_and_retains_uncertainty",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_snapshot_step_with_an_expired_deadline_does_not_grant_work",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_start_child_recording_exhausts_its_actual_retry_count",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_takeover_journal_writer_refuses_its_own_byte_limit",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_takeover_plan_refuses_oversize_prior_authorization_before_any_peer",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_takeover_validator_crosses_authorization_bytes_directly",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_usage_record_reader_crosses_its_record_byte_cap",
+   "codex:tests.test_s15_owner_caps.OwnerCapTests.test_reaudited_workspace_finish_checks_marker_bytes_before_unlink",
    "codex:tests.test_s15_owner_caps.OwnerCapTests.test_release_ack_and_claim_preflight_refuse_oversized_bytes_before_authority_work",
    "codex:tests.test_s15_owner_caps.OwnerCapTests.test_staged_import_pages_and_source_chunk_bytes_cross_limits",
    "codex:tests.test_s15_owner_caps.OwnerCapTests.test_worker_decode_report_and_output_cross_independent_byte_limits",
@@ -5324,7 +5346,8 @@
   "checks": [
    "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generation_that_cleanup_must_keep_is_refused_not_returned",
    "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_free_the_count_cap_for_the_same_request",
-   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_release_quota_when_a_different_request_retries"
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_release_quota_when_a_different_request_retries",
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_wall_clock_only_expiry_without_a_permit_refuses_until_monotonic_cleanup"
   ],
   "source": "tests/requirements/s15.json#S15-O0C-REPEAT-EXPIRY",
   "statement": "O0c / decision 382 / RS-A F6: real repeat probe generations fill both pending quotas, refuse an extra generation, and after both clocks pass their deadline an unprepared expired generation releases its owner custody so the same committed request can start a fresh judgment."

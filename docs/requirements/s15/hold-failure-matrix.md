@@ -90,3 +90,27 @@ they do not substitute fixed fixture credentials for native authority or process
 | S27b / C5 | Probe worker and admitted probe × restart before launch → `probe_unlaunched_restart`; lost launched probe container → `probe_lost`. |
 | S27c / B5b | Reservation and run slot × crash with container and cgroup proven gone → crashed settlement; absent proof or failed stop → retained `stop_failed`. |
 | S27d / O0C-U4-3 | Dead probe/reaper replay releases exactly one slot; probe journal bounds capacity. |
+
+## Decision 383: explicit later-step assignments (not passing rows)
+
+These rows remain **PENDING**. Decision 383 allows explicit assignment instead
+of adding socket/native evidence in this worktree. Each is assigned to an
+existing named service/container step; no executable skip or new requirement ID
+is introduced. The primary must run the ordinary owner/service path, keep its
+first complete release row stable on replay, and apply the control below. A
+controlled direct call to a release helper does not close these rows.
+
+| Missing row | Assigned step and reason | Required positive/retention oracle and independent mutation |
+| --- | --- | --- |
+| Reservation `released_unacknowledged` | **S27c**: account release committed, project ACK lost, successor service fetches authentic closure. Requires the account/project delivery boundary; sockets are forbidden here. | Project reservation releases exactly once with that kind and stable closure; capacity returns to baseline. Suppress only the reservation `release_hold` for `released_unacknowledged`; the identical release/baseline oracle must fail. |
+| Crash before registration | **S27a**: kill the real project-service child between open and registration, then restart; the existing M `before_registration` observation is not a crash. | Full account/project/driver snapshots prove no unacquired driver/preparation hold. No release mutation for the no-acquisition cell. Companion crash just after registration must reach real stopped-instance recovery; suppress that driver's `service_stopped` release and require its ordinary zero-live oracle to fail. |
+| Collector crash/restart without a primary | **S27d**: stop/reopen the actual collector with due retained work and no primary traffic; source-only P6 references are insufficient for this boundary. | Owner's scheduled recovery, not a primary request, reaches each eligible run-slot/probe release once; uncertain native work stays charged. Independently suppress the actual slot/probe release trigger in each eligible row; each same baseline oracle must fail. |
+| Wall clock forward | **S27c**: advance only wall time across deadline/grace while a real execution remains live, then separately prove it gone through its owner. Integrates clock and native custody, not just the already-covered monitor clock. | Live/uncertain execution stays charged despite the jump (no release to mutate). After genuine cleanup proof, ordinary release returns baseline; suppress its reached release trigger and require that same positive oracle to fail. |
+| Run slot `lost` | **S27a**: real launched host dies without result, successor reaches lost settlement. | First slot release has kind `lost`, replay cannot change it or acquire another slot. Disable only this row's actual slot-release trigger; same release/baseline oracle fails. |
+| Run slot `unsent` | **S27a**: real dispatch cancellation before execution registration/send, with original owner confirmation. | No launched process; slot releases `unsent` exactly once. Suppress its reached slot-release trigger independently; same ordinary oracle fails. |
+| Run slot `process_gone` | **S27c**: native process/container identity is independently proven gone; absent/failed proof remains held. | Verified cleanup releases `process_gone` once; suppress its slot-release trigger and require the same oracle to fail. Retention controls have no release mutation. |
+| Run slot `owner_confirmed` | **S27a**: actual owner confirms never-started/ended custody, with no fabricated local ACK. | First release kind `owner_confirmed`, stable replay and baseline live count. Suppress the actual reached slot-release trigger for that row; identical oracle fails. |
+
+Assignments do not increase the historical **48 executed release mutations**.
+S27a/b/c/d were already carry-ins; the assignments above specify the additional
+acquisition/exit combinations and the exact control each later step owes.

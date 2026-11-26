@@ -3,6 +3,8 @@
 Fixtures seed genuine original records through their writers; no model or socket
 is used, and successful serialization is not a claim of native authority.
 """
+import ast
+import inspect
 import json
 import sys
 import unittest
@@ -32,8 +34,40 @@ class OwnerCapTests(unittest.TestCase):
         expected = operation()
         with mock.patch.object(module, constant, size):
             self.assertEqual(expected, operation())
-        with mock.patch.object(module, constant, size - 1), self.assertRaises(error):
-            operation()
+        # Capture the actual refusing branch, including an inner ValueError which a
+        # contract may translate into its public error. The exception class alone
+        # could accept an unrelated validation or authentication refusal.
+        source = inspect.getsource(module)
+        branches = [(node.lineno, node.end_lineno) for node in ast.walk(ast.parse(source))
+                    if isinstance(node, ast.If) and any(isinstance(name, ast.Name) and name.id == constant
+                                                       for name in ast.walk(node.test))]
+        branches += [(node.lineno, node.end_lineno) for node in ast.walk(ast.parse(source))
+                     if isinstance(node, ast.Call) and any(
+                         keyword.arg == 'max_bytes' and isinstance(keyword.value, ast.Name)
+                         and keyword.value.id == constant for keyword in node.keywords)]
+        deferred = {node.lineno for node in ast.walk(ast.parse(source))
+                    if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'invalid'
+                                                           for target in node.targets)
+                    and any(isinstance(name, ast.Name) and name.id == constant for name in ast.walk(node.value))}
+        previous_lines = {}
+        refused = []
+        def trace(frame, event, arg):
+            if event == 'line' and frame.f_code.co_filename == module.__file__:
+                if previous_lines.get(id(frame)) in deferred and frame.f_locals.get('invalid') is True:
+                    refused.append((frame.f_code.co_name, previous_lines[id(frame)]))
+                previous_lines[id(frame)] = frame.f_lineno
+            if event == 'exception' and frame.f_code.co_filename == module.__file__:
+                if any(start <= frame.f_lineno <= end for start, end in branches):
+                    refused.append((frame.f_code.co_name, frame.f_lineno))
+            return trace
+        previous = sys.gettrace()
+        try:
+            sys.settrace(trace)
+            with mock.patch.object(module, constant, size - 1), self.assertRaises(error):
+                operation()
+        finally:
+            sys.settrace(previous)
+        self.assertTrue(refused, f'{module.__name__}.{constant}: refusal did not come from its cap branch')
         self.assertEqual(expected, operation())
 
     def test_original_contexts_cross_their_own_snapshot_byte_limits(self):
@@ -843,3 +877,304 @@ class OwnerCapTests(unittest.TestCase):
         self.assertTrue(ingress._faulted)
         self.assertEqual({}, case.jobs._jobs)
         self.assertFalse(ingress._thread.is_alive())
+
+    def test_reaudited_probe_worker_prepare_crosses_its_input_byte_cap(self):
+        from tests import test_billing_probe_worker as fixtures
+        from codex_agents import billing_probe_worker as workers
+        case = self.fixture(fixtures, 'BillingProbeWorkerTests')
+        payload = workers.probe_payload(case.fixture.project_id, 'a'*64, case.fixture.project,
+            case.identity, deadline_ns=workers.time.monotonic_ns()+30_000_000_000,
+            created_at_ms=workers.time.time_ns()//1_000_000)
+        with mock.patch.object(workers, 'MAX_PROBE_INPUT_BYTES', len(payload)-1):
+            with self.assertRaisesRegex(workers.ProbeWorkerError, '^probe_worker_invalid$') as caught:
+                case.pool.prepare(payload)
+        self.assertEqual({}, case.pool._jobs)
+        self.assertEqual(0, case.pool._charged)
+        handle = case.pool.prepare(payload)
+        self.assertIn(handle, case.pool._jobs)
+
+    def test_reaudited_billing_submit_crosses_max_projects_before_any_second_reservation(self):
+        from tests import test_account_billing_jobs as fixtures
+        from codex_agents.account_billing_jobs import BillingJobLimits
+        from codex_agents.billing_probe_contracts import ProbeAdmissionError
+        from codex_agents.account_observation import ObservationContext
+        case = self.fixture(fixtures, 'AccountBillingJobTests')
+        case.billing._limits = BillingJobLimits(1, 4, 4)
+        project = case.fixture.project_id
+        case.billing.submit(project, case.runtime, 'b'*64, 'first-project', case.contexts[project], lambda: True)
+        self.assertEqual({project: 1}, case.billing._counts)
+        other_root = case.fixture.project.parent / 'second-billing-project'
+        other_root.mkdir()
+        other = case.ledger.register_project(other_root, now_ms=case.ledger._clock_ms())
+        other_context = ObservationContext(str(other_root.resolve()))
+        with mock.patch.object(case.billing._owner, 'reserve', side_effect=AssertionError('overload reached reserve')):
+            with self.assertRaisesRegex(ProbeAdmissionError, '^probe_full$'):
+                case.billing.submit(other, case.runtime, 'b'*64, 'new-project', other_context, lambda: True)
+        self.assertEqual({project: 1}, case.billing._counts)
+
+    def test_reaudited_health_state_reader_crosses_its_own_byte_cap(self):
+        from tests import test_learning_store as fixtures
+        from codex_agents import collector_runtime as runtime
+        case = self.fixture(fixtures, 'LearningStoreTests')
+        raw = canonical_json({'schema_version': 1, 'projects': {}})
+        case.state.client_health.write_bytes(raw)
+        case.state.client_health.chmod(0o600)
+        self.byte_cap(runtime, 'CLIENT_HEALTH_READ_BYTES', len(raw),
+                      lambda: runtime._client_health_data(case.state), runtime.StateError)
+
+    def test_reaudited_health_registration_exceeds_the_registration_cap(self):
+        from types import SimpleNamespace
+        from codex_agents import health_monitor as monitor
+        runner = monitor.HealthMonitor(())
+        with mock.patch.object(monitor, 'MAX_REGISTERED_CHECKS', 2):
+            for name in ('first', 'second'):
+                runner.register(SimpleNamespace(name=name, run=lambda context: []))
+            with self.assertRaisesRegex(ValueError, '^too many checks$'):
+                runner.register(SimpleNamespace(name='third', run=lambda context: []))
+            self.assertEqual(2, len(runner._checks))
+
+    def test_reaudited_lost_closure_checker_crosses_size_with_a_valid_closure(self):
+        from tests import test_account_settlement_wire as fixtures
+        from codex_agents import lost_run_closure
+        from codex_agents.account_claim_contracts import ClaimError
+        case = self.fixture(fixtures, 'LostRunClosureWireTests')
+        value = case.closure()
+        self.byte_cap(lost_run_closure, 'MAX_LOST_RUN_CLOSURE_BYTES', len(canonical_json(value)),
+                      lambda: lost_run_closure.checked_lost_run_closure(value), ClaimError)
+
+    def test_reaudited_usage_record_reader_crosses_its_record_byte_cap(self):
+        from codex_agents import project_usage_report as usage
+        raw = canonical_json({'run_id': 'real-buffer'})
+        self.assertIsNotNone(usage._record(raw))
+        with mock.patch.object(usage, 'MAX_RECORD_BYTES', len(raw)-1):
+            self.assertIsNone(usage._record(raw))
+        self.assertEqual({'run_id': 'real-buffer'}, usage._record(raw))
+
+    def test_reaudited_core_snapshot_and_selected_case_limits_are_independent(self):
+        from tests.test_learning_cycle_core import verification_outcome
+        from codex_agents import learning_cycle_core as core
+        value = verification_outcome()
+        self.byte_cap(core, 'MAX_SNAPSHOT_BYTES', len(canonical_json(value)),
+            lambda: core.select_mining_outcomes([value], existing_cases=[]), core.LearningCycleBoundsError)
+        with mock.patch.object(core, 'MAX_CASES', 0):
+            with self.assertRaisesRegex(core.LearningCycleBoundsError, '^case_limit$'):
+                core.select_mining_outcomes([value], existing_cases=[])
+
+    def test_reaudited_workspace_finish_checks_marker_bytes_before_unlink(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from codex_agents import health_workspaces as workspaces
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            folder = parent / 'prepare-one'
+            folder.mkdir()
+            (folder / workspaces.MARKER).write_bytes(b'original-marker')
+            parent_fd, folder_fd = os.open(parent, os.O_RDONLY), os.open(folder, os.O_RDONLY)
+            self.addCleanup(os.close, parent_fd)
+            self.addCleanup(os.close, folder_fd)
+            budget = SimpleNamespace(used=0)
+            with mock.patch.object(workspaces, 'MAX_MARKER_BYTES', 2):
+                self.assertFalse(workspaces._finish(parent_fd, folder.name, folder_fd, budget))
+            self.assertEqual(b'original-marker', (folder / workspaces.MARKER).read_bytes())
+            self.assertEqual(0, budget.used)
+            self.assertTrue(workspaces._finish(parent_fd, folder.name, folder_fd, budget))
+            self.assertFalse(folder.exists())
+            self.assertEqual(2, budget.used)
+
+    def test_reaudited_orchestration_lookup_pages_past_its_actual_page_size(self):
+        from tests import test_project_orchestration as fixtures
+        from codex_agents import project_orchestration_report as report
+        case = self.fixture(fixtures, 'ProjectOrchestrationTests')
+        snapshots = [case.call('open', identity=f'lookup-{n}')['current']['snapshot'] for n in range(3)]
+        with mock.patch.object(report, '_PAGE', 2):
+            for snapshot in snapshots:
+                self.assertEqual(snapshot['orchestration_handle'],
+                                 report._orchestration(case.store, snapshot['orchestration_id'])[0])
+
+    def test_reaudited_live_lease_and_reservation_verifiers_cross_their_row_limits(self):
+        from dataclasses import replace
+        from tests import test_result_leases as fixtures
+        from codex_agents import orchestration_store
+        from codex_agents.history_contracts import HistoryError
+        for bound in (False, True):
+            case = self.fixture(fixtures, 'ResultLeaseTests')
+            case.store._result_capacity = replace(case.store._result_capacity,
+                                                   max_reserved_bytes=4*fixtures.fixtures.MAX_RESULT_BODY_BYTES)
+            for number in (1, 2, 3):
+                case.reserve(number)
+                if bound:
+                    case.store.arm_result_lease(fixtures.lease_binding(number))
+                    case.bind(number)
+            owner = case.store._orchestration_owner()
+            operation = owner._verify_held_reservations if bound else owner._held_leases
+            operation()
+            with mock.patch.object(orchestration_store, 'MAX_LEASE_ROWS', 2):
+                with self.assertRaisesRegex(HistoryError, '^history_orchestration_unavailable$'):
+                    operation()
+            operation()
+
+    def test_reaudited_retained_settlement_evidence_crosses_the_history_writers_own_cap(self):
+        from tests.test_crashed_settlement import CrashedSettlementTests
+        from codex_agents import lost_run_closure, launch_journal
+        from codex_agents.learning_contracts import content_digest
+        from codex_agents.history_contracts import HistoryError
+        case = CrashedSettlementTests('runTest')
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.bound()
+        case.open()
+        case.journal()
+        raw = case.closure(kind='crashed')
+        proof = launch_journal.process_settlement_evidence(case.store._directory / 'launches', case.lease(),
+                                                           __import__('json').loads(raw)['bridge_run_id'])
+        retained = canonical_json({**{name: proof[name] for name in ('state', 'child', 'watchdog')},
+                                  'run_marker_digest': content_digest(proof['run_tag']), 'closure': raw.decode('ascii')})
+        self.assertGreater(len(retained)-1, len(raw))  # the earlier wire guard must still accept it
+        before = case.snapshot()
+        with mock.patch.object(lost_run_closure, 'MAX_LOST_RUN_CLOSURE_BYTES', len(retained)-1):
+            with self.assertRaisesRegex(HistoryError, '^history_invalid_input$'):
+                case.record_settlement(raw=raw)
+        self.assertEqual(before, case.snapshot())
+        with mock.patch.object(lost_run_closure, 'MAX_LOST_RUN_CLOSURE_BYTES', len(retained)):
+            self.assertEqual('crashed', case.record_settlement(raw=raw)['release_kind'])
+
+    def test_reaudited_takeover_journal_writer_refuses_its_own_byte_limit(self):
+        import tempfile
+        from pathlib import Path
+        from tests.test_b4t_takeover import Operations
+        from codex_agents import takeover_journal as journal
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            owner = journal.TakeoverJournal(root)
+            document = owner.create(Operations(root).preflight(), [])
+            self.byte_cap(journal, 'MAX_JOURNAL_BYTES', len(owner.serialized(document)),
+                          lambda: owner.write(document), journal.JournalError)
+
+    def test_reaudited_takeover_plan_refuses_oversize_prior_authorization_before_any_peer(self):
+        from tests import test_b4t_takeover as fixtures
+        from codex_agents.update_takeover import TakeoverError
+        case = self.fixture(fixtures, 'AmendmentA1Tests')
+        with case.plan_case() as (preflight, state, project):
+            state.collector_authorization.parent.mkdir(parents=True, exist_ok=True)
+            state.collector_authorization.write_bytes(b'x' * (preflight.MAX_AUTHORIZATION_BYTES+1))
+            with mock.patch('codex_agents.collector_runtime._collector_runtime_authorization', return_value={}), \
+                    mock.patch.object(preflight, '_peer', side_effect=AssertionError('oversize reached peer')):
+                with self.assertRaises(TakeoverError) as caught:
+                    preflight.read_plan(state, project)
+            self.assertEqual('predecessor_unverified', caught.exception.code)
+
+    def test_reaudited_kernel_wait_crosses_its_birth_pin_deadline(self):
+        from codex_agents import takeover_process as process
+        kernel = process.Kernel()
+        pin = process.BirthPin(123, 'birth')
+        with mock.patch.object(kernel, 'exited', return_value=False), \
+                mock.patch.object(process.time, 'monotonic', side_effect=[0, .201]), \
+                mock.patch.object(process.time, 'sleep', side_effect=AssertionError('past-limit wait slept')):
+            self.assertFalse(kernel.wait(pin, .2))
+
+    def test_reaudited_service_probe_applies_its_connect_timeout_and_retains_uncertainty(self):
+        from codex_agents import takeover_owner as owner
+        # The transport seam emulates a peer which answers after the configured deadline.
+        # No socket is constructed; a timeout is uncertainty, never proof of absence.
+        with mock.patch.object(owner.socket, 'socket') as make:
+            connection = make.return_value.__enter__.return_value
+            connection.connect.side_effect = TimeoutError('past .2 seconds')
+            self.assertTrue(owner.OwnerOperations._service_answers({'project_endpoint': '/fixture.sock'}))
+            connection.settimeout.assert_called_once_with(.2)
+            connection.connect.assert_called_once_with('/fixture.sock')
+
+    def test_reaudited_probe_expiry_pages_past_one_reserved_or_orphaned_admitted_row(self):
+        from tests import test_rsf_s5_probe as fixtures
+        from codex_agents import account_billing_admission as admission
+        for admitted in (False, True):
+            case = self.fixture(fixtures, '_StoreFixture')
+            originals = [case.reserve(f'paged-{n}') for n in range(3)]
+            if admitted:
+                for original in originals:
+                    case.admit(original)
+                case.restart()
+            case.clock = max(r.deadline for r in originals) + admission.PROBE_ORPHAN_GRACE_MS + 1
+            operation = admission.close_orphaned_admitted if admitted else admission.close_expired_reserved
+            counts = []
+            for _ in range(4):
+                with case.ledger._account_transaction():
+                    counts.append(operation(case.ledger, case.clock, 1))
+            self.assertEqual([1, 1, 1, 0], counts)
+            self.assertTrue(all(row['state'] == 'committed' for row in case.rows()))
+
+    def test_reaudited_reservation_only_repairs_page_past_their_own_row_limit(self):
+        from tests import test_retirement_sweep as fixtures
+        case = self.fixture(fixtures, 'ReservationOnlyAndVisibilityTests')
+        for number in (1, 2, 3):
+            case.direct(number)
+            path = case.path(case.reservation_only_names(number)[1])
+            path.unlink()
+            path.mkdir()
+        case.now = max(case.due(n) for n in (1, 2, 3))
+        case.pass_()
+        first = case.store.result_retirement_repairs(1)
+        self.assertEqual(1, len(first))
+        self.assertTrue(first.truncated)
+        seen = [row['run_handle'] for row in first]
+        cursor = first.cursor
+        while cursor is not None:
+            page = case.store.result_retirement_repairs(1, cursor)
+            self.assertEqual(1, len(page))
+            seen.extend(row['run_handle'] for row in page)
+            cursor = page.cursor
+        self.assertEqual({case.attempt(n)[0] for n in (1, 2, 3)}, set(seen))
+        self.assertEqual(3, len(seen))
+
+    def test_reaudited_start_child_recording_exhausts_its_actual_retry_count(self):
+        from types import SimpleNamespace
+        from codex_agents import project_start
+        starter = object.__new__(project_start.ProjectStarter)
+        starter.ledger = SimpleNamespace(set_start_child=mock.Mock(side_effect=RuntimeError('busy')))
+        starter._error = mock.Mock()
+        claim = SimpleNamespace(project_id='prj_'+'a'*32, attempt=1)
+        with mock.patch.object(project_start.time, 'sleep'):
+            self.assertFalse(starter._record_child(claim, 123, tries=2))
+        self.assertEqual(2, starter.ledger.set_start_child.call_count)
+        self.assertEqual(2, starter._error.call_count)
+
+    def test_reaudited_snapshot_step_with_an_expired_deadline_does_not_grant_work(self):
+        from tests import test_health_ledger as fixtures
+        from codex_agents import health_ledger as health
+        case = self.fixture(fixtures, 'LedgerHealthTests')
+        snapshot = health.Snapshot(case.database, case.root / 'expired-snapshot.sqlite3')
+        self.addCleanup(snapshot.close)
+        self.assertFalse(snapshot.step(health.time.monotonic()-1))
+        self.assertEqual(0, snapshot.granted)
+
+    def test_reaudited_by_run_reader_stops_at_its_actual_duplicate_record_limit(self):
+        import sqlite3
+        from codex_agents import project_usage_report as usage
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        db.execute('CREATE TABLE records(project_id,record_type,source,content,observed_at_ms,source_sequence)')
+        for n in range(7):
+            db.execute('INSERT INTO records VALUES(?,?,?,?,?,?)',
+                       ('project', 'event', 'hook', canonical_json({'run_id': 'one', 'n': n}), n, n))
+        visited = []
+        original = usage._record
+        with mock.patch.object(usage, '_record', side_effect=lambda raw: (visited.append(raw), original(raw))[1]):
+            found = usage._by_run(db, 'project', ('event',), 'hook', {'one'})
+        self.assertEqual(5, len(visited))  # 4 * one requested run + the sentinel
+        self.assertEqual(0, found['one'][0]['n'])
+
+    def test_reaudited_takeover_validator_crosses_authorization_bytes_directly(self):
+        import base64
+        import tempfile
+        from pathlib import Path
+        from tests.test_b4t_takeover import Operations
+        from codex_agents import takeover_journal as journal
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            owner = journal.TakeoverJournal(root)
+            intent = {**Operations(root).preflight(), 'prior_authorization': b'valid-original-bytes'}
+            document = owner.create(intent, [])
+            size = len(base64.b64decode(document['prior_authorization']))
+            self.byte_cap(journal, 'MAX_AUTHORIZATION_BYTES', size,
+                          lambda: journal.validate(document), journal.JournalError)

@@ -88,6 +88,27 @@ class RepeatProbeCapTests(unittest.TestCase):
                     case.reserve('first')
             self.assertIs(first, case.owner._pending[(first.project, first.key)])
 
+    def test_wall_clock_only_expiry_without_a_permit_refuses_until_monotonic_cleanup(self):
+        case = self.fixture(60_000)
+        origin = admission.time.monotonic_ns()
+        with mock.patch.object(admission.time, 'monotonic_ns', return_value=origin):
+            first = case.reserve('first')
+            self.assertEqual({}, case.owner._permits)
+            self.assertEqual({}, case.owner._signatures)
+            case.clock = first.deadline + 1
+            with self.assertRaisesRegex(admission.ProbeAdmissionError, '^probe_conflict$'):
+                case.reserve('first')
+            self.assertIs(first, case.owner._pending[(first.project, first.key)])
+            self.assertIn(first, case.owner._reserved_inputs)
+        # The ordinary cleanup uses the monotonic deadline, even without a permit.
+        # Once that deadline arrives, it drops the old custody and permits a fresh judgment.
+        with mock.patch.object(admission.time, 'monotonic_ns', return_value=first.deadline_ns):
+            fresh = case.reserve('first')
+            self.assertIsNot(first, fresh)
+            self.assertNotIn(first, case.owner._reserved_inputs)
+            self.assertEqual([fresh], list(case.owner._pending.values()))
+            self.assertGreater(fresh.deadline, case.clock)
+
     def test_expired_repeat_generations_release_quota_when_a_different_request_retries(self):
         case = self.fixture(60_000)
         origin = admission.time.monotonic_ns()

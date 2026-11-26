@@ -186,3 +186,37 @@ No existing assertion changed or removed. Added test (new): an expired repeat ge
 - The matrix explicitly preserves intentional retention and no-acquisition rows,
   the original B0-2 skip under 132/377, and S27a/b/c/d native container carry-ins.
   Full-service source references are named separately from this no-socket run.
+
+## Decision 383 fix round (base 82cc5c48; no commit)
+
+These are test/registry changes authorized by decisions 382/383. No runtime
+behavior, original B0-2 assertion, or 132/377 skip changed.
+
+| Existing pin / oracle | Old → new | Reason and evidence |
+| --- | --- | --- |
+| Publication proof registry dictionaries | `{checks, ends, test}` → the same fields plus `kind: count` on both D3 entries. Reservation-row `test_R2_a_reservation_only_directory_is_listed_before_earlier_retrying_contexts` → `test_reaudited_reservation_only_repairs_page_past_their_own_row_limit`. Context-row test/ends stay pinned. | Decision 382 requires kind; decision 383's audit found the old reservation test has one reservation-only row and does not fill that query. New test pages three actual reservation-only directories at limit one. |
+| Health unrelated-cap preservation | Historical `ce81bd96` values, except two older S14a changes and one S5 rename → exact accepted `95ebe3a5` decision-382 shapes, plus 72 explicit decision-383 old/new deltas. | The old base predates the authorized kind/ends/test migration and six evidenced stale removals. No comparison against live JSON is used to manufacture expectations. Every other accepted entry is still pinned; the former two broad exceptions are removed. The full 72 per-entry **old → new** values are in `packages/codex-agents/tests/s15-cap-shape-updates.json` (including all 22 check-count changes and one evidenced stale cap removal). |
+| Health past-page lease admission | Existing `reserved` expectation → **unchanged**. Fixture deletes synthetic leases only → deletes their synthetic held-lease register rows too. | RED `history_incompatible` came from `_result_counts` finding an SH-7 held identity with no source lease. Both rows were inserted by this test. Product validation stays intact; paired fixture cleanup restores its intended healthy admission. |
+| Lifetime guard | Fail only when `actual > checks` over scanned sites → fail whenever `actual != checks` for every listed entry, including actual zero. Existing increased/new-site oracles → unchanged. | New over-list/zero control was RED for both actual zero and one with listed two; exact guard is GREEN after 22 registry count corrections. Source-proven zero regex sites are classified separately from genuinely absent cap code. |
+| Guard field/kind fixtures | Noncurrent fixtures used `checks: 1` with an empty source counter → `checks: 0` with the **same empty counter**. | Decision 383's exact count is now an independent contract. Existing missing-field, invalid-kind and ends-only/past-limit diagnostics and assertions are unchanged; these fixtures continue testing entries absent from the scan. |
+| `OwnerCapTests.byte_cap` | Exact-bound success, `assertRaises(error)` at size−1, restored success → those same oracles **plus** trace evidence of the particular module/constant's refusing comparison, deferred `invalid` comparison, or delegated `max_bytes` call. | Public exception class alone could accept a different failure. The helper checks the reached cap site; no old success/refusal expectation was removed. Cases using deferred validation and delegated bounded JSON retain their original product paths. |
+| Registry metadata | 547 entries, 454 bounded; 227 inherited bindings pending review → 546 entries, 438 bounded; all 227 individually audited (178 confirmed, 33 rebound, 15 ends-only reclassifications, one stale cap removed). | Per-site original/resolved test references, source hashes, concrete stimulus and current disposition are in `cap-binding-audit.json`. Mixed count/byte/time functions state which independent bound is actually demonstrated. No blanket execution claim or exemption kind. |
+
+Additional tests add oracles only: 21 owner-cap repair methods, one wall-only
+repeat-expiry method and one over-listed-count guard method. Draft corrections
+were fixture/API mistakes, not changed product expectations: use module-level
+`takeover_journal.validate`; obtain body-size constant from the result fixture;
+create enough real byte capacity for three leases; for the retained-evidence
+byte cap use a genuine crashed closure **plus** product journal proof (plain
+lost closure only reaches the earlier verifier). A second genuinely registered
+project and its own context drive `max_projects`, before any second reserve.
+
+The wall-only no-permit row records the accepted behavior precisely: no expired
+original is returned; `probe_conflict` preserves it until monotonic expiry,
+then ordinary cleanup removes its custody and starts a fresh generation.
+This is not an assertion that wall time alone frees the generation.
+
+RS-8's eight missing combinations are explicitly **pending**, assigned to
+S27a/c/d with the real service/native boundary reason and independent reached
+release mutation required for each positive release. They add zero executed
+mutation claims; historical 48 controls remain historical evidence only here.

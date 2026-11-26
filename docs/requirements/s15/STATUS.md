@@ -1,3 +1,65 @@
+# S15 — decision 383 fix round verified (base 82cc5c48; uncommitted)
+
+This fix round is verified within the no-socket scope. **S15 is not declared
+closed**: the eight missing RS-8 combinations are explicitly assigned to the
+existing S27a/c/d later steps, with reasons and individual mutation obligations
+in [hold-failure-matrix.md](hold-failure-matrix.md). None is counted as a pass.
+The historical completion claims below were rejected by the Opus review and
+are retained only as history.
+
+All **227 inherited `bound-review-required` bindings were individually source
+audited**: **178 confirmed, 33 rebound, 15 reclassified as ends-only
+validation/read-only/preconditions, one stale cap removed**. Each audit records
+its original and resolved test source, runtime source hashes, and concrete
+stimulus/scope. No pending inherited review label remains. Source review is
+not a claim that socket/native modules were executed here. The other 227 bounded
+bindings come from the earlier S15 work, not a new blanket re-audit in this round.
+See [cap-binding-audit.json](cap-binding-audit.json).
+
+The exact guard is GREEN: **546 entries**, **438 count/byte/time entries**.
+All **22 over-listed counts** were lowered to their actual scanner counts;
+**13 newly zero-match functions** have complete-function grep/no-match/hash
+evidence and explicit current classifications. Range/min/delegated SQL bounds
+remain registered even when the regex matches zero. `container_runtime`'s
+`_timeout_backstop` is a version precondition; `takeover_preflight._registry` is
+read-only aggregation. The additional stale `runtime_lineage.prune_lineage`
+cap was removed only after proving no cap code remains; it preserves all
+referenced paths and deletes unreferenced edges. No exemption kind was added.
+
+Both affected regression modules are GREEN. Publication dictionaries include
+`kind: count`; health pins the accepted migration and 72 explicit current
+old/new deltas. The health `history_incompatible` was a **fixture cleanup bug**:
+synthetic held-lease register rows survived deletion of their synthetic source
+leases. Paired cleanup restores the existing `reserved` oracle, with SH-7 intact.
+
+The byte helper now proves the specific refusing module/constant branch,
+including deferred validation and delegated byte checks. The new wall-only
+expiry/no-permit test is GREEN: `probe_conflict` retains the generation until
+its monotonic deadline, then ordinary cleanup removes its custody and replaces
+it. Twenty-one new owner-cap methods, this expiry method and the exact-count
+control are registered through the existing modules and requirement catalogue.
+No new module, stage/layer/timing registration or requirement ID was needed.
+
+Final named runner: **113 tests / 5 modules, all passed**; **15.553 s elapsed /
+15.541 worker-s**, plus **7.812 s preflight / 1.932 s discovery** (25.298 s total).
+Largest module: owner caps **12.366 s**. **metadata_errors: [],
+budget_failures: [], requirement failures: none**. Exact command and all named
+outcomes: [decision-383-fix-results.json](decision-383-fix-results.json).
+The new exact-count control was initially RED (two subtests); the corrected
+guard against the original registry reports 22 discrepancies, versus zero now.
+Initial affected-regression check: 45 tests, three failures and one fixture error;
+all their current oracles pass. [assertions.md](assertions.md) records every
+changed pin/oracle and links the complete 72-entry old/new fixture.
+
+No new product defect was found, no runtime code changed, no commit was made,
+and no socket was opened. No test run remains in flight. The affected run's
+separate version/runtime-digest bookkeeping failure was not changed or rerun;
+that remains the primary's release bookkeeping. Original B0-2 and decisions
+132/377 are intact. The historical 48 release controls were not rerun in this
+round, and the new assignments add no executed release-control count.
+
+---
+
 # S15 — decision 382 continuation 2 complete at 4bc4dbbd
 
 The 197 remaining cap bindings are complete. The unchanged strict guard is

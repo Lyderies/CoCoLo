@@ -8,7 +8,7 @@
   },
   {
    "id": "S15-O0C-GUARD",
-   "statement": "Decision 382: every lifetime-cap registry entry has kind and nonempty ends; count, bytes and time bind an existing real past-limit test; validation, read_only and precondition require ends only. New/increased sites remain guarded; only six source-proven stale sites may be removed.",
+   "statement": "Decisions 382/383: every lifetime-cap registry entry has kind and nonempty ends; count, bytes and time bind an existing real past-limit test; validation, read_only and precondition require ends only. Listed checks must exactly equal the current source scan, including zero. Remove a stale cap only with complete-function evidence that its cap code is gone.",
    "source": "tests/requirements/s15.json#S15-O0C-GUARD"
   },
   {

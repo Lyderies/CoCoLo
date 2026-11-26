@@ -66,13 +66,14 @@ def problems(sites: collections.Counter, registry: dict, test_names: set[str]) -
                 found.append(f"{key}: missing non-empty '{field}'")
         if isinstance(entry.get('test'), str) and entry['test'].strip() and entry['test'] not in test_names:
             found.append(f"{key}: its test {entry['test']} does not exist")
+        count = sites[key]
+        if count != entry['checks']:
+            found.append(f"{key}: {count} limit checks, {entry['checks']} listed; describe the change")
     for key, count in sorted(sites.items()):
         entry = registry.get(key)
         if entry is None:
             found.append(f"{key}: a new count-based limit; list it in lifetime_caps.json with 'ends' "
                          "(how what it counts goes away) and 'test' (a past-the-limit test)")
-        elif count > entry["checks"]:
-            found.append(f"{key}: {count} limit checks, {entry['checks']} listed; describe the new one")
     return found
 
 
@@ -104,15 +105,23 @@ class LifetimeCapGuardTests(unittest.TestCase):
         sites = collections.Counter({"m.py::take": 2})
         self.assertIn("2 limit checks, 1 listed", problems(sites, {"m.py::take": {"checks": 1}}, set())[-1])
 
+    def test_overlisted_and_zero_site_check_counts_are_caught(self):
+        entry = {'checks': 2, 'kind': 'count', 'ends': 'released', 'test': 'test_past_limit'}
+        for actual in (0, 1):
+            with self.subTest(actual=actual):
+                found = problems(collections.Counter({'m.py::take': actual}),
+                                 {'m.py::take': entry}, {'test_past_limit'})
+                self.assertTrue(any(f'{actual} limit checks, 2 listed' in issue for issue in found))
+
     def test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site(self):
         for field in ('ends', 'test'):
             for bad in (None, '', '  ', 0, [], {}):
                 with self.subTest(field=field, value=bad):
-                    entry = {'checks': 1, 'kind': 'count', 'ends': 'freed after closure', 'test': 'test_past_limit'}
+                    entry = {'checks': 0, 'kind': 'count', 'ends': 'freed after closure', 'test': 'test_past_limit'}
                     entry[field] = bad
                     self.assertIn("missing non-empty '" + field + "'",
                                   problems(collections.Counter(), {'stale.py::take': entry}, {'test_past_limit'})[0])
-            entry = {'checks': 1, 'kind': 'count', 'ends': 'freed after closure', 'test': 'test_past_limit'}
+            entry = {'checks': 0, 'kind': 'count', 'ends': 'freed after closure', 'test': 'test_past_limit'}
             del entry[field]
             self.assertIn("missing non-empty '" + field + "'",
                           problems(collections.Counter(), {'stale.py::take': entry}, {'test_past_limit'})[0])
@@ -120,14 +129,14 @@ class LifetimeCapGuardTests(unittest.TestCase):
     def test_kinds_require_bounds_only_for_count_bytes_and_time(self):
         for kind in ('count', 'bytes', 'time', 'validation', 'read_only', 'precondition'):
             with self.subTest(kind=kind):
-                entry = {'checks': 1, 'kind': kind, 'ends': 'temporary scope ends on return'}
+                entry = {'checks': 0, 'kind': kind, 'ends': 'temporary scope ends on return'}
                 found = problems(collections.Counter(), {'m.py::take': entry}, set())
                 self.assertEqual(kind in ('count', 'bytes', 'time'), bool(found))
                 entry['test'] = 'test_past_limit'
                 self.assertEqual([], problems(collections.Counter(), {'m.py::take': entry}, {'test_past_limit'}))
         for kind in (None, '', 'exempt', [], 1):
             with self.subTest(invalid_kind=kind):
-                entry = {'checks': 1, 'kind': kind, 'ends': 'return', 'test': 'test_past_limit'}
+                entry = {'checks': 0, 'kind': kind, 'ends': 'return', 'test': 'test_past_limit'}
                 self.assertTrue(any('kind' in issue for issue in
                                     problems(collections.Counter(), {'m.py::take': entry}, {'test_past_limit'})))
 
