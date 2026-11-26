@@ -123,6 +123,9 @@ class CliObservationRuntimeTests(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
         for marker in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
             env.pop(marker, None)
+        # TESTSPEED-3: the client's best-effort collector start always ends at once in this fixture, after a full
+        # interpreter start of about a second; real starts have their own tests (test_project_start).
+        env['COCOLO_TEST_ENDED_SERVICE_STARTS'] = '1'
         if host == 'codex':
             env['CODEX_THREAD_ID'] = 'fixture-observe-primary'
         else:
