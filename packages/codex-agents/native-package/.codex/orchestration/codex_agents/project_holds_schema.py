@@ -329,18 +329,18 @@ def next_hold_due(connection) -> int | None:
             if kind == "orchestration" and state == "held":
                 value = connection.execute(
                     "SELECT MIN(MAX(due_at_ms,next_check_ms)) FROM project_holds "
-                    "WHERE kind='orchestration' AND state='held' AND due_at_ms IS NOT NULL").fetchone()[0]
+                    "WHERE kind='orchestration' AND state='held' AND state<>'released' AND due_at_ms IS NOT NULL").fetchone()[0]
                 if value is not None and (found is None or value < found):
                     found = int(value)
                 continue
             value = connection.execute(
-                "SELECT MIN(due_at_ms) FROM project_holds WHERE kind=? AND state=? AND due_at_ms IS NOT NULL",
+                "SELECT MIN(due_at_ms) FROM project_holds WHERE kind=? AND state=? AND state<>'released' AND due_at_ms IS NOT NULL",
                 (kind, state)).fetchone()[0]
             if value is not None and (found is None or value < found):
                 found = int(value)
     # Review round 1: a releasing open binding is retried at its next_check_ms (its due_at_ms stays null).
     value = connection.execute("SELECT MIN(next_check_ms) FROM project_holds WHERE state='releasing' "
-                               "AND kind='open_binding'").fetchone()[0]
+                               "AND state<>'released' AND kind='open_binding'").fetchone()[0]
     if value is not None and (found is None or value < found):
         found = int(value)
     return found

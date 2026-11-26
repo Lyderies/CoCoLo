@@ -1252,9 +1252,9 @@
    "lines": [
     331
    ],
-   "sql": "SELECT MIN(MAX(due_at_ms,next_check_ms)) FROM project_holds WHERE kind='orchestration' AND state='held' AND due_at_ms IS NOT NULL",
+   "sql": "SELECT MIN(MAX(due_at_ms,next_check_ms)) FROM project_holds WHERE kind='orchestration' AND state='held' AND state<>'released' AND due_at_ms IS NOT NULL",
    "plan": [
-    "SEARCH project_holds USING INDEX project_holds_orchestration_check"
+    "SEARCH project_holds USING INDEX project_holds_kind_due (kind=? AND state=? AND due_at_ms>?)"
    ]
   },
   {
@@ -1263,9 +1263,9 @@
    "lines": [
     337
    ],
-   "sql": "SELECT MIN(due_at_ms) FROM project_holds WHERE kind=? AND state=? AND due_at_ms IS NOT NULL",
+   "sql": "SELECT MIN(due_at_ms) FROM project_holds WHERE kind=? AND state=? AND state<>'released' AND due_at_ms IS NOT NULL",
    "plan": [
-    "SEARCH project_holds"
+    "SEARCH project_holds USING COVERING INDEX project_holds_kind_due (kind=? AND state=? AND due_at_ms>?)"
    ]
   },
   {
@@ -1274,9 +1274,9 @@
    "lines": [
     342
    ],
-   "sql": "SELECT MIN(next_check_ms) FROM project_holds WHERE state='releasing' AND kind='open_binding'",
+   "sql": "SELECT MIN(next_check_ms) FROM project_holds WHERE state='releasing' AND state<>'released' AND kind='open_binding'",
    "plan": [
-    "SEARCH project_holds"
+    "SEARCH project_holds USING INDEX project_holds_due (state=?)"
    ]
   },
   {
@@ -1563,9 +1563,9 @@
    "lines": [
     239
    ],
-   "sql": "SELECT evidence FROM project_holds WHERE kind='result_custody' AND state='held'",
+   "sql": "SELECT evidence FROM project_holds WHERE kind='result_custody' AND state='held' AND state<>'released'",
    "plan": [
-    "SCAN project_holds"
+    "SEARCH project_holds USING INDEX project_holds_kind_due (kind=? AND state=?)"
    ]
   },
   {

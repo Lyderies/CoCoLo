@@ -8,3 +8,4 @@ Affected named parallel run: 4 modules, 5 workers, 15.15 seconds, all passed, me
 final audit module rerun after inventory pinning: 8 tests, all passed, metadata_errors=[]. See validation.json.
 No existing assertion changed; RetentionA1Tests scaffold expanded to include its production project key.
 No schema/record-shape change, no load measurement, no owner decision. No tests in flight. Do not commit in this session.
+S14G-4 (S14i, feat/s14i-0874): takeover finished-custody scan and next_hold_due use the live partial index; see assertions.md. Commit S14G-4.

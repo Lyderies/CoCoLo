@@ -236,7 +236,7 @@ def takeover_report(history, *, run_handle=None):
                         raise HistoryError('history_conflict')
                 except (HistoryError, ClaimError, ValueError, TypeError, KeyError):
                     report['refused_unverifiable'] += 1
-    for row in history._connection.execute("SELECT evidence FROM project_holds WHERE kind='result_custody' AND state='held'"):
+    for row in history._connection.execute("SELECT evidence FROM project_holds WHERE kind='result_custody' AND state='held' AND state<>'released'"):
         import json
         try:
             evidence = json.loads(row['evidence'])

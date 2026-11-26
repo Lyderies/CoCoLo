@@ -4324,6 +4324,15 @@
   "source": "tests/requirements/s14g.json#S14G-3",
   "statement": "Preserve takeover lookup answers for both lease and reservation identities and across hold states; project-scoped predicates use the store unique history identity."
  },
+ "S14G-4": {
+  "checks": [
+   "codex:tests.test_s14g_hold_queries.LiveIndexTests.test_S14G_4_next_hold_due_answers_are_unchanged",
+   "codex:tests.test_s14g_hold_queries.LiveIndexTests.test_S14G_4_next_hold_due_reads_use_live_index",
+   "codex:tests.test_s14g_hold_queries.LiveIndexTests.test_S14G_4_takeover_finished_custody_scan_uses_live_index"
+  ],
+  "source": "tests/requirements/s14g.json#S14G-4",
+  "statement": "Takeover's finished-custody scan and next_hold_due's held/releasing deadline reads carry the live-index predicate state<>'released' so they use project_holds_kind_due, selecting exactly the same rows as before."
+ },
  "S14b-1": {
   "checks": [
    "codex:tests.test_run_retention.RunRetentionTests.test_backup_bytes_exclude_index_and_restored_rows_rebuild_answers",

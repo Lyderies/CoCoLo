@@ -152,6 +152,66 @@ class HoldQueryTests(unittest.TestCase):
         self.assertGreaterEqual(checked, 15)
 
 
+class LiveIndexTests(unittest.TestCase):
+    """S14G-4: held/releasing reads must be able to use the partial index project_holds_kind_due (state<>'released')."""
+
+    def setUp(self):
+        fixture = project_fixture.ResultLeaseTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.store = fixture.store
+        self.db = self.store._connection
+
+    def assert_live_index(self, sql, params=()):
+        steps = plan(self.db, sql, params)
+        hold = [s for s in steps if re.match(r'(?:SCAN|SEARCH) project_holds\b', s)]
+        self.assertTrue(hold, steps)
+        for step in hold:
+            self.assertIn('project_holds_kind_due', step, steps)
+
+    @requirements('S14G-4', why_not_scenario=WHY)
+    def test_S14G_4_takeover_finished_custody_scan_uses_live_index(self):
+        sql = query(project_takeover, "SELECT evidence FROM project_holds WHERE kind='result_custody'")
+        self.assert_live_index(sql)
+        self.assertIn("state='held'", sql)
+
+    @requirements('S14G-4', why_not_scenario=WHY)
+    def test_S14G_4_next_hold_due_reads_use_live_index(self):
+        recorder = Recorder(self.db)
+        project_holds_schema.next_hold_due(recorder)
+        reads = [(s, p) for s, p in recorder.calls if 'FROM project_holds' in s]
+        self.assertGreaterEqual(len(reads), 5)
+        for sql, params in reads:
+            with self.subTest(sql=sql):
+                self.assertIn("state<>'released'", sql)
+                steps = plan(self.db, sql, params)
+                hold = [s for s in steps if re.match(r'(?:SCAN|SEARCH) project_holds\b', s)]
+                self.assertTrue(hold, steps)
+                for step in hold:  # the open-binding retry (state-only) has project_holds_due; the rest project_holds_kind_due
+                    self.assertRegex(step, r'USING (?:COVERING )?INDEX project_holds_(?:kind_)?due', steps)
+
+    @requirements('S14G-4', why_not_scenario=WHY)
+    def test_S14G_4_next_hold_due_answers_are_unchanged(self):
+        rows = []
+        for n, (kind, state, due, check) in enumerate((
+                ('lease', 'held', 50, None), ('lease', 'releasing', 30, None), ('lease', 'released', 5, None),
+                ('reservation', 'held', 40, None), ('reservation', 'released', 2, None),
+                ('orchestration', 'held', 60, 90), ('orchestration', 'released', 1, 1),
+                ('open_binding', 'releasing', None, 20), ('open_binding', 'released', None, 3))):
+            rows.append((self.store.project_id, kind, 'id%d' % n, state, 1, due, check or 0,
+                         'armed' if kind == 'lease' else None, {'lease': 'denied', 'reservation': 'lost', 'orchestration': 'closed',
+                                                   'open_binding': 'withdrawn'}[kind] if state == 'released' else None))
+        self.db.execute('DELETE FROM project_holds')
+        for row in rows:
+            self.db.execute('INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,due_at_ms,next_check_ms,'
+                            'lease_case,release_kind) VALUES(?,?,?,?,?,?,?,?,?)', row)
+        self.assertEqual(20, project_holds_schema.next_hold_due(self.db))
+        self.db.execute("DELETE FROM project_holds WHERE kind='open_binding'")
+        self.assertEqual(30, project_holds_schema.next_hold_due(self.db))
+        self.db.execute("DELETE FROM project_holds WHERE state='releasing'")
+        self.assertEqual(40, project_holds_schema.next_hold_due(self.db))
+
+
 class AuditInventoryTests(unittest.TestCase):
     @requirements('S14G-2', why_not_scenario=WHY)
     def test_S14G_2_real_schema_inventory(self):

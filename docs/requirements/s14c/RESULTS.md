@@ -86,3 +86,36 @@ Same script and runner defaults (raw: `after-s14f-256.json`, `after-s14f-512.jso
 | 515 | 24,260 | 0.095 | 190 | 0.0012 | 0.101 | 85.6 s |
 The worst pass stays about 1 ms (bounded by the unit budget, not history size); the cycle total is linear. The change watch (TEMP triggers) adds no
 measurable pass cost. 17->18 upgrade at 512 MiB not run (disk cap, as before).
+
+## After 0.8.73 (S14e/S14f/S14g; S14i re-measure, tree feat/s14i-0874 at 0.8.73 be6f17a6 + S14G-4)
+Same script, runner defaults (300 s, 1 GiB, 3 GiB RSS, no approval), one size per run; raw `after-s14i-256.json`, `after-s14i-514.json`. Wall 27.2 s + 77.4 s = 104.6 s in total;
+peak generated data 735 MB (file log included, deleted after each run); peak RSS 217 MiB. 17->18 upgrade at 514 MiB again not run (copy would pass the 1 GiB cap). The "Q2 ... old text" probe rows still time the pre-S14e query on purpose.
+Original S14c values are from the table above (259 / 514 MiB runs; 12,221 / 24,252 runs); now 12,213 / 24,351 runs.
+| Measure (s) | 256 MiB before | 256 MiB after | 514 MiB before | 514 MiB after |
+|---|---|---|---|---|
+| open (product) | 2.618 | 0.228 | 13.777 | 0.469 |
+| custody, whole history (`live_ledger_custody`) | 2.427 (Q2) | 0.023 | 12.747 (Q2) | 0.053 |
+| custody, paged worst pass the owner thread is held (S14f) | n/a (whole 2.427) | 0.0005 | n/a (whole 12.747) | 0.0007 |
+| 17->18 upgrade | 11.078 | 1.131 | not run | not run |
+| idle account retention pass | 2.432 | 0.017 | 12.84 | 0.043 |
+| idle run retention pass | 0.0 | 0.0 | 0.0 | 0.0 |
+| status read (`account_holds_status`) | 0.0514 | 0.0511 | 0.112 | 0.1106 |
+| per-run lookups (lost run, withdrawal) | <=0.0074 | <=0.0001 | <=0.0074 | <=0.0001 |
+Open, custody, upgrade and idle retention are linear now (256 -> 514 MiB: open x2.06, whole custody x2.3, retention x2.5; fitted exponents about 1.0-1.3). The worst owner pass is about 1 ms at both sizes (bounded by rows, not history).
+The status read is unchanged and linear (x2.2): S14h has not touched it.
+
+Extrapolation, linear from 514 MiB (x8, x16, x32 for 4, 8, 16 GiB; 48,232 runs/GiB):
+| Path | 4 GiB | 8 GiB | 16 GiB | before (4 / 16 GiB) |
+|---|---|---|---|---|
+| open (s) | 3.8 | 7.5 | 15 | 599 / 8,556 |
+| whole custody (s; open, upgrade only) | 0.4 | 0.8 | 1.7 | 868 / 15,820 |
+| paged worst owner pass (s) | 0.001 | 0.001 | 0.001 | n/a |
+| 17->18 upgrade (s, from 256 MiB x16/32/64) | 18 | 36 | 72 | 1,968 / 28,236 |
+| idle account retention pass (s) | 0.3 | 0.7 | 1.4 | 1,968 (open-like) / 15,820 |
+| status read (s) | 0.9 | 1.8 | 3.5 | 1.2 / 5.6 |
+
+What breaks first now: nothing crosses the 5-minute phase budget up to 16 GiB. The first thing that gets slow is the status read (about 1 s at 4 GiB, 3.5 s at 16 GiB, linear and unprofiled, on a user-facing read path), then the 17->18 upgrade (72 s at 16 GiB) and its need for a second full copy of the database on disk (the disk cap stopped it at 514 MiB here).
+Proposed steps (one line each):
+1. S14h: profile `account_holds_status` and bound it (cache or page), since it is the only measured path still growing with history on a read the user waits for.
+2. Make the 17->18 upgrade stream or batch its copy so it needs no second full-size copy and has a visible progress and budget at 8-16 GiB.
+3. Re-measure at 1 GiB with an owner-approved cap (or skip) only after step 1; everything else is linear and below 20 s at 16 GiB.
