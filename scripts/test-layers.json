@@ -348,6 +348,7 @@
  "codex:tests.test_status_write_frequency": "scenario",
  "codex:tests.test_supervision": "unit",
  "codex:tests.test_synchronized_races": "scenario",
+ "codex:tests.test_torn_read": "scenario",
  "codex:tests.test_trial_run_driver_bugs": "scenario",
  "codex:tests.test_type_lookups": "scenario",
  "codex:tests.test_u3_review_fixes": "scenario",

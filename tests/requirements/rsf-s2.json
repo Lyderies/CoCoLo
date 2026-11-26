@@ -30,6 +30,11 @@
    "id": "RSF-S2-6",
    "statement": "**RSF-S2-6 \u2014 Preservation and validation.** Preserve signed/historical records,\nexisting backup formats and project partitions. The machine-local epoch never\ntravels in a per-project learning backup or source image. Register new tests,\nrun them red before code then green, and prove `metadata_errors: []`. Run only\nnamed modules, including every copier/backup/restore/move/enumeration module\naffected by the schema step. Record evidence and unrun checks in\n[STATUS.md](rsf-s2/STATUS.md). Existing assertions may change only with an\nold\u2192new entry in [assertions.md](rsf-s2/assertions.md).",
    "source": "tests/requirements/rsf-s2.json#RSF-S2-6"
+  },
+  {
+   "id": "TORN-1",
+   "statement": "**TORN-1 \u2014 No torn reads on a shared connection.** Every read or write on a connection shared between threads happens under that connection's lock. A fence check never judges a live owner from a read taken outside it: the epoch read in `StoreFence.check` takes the connection's owner lock (the ledger RLock set by `share_with_lock`; re-entrant for a holder), so a racing locked writer cannot make it see no row and refuse a live owner. Prose: docs/requirements/rsf-s2.md.",
+   "source": "tests/requirements/rsf-s2.json#TORN-1"
   }
  ]
 }

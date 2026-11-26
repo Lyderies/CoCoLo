@@ -5511,6 +5511,14 @@
   "source": "REQUIREMENTS-test-framework.md#TF-9",
   "statement": "**TF-9 \u2014 Preserve honest timing and timeout evidence.** Save per-worker elapsed values and run identity,\nselected tests, actual jobs, platform/interpreter, completion/timeout status and module totals. Sum only\ncurrent-run workers for job-seconds (never stale seed timings, module totals plus per-test estimates, or CPU).\nKeep wall time separate; report discovery and preflight seconds separately from worker job-seconds,\nincluding on preflight failure. Always write available measurements on test failure and timeout. Name timed-out\nworkers and keep their diagnostic log. The scheduler's historical estimates are not measurements. Witness:\nseed timings with obsolete entries, fail one worker and time out another; current totals and diagnostics remain\ncorrect. Hard worker timeout is a safety bound separate from the module's budget. Overall elapsed time is\nreported without a five-minute failure threshold."
  },
+ "TORN-1": {
+  "checks": [
+   "codex:tests.test_torn_read.TornReadTests.test_TORN_1_a_check_from_another_thread_waits_for_a_held_lock",
+   "codex:tests.test_torn_read.TornReadTests.test_TORN_1_the_epoch_read_runs_under_the_connection_lock"
+  ],
+  "source": "tests/requirements/rsf-s2.json#TORN-1",
+  "statement": "**TORN-1 \u2014 No torn reads on a shared connection.** Every read or write on a connection shared between threads happens under that connection's lock. A fence check never judges a live owner from a read taken outside it: the epoch read in `StoreFence.check` takes the connection's owner lock (the ledger RLock set by `share_with_lock`; re-entrant for a holder), so a racing locked writer cannot make it see no row and refuse a live owner. Prose: docs/requirements/rsf-s2.md."
+ },
  "U3": {
   "checks": [
    "codex:tests.test_read_growth.ReadGrowthTests.test_U3_10_open_and_provenance_ignore_released_account_history",
