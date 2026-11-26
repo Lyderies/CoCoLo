@@ -4786,6 +4786,7 @@
    "codex:tests.test_health_ledger.LedgerHealthTests.test_settings_symlink_is_reported_without_following",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_one_byte_limits_rejected",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_loader_rejects_malformed_deep_json_with_plain_warning",
+   "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_loader_turns_recursion_error_into_plain_warning",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_and_initial_status",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_byte_cap_rejects_valid_json_one_byte_over",
    "codex:tests.test_health_ledger_fix.LedgerFixTests.test_shared_settings_typed_bounds_and_no_import_io"

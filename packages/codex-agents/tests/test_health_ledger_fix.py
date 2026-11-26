@@ -296,6 +296,19 @@ sys.exit(1)
         self.assertNotIn('[', settings.warning)
 
     @requirements('S9-HM4-4')
+    def test_shared_loader_turns_recursion_error_into_plain_warning(self):
+        # Python 3.11 raises RecursionError (not ValueError) on deeply nested JSON; newer Pythons do not.
+        from unittest import mock
+        from codex_agents import user_settings
+        path = self.root / 'user-settings.json'
+        path.write_text('[' * 1100 + '0' + ']' * 1100)
+        with mock.patch.object(user_settings.json, 'loads', side_effect=RecursionError('deep')):
+            settings = user_settings.load(self.root)
+        self.assertIsNotNone(settings.warning)
+        self.assertEqual(user_settings.UserSettings().store_size_bytes, settings.store_size_bytes)
+        self.assertNotIn('[', settings.warning)
+
+    @requirements('S9-HM4-4')
     def test_shared_settings_byte_cap_rejects_valid_json_one_byte_over(self):
         from codex_agents import user_settings
         path = self.root / 'user-settings.json'
