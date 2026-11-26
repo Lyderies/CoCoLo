@@ -450,5 +450,6 @@
  "codex:tests.test_s15_owner_caps": "integration",
  "codex:tests.test_s15_failure_matrix": "integration",
  "codex:tests.test_s14f_owner_bounds": "integration",
- "codex:tests.test_s14g_hold_queries": "integration"
+ "codex:tests.test_s14g_hold_queries": "integration",
+ "codex:tests.test_s13_batch_tx": "integration"
 }
