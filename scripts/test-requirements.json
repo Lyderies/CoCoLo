@@ -4903,5 +4903,14 @@
   ],
   "source": "tests/requirements/b4t.json#RS-B-B4t-9",
   "statement": "Unknown lineage or corrupt custody is refused and held, never guessed or freed."
+ },
+ "S14b-6": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.AccountLineageTests.test_S14b_6_takeover_adoption_creates_the_retention_indexes_on_the_consented_open",
+   "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_cli_upgrade_ledger_creates_the_five_indexes_and_a_sweep_removes_a_record",
+   "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_registration_with_a_running_collector_keeps_the_indexes_of_the_consented_step"
+  ],
+  "source": "tests/requirements/s14b.json#S14b-6",
+  "statement": "Retention indexes are created inside the consented records-upgrade step (the ledger 17->18 open of --upgrade-ledger, and the B4t takeover adoption) on every path that performs it; a plain or unconsented open creates none; registration with a running collector leaves them in place (decision 349)."
  }
 }

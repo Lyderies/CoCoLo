@@ -142,3 +142,12 @@ tests that this branch added.
   retention pass runs no statement; after `create_retention_indexes()` there are five,
   a pass before the earliest expiry still runs no statement, and one at the cutoff
   sweeps.
+
+## S14b-6 (IP-B batch wiring, decision 349)
+
+No existing assertion changed or removed. Added: `test_s14b_upgrade_indexes` (2 tests) and
+`test_b4t_takeover.AccountLineageTests.test_S14b_6_takeover_adoption_creates_the_retention_indexes_on_the_consented_open`.
+Merge-time pin updates in the S5 merge (not S14b): `test_holds_report_socket` expects
+`['history.holds_report', 'history.run_usage', 'history.takeover_report']` (S44a + S5 reads, in the order the status
+command asks them); op sets in `service_host.py` and `test_b2_service_outcome` carry both `history.run_usage` and
+`history.takeover_report` (+ `service.stop_for_update`).

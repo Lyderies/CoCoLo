@@ -365,8 +365,10 @@ class OwnerOperations:
                 copy_ledger_before_upgrade(self.state, behind)
             try:
                 with closing(LearningLedger(self.state, allow_schema_upgrade=True,
-                        backup_before_upgrade=behind is not None, takeover=journal)):
-                    pass
+                        backup_before_upgrade=behind is not None, takeover=journal)) as ledger:
+                    # S14b-6 (decision 349): the owner approved this records step, so the additive retention
+                    # indexes are created here, on the drained offline owner; a plain open never makes them.
+                    ledger.create_retention_indexes()
             except LedgerError:
                 if _lock_held(self.state.lock):
                     return True  # an old start passed its marker check before J2

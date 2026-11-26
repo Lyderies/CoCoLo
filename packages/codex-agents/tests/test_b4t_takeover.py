@@ -1740,6 +1740,24 @@ class AccountLineageTests(unittest.TestCase):
             storage_binding=self.expected, storage_evidence=bytes.fromhex(self.data['bound']),
             terminal_evidence=bytes.fromhex(self.data['terminal']))
 
+    @requirements('S14b-6')
+    def test_S14b_6_takeover_adoption_creates_the_retention_indexes_on_the_consented_open(self):
+        from codex_agents.takeover_owner import OwnerOperations
+        from codex_agents.learning_store import LearningLedger
+        from codex_agents import run_retention
+        names = ', '.join("'%s'" % n for n in run_retention.RETENTION_INDEX_NAMES)
+        query = f"SELECT count(*) FROM sqlite_master WHERE name IN ({names})"
+        self.assertEqual(0, self.ledger._connection.execute(query).fetchone()[0])  # the 0.8.66 store has none
+        root = self.case / 'P'
+        root.mkdir()
+        project_p = self.ledger.register_project(root)
+        self.ledger.close()
+        OwnerOperations(self.state, Path('/cli'), root, lambda: self.intent).adopt_ledger(
+            dict(self.intent, project_id=project_p))
+        self.ledger = LearningLedger(self.state)
+        self.addCleanup(self.ledger.close)
+        self.assertEqual(5, self.ledger._connection.execute(query).fetchone()[0])
+
     @requirements('RS-B-B4t-4', 'RS-B-B4t-8')
     def test_B4t_4_another_projects_child_keeps_running(self):
         from codex_agents.takeover_owner import OwnerOperations

@@ -215,3 +215,25 @@ ceiling); live database estimate 16.425 GiB, reported separately as before
 ([regression-measurement.json](regression-measurement.json)). Index scale:
 365,001 summaries, 27.95 bytes/entry, three lookups 0.4 ms
 ([regression-index-measurement.json](regression-index-measurement.json)).
+
+## S14b-6 (decision 349, IP-B batch wiring)
+
+Requirement S14b-6 (S14b-5 was already taken by the summaries requirement): the five retention indexes are created
+inside the consented records-upgrade step on every path that performs it, never on a plain or unconsented open.
+
+- `cli learning-register --upgrade-ledger` (offline owner): already called `create_retention_indexes()` (regression fix
+  above). Test `test_s14b_upgrade_indexes...test_cli_upgrade_ledger_creates_the_five_indexes_and_a_sweep_removes_a_record`
+  (a schema-6 ledger, so it passes through 17 -> 18): the unapproved run leaves 0 indexes (d), the approved run 5, then
+  a sweep at the cutoff removes the old record. Green on the merged tree before any code change (guard, not red).
+- Registration while a collector runs (the early return in `_register_project`): a running collector means an earlier
+  consented step already made the ledger current and created the indexes; creation itself is refused while a collector
+  is active, so nothing can be added there. Test `...test_registration_with_a_running_collector_keeps_the_indexes_of_the_consented_step`
+  (second `--upgrade-ledger` returns `ledger_upgraded_from: None`, indexes still 5). Also green before the change.
+- B4t takeover adoption (`takeover_owner.OwnerOperations.adopt_ledger`): RED before (0 indexes after adoption of the
+  archived 0.8.66 store, `5 != 0`), now calls `ledger.create_retention_indexes()` inside the owner open. Test
+  `test_b4t_takeover.AccountLineageTests.test_S14b_6_takeover_adoption_creates_the_retention_indexes_on_the_consented_open`.
+- Not covered by the decision's list: `cli _migrate_learning` (learning-migrate) also opens with
+  `allow_schema_upgrade=True`; it is a history move, not the records-upgrade consent, so it creates none.
+- Registered: requirement in `tests/requirements/s14b.json` and `scripts/test-requirements.json`, module
+  `test_s14b_upgrade_indexes` in layers/stages/timings. Live proof after install (indexes present on the local ledger,
+  `retention_due` set) is still to do (decision 349).
