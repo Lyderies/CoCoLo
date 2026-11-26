@@ -50,13 +50,15 @@
   },
   "account_billing_admission.py::_admit": {
    "checks": 1,
-   "ends": "moved from admit (audited 2026-11-21, ANALYSIS-0.4.0-lifetime-caps.md): a reuse age comparison; BOUNDED",
-   "kind": "time"
+   "ends": "Real retained probe billing at age 300001 ms exceeds the reuse ceiling 300000; equal current state must still not reuse it. A future stamp also refuses reuse. Per-judgment captures end on completion or generation cleanup.",
+   "kind": "time",
+   "test": "test_PC2_an_equal_state_does_not_reuse_a_stale_or_future_stamped_probe"
   },
   "account_billing_admission.py::_build_reply": {
    "checks": 1,
-   "ends": "moved from _reply (audited 2026-11-21, ANALYSIS-0.4.0-lifetime-caps.md): a reply size check; BOUNDED",
-   "kind": "bytes"
+   "ends": "Genuine retained provider records and original owner-committed reference rows build a reply at its exact reduced byte ceiling; one byte beyond refuses, and restoring the budget returns the same reply. Reuse is a seeded fixture fact, not signature/native authority evidence.",
+   "kind": "bytes",
+   "test": "test_probe_reply_build_crosses_byte_limit_with_genuine_retained_record_references"
   },
   "account_billing_admission.py::_reserve_repeat": {
    "checks": 2,
@@ -113,8 +115,9 @@
   },
   "account_claim_jobs.py::submit_open": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Two real queued original opens fill the configured per-project delivery quota two; the third refuses open_busy before capture. Cancelling alone retains reply custody; consuming cancellation frees a place for a fresh third request; all later cancel/take calls return ticket/count maps to baseline.",
+   "kind": "count",
+   "test": "test_original_open_delivery_quota_refuses_excess_and_cancel_take_frees_it"
   },
   "account_cleanup.py::live_cleanup_receipts": {
    "checks": 1,
@@ -130,23 +133,27 @@
   },
   "account_ingress.py::_wire": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real wire bytes pass at exact reduced newline-inclusive frame ceilings and one extra byte refuses. A byte-stream connection supplies an exact proxy HTTP head and then one byte beyond; the head refuses without opening a socket. Local buffers end with each read/peek.",
+   "kind": "bytes",
+   "test": "test_original_wire_peeks_and_proxy_head_cross_actual_byte_limits"
   },
   "account_ingress.py::pump_owner": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Actual owner pump calls create every retained subscriber group up to the configured coordinator population ceiling. A controlled queued-ticket adapter offers one more ticket to reach the independent defence: owner faults account_unavailable without exceeding the group ceiling. No socket thread, original job or worker is launched; groups are local service metadata that end on drain/service replacement.",
+   "kind": "count",
+   "test": "test_ingress_owner_group_defence_refuses_one_ticket_past_its_actual_population_limit"
   },
   "account_observation.py::_retained_records": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual inert provider probes produce canonical records: worker output, retained record reads and reply validation independently cross exact reduced byte ceilings. Three real completed observation journals exceed batch one; repeated real purge deletes every request and companion origin then returns zero. Temporary buffers end with each call.",
+   "kind": "bytes",
+   "test": "test_observation_worker_retained_reply_and_purge_cross_independent_limits"
   },
   "account_observation.py::purge_old_observations": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Actual inert provider probes produce canonical records: worker output, retained record reads and reply validation independently cross exact reduced byte ceilings. Three real completed observation journals exceed batch one; repeated real purge deletes every request and companion origin then returns zero. Temporary buffers end with each call.",
+   "kind": "count",
+   "test": "test_observation_worker_retained_reply_and_purge_cross_independent_limits"
   },
   "account_observation.py::reserve": {
    "checks": 3,
@@ -156,8 +163,9 @@
   },
   "account_observation.py::run_observation_probe": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual inert provider probes produce canonical records: worker output, retained record reads and reply validation independently cross exact reduced byte ceilings. Three real completed observation journals exceed batch one; repeated real purge deletes every request and companion origin then returns zero. Temporary buffers end with each call.",
+   "kind": "bytes",
+   "test": "test_observation_worker_retained_reply_and_purge_cross_independent_limits"
   },
   "account_observation_failure.py::record_observation_failure": {
    "checks": 2,
@@ -178,13 +186,15 @@
   },
   "account_open_contracts.py::checked_account_open_reply": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_open_scope_proof_and_account_reply_cross_independent_byte_limits"
   },
   "account_open_contracts.py::snapshot": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_original_contexts_cross_their_own_snapshot_byte_limits"
   },
   "account_original_open.py::<module>": {
    "checks": 2,
@@ -200,8 +210,9 @@
   },
   "account_original_open.py::finish_open_from_signature_job": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual original preflight/captured inputs and a controlled fixed-verifier result drive the real fresh-read, admission and receipt writer. The actual encoded receipt is observed at the byte-cap site; one byte past a reduced ceiling refuses open_failed and atomically writes no receipt. Exact ceiling commits one real receipt. This isolates byte/transaction behavior and claims no signature-worker/native authority.",
+   "kind": "bytes",
+   "test": "test_original_open_receipt_writer_crosses_its_own_byte_limit_with_atomic_rollback"
   },
   "account_original_open.py::preflight_open": {
    "checks": 1,
@@ -211,18 +222,21 @@
   },
   "account_restart.py::_stuck": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Probe-held age crosses the real ten-minute limit: nine minutes stays healthy; eleven minutes requests restart. The decision is per snapshot; no cumulative population.",
+   "kind": "time",
+   "test": "test_H1c_1_a_probe_worker_held_over_ten_minutes_is_stuck_and_under_it_is_not"
   },
   "account_restart.py::decide": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Restart cooldown ends only after both clocks pass an hour: 61 wall minutes with ten monotonic minutes suppresses; both at 61 minutes allows restart; a reboot falls back to wall time.",
+   "kind": "time",
+   "test": "test_D2_D3_D6_unreadable_history_and_either_clock_saying_recent_suppress_with_their_reason"
   },
   "account_run_provenance.py::_record": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_run_provenance_and_retained_record_cross_limits"
   },
   "account_service.py::__post_init__": {
    "checks": 1,
@@ -243,8 +257,9 @@
   },
   "account_service.py::_handle_request": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real health output fits its exact newline-inclusive reduced frame cap and one byte beyond returns account_incompatible. The upgrade peek independently refuses MAX+1 input. Two genuine repair receipt writes fill a reduced pending ceiling two, a third refuses, then expiry deletes old receipts and admits a fresh one.",
+   "kind": "bytes",
+   "test": "test_account_output_upgrade_gate_and_repair_receipt_quota_cross_limits"
   },
   "account_service.py::_owner_key_view": {
    "checks": 1,
@@ -253,8 +268,9 @@
   },
   "account_service.py::runtime_upgrade_reply": {
    "checks": 1,
-   "ends": "per-request frame-size check on one inbound request; stores nothing, so nothing accumulates (RS-F S1, integration 2026-11-24)",
-   "kind": "bytes"
+   "ends": "Real health output fits its exact newline-inclusive reduced frame cap and one byte beyond returns account_incompatible. The upgrade peek independently refuses MAX+1 input. Two genuine repair receipt writes fill a reduced pending ceiling two, a third refuses, then expiry deletes old receipts and admits a fresh one.",
+   "kind": "bytes",
+   "test": "test_account_output_upgrade_gate_and_repair_receipt_quota_cross_limits"
   },
   "admission_input_decode.py::_preflight": {
    "checks": 3,
@@ -264,8 +280,9 @@
   },
   "admission_input_decode.py::_signer": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real probe payload/normalized packet/reply, learning record, assignment, final JSON text and canonical signer bytes cross each independent reduced byte ceiling. Exact sizes succeed, one byte beyond refuses, later valid calls succeed. Captures end on return/refusal; no authority is inferred from serialization.",
+   "kind": "bytes",
+   "test": "test_probe_record_and_result_values_cross_independent_byte_limits"
   },
   "admission_inputs.py::__post_init__": {
    "checks": 2,
@@ -274,13 +291,15 @@
   },
   "admission_metadata.py::_headroom_state": {
    "checks": 5,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Empty-window restrictions remain at the five-hour horizon and expire one millisecond beyond it, for warning/rejection and both decision entry points; each calculation releases its local inputs.",
+   "kind": "time",
+   "test": "test_empty_unified_windows_keep_rejection_or_warning_until_fallback_expiry"
   },
   "admission_metadata.py::_window_live": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Resetless windows are evaluated at horizon and horizon+1, with explicit elapsed resets also excluded. Per-decision window lists end on return.",
+   "kind": "time",
+   "test": "test_empty_unified_windows_keep_rejection_or_warning_until_fallback_expiry"
   },
   "admission_metadata.py::classify_provider_state": {
    "checks": 1,
@@ -290,18 +309,21 @@
   },
   "admission_metadata.py::evaluate_admission": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Actual fixture admission/launch calculations cross billing age MAX+1; identity selection crosses its exact horizon and one millisecond past; paid/spend-control evidence remains at its horizon and disappears one millisecond beyond while future evidence still restricts. Per-decision snapshots end on return.",
+   "kind": "time",
+   "test": "test_admission_identity_billing_and_restriction_ages_cross_each_horizon"
   },
   "admission_metadata.py::evaluate_launch": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Actual fixture admission/launch calculations cross billing age MAX+1; identity selection crosses its exact horizon and one millisecond past; paid/spend-control evidence remains at its horizon and disappears one millisecond beyond while future evidence still restricts. Per-decision snapshots end on return.",
+   "kind": "time",
+   "test": "test_admission_identity_billing_and_restriction_ages_cross_each_horizon"
   },
   "admission_metadata.py::paid_usage_digest": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Actual fixture admission/launch calculations cross billing age MAX+1; identity selection crosses its exact horizon and one millisecond past; paid/spend-control evidence remains at its horizon and disappears one millisecond beyond while future evidence still restricts. Per-decision snapshots end on return.",
+   "kind": "time",
+   "test": "test_admission_identity_billing_and_restriction_ages_cross_each_horizon"
   },
   "admission_metadata.py::reset_early": {
    "checks": 1,
@@ -311,13 +333,15 @@
   },
   "admission_metadata.py::select_provider_identity": {
    "checks": 1,
-   "ends": "age bound, not a count: identity readings older than IDENTITY_MAX_AGE_MS are ignored at read time; open and advisory routing share this selector (RT-RX review r1 MED-1)",
-   "kind": "time"
+   "ends": "Actual fixture admission/launch calculations cross billing age MAX+1; identity selection crosses its exact horizon and one millisecond past; paid/spend-control evidence remains at its horizon and disappears one millisecond beyond while future evidence still restricts. Per-decision snapshots end on return.",
+   "kind": "time",
+   "test": "test_admission_identity_billing_and_restriction_ages_cross_each_horizon"
   },
   "admission_metadata.py::spend_control_digest": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Actual fixture admission/launch calculations cross billing age MAX+1; identity selection crosses its exact horizon and one millisecond past; paid/spend-control evidence remains at its horizon and disappears one millisecond beyond while future evidence still restricts. Per-decision snapshots end on return.",
+   "kind": "time",
+   "test": "test_admission_identity_billing_and_restriction_ages_cross_each_horizon"
   },
   "attestation_capture.py::sweep": {
    "checks": 3,
@@ -327,13 +351,15 @@
   },
   "billing_probe_contracts.py::checked_billing_probe_reply": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real probe payload/normalized packet/reply, learning record, assignment, final JSON text and canonical signer bytes cross each independent reduced byte ceiling. Exact sizes succeed, one byte beyond refuses, later valid calls succeed. Captures end on return/refusal; no authority is inferred from serialization.",
+   "kind": "bytes",
+   "test": "test_probe_record_and_result_values_cross_independent_byte_limits"
   },
   "billing_probe_worker.py::_normalized": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real probe payload/normalized packet/reply, learning record, assignment, final JSON text and canonical signer bytes cross each independent reduced byte ceiling. Exact sizes succeed, one byte beyond refuses, later valid calls succeed. Captures end on return/refusal; no authority is inferred from serialization.",
+   "kind": "bytes",
+   "test": "test_probe_record_and_result_values_cross_independent_byte_limits"
   },
   "billing_probe_worker.py::prepare": {
    "checks": 1,
@@ -343,8 +369,9 @@
   },
   "billing_probe_worker.py::probe_payload": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real probe payload/normalized packet/reply, learning record, assignment, final JSON text and canonical signer bytes cross each independent reduced byte ceiling. Exact sizes succeed, one byte beyond refuses, later valid calls succeed. Captures end on return/refusal; no authority is inferred from serialization.",
+   "kind": "bytes",
+   "test": "test_probe_record_and_result_values_cross_independent_byte_limits"
   },
   "bridge.py::_check_claude_init": {
    "checks": 1,
@@ -364,8 +391,9 @@
   },
   "bridge.py::_result_object": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real probe payload/normalized packet/reply, learning record, assignment, final JSON text and canonical signer bytes cross each independent reduced byte ceiling. Exact sizes succeed, one byte beyond refuses, later valid calls succeed. Captures end on return/refusal; no authority is inferred from serialization.",
+   "kind": "bytes",
+   "test": "test_probe_record_and_result_values_cross_independent_byte_limits"
   },
   "bridge.py::_token_count": {
    "checks": 1,
@@ -391,13 +419,15 @@
   },
   "bridge.py::on_frame": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "A controlled runner adapter offers actual valid init and three rate-limit frames at a reduced event ceiling two: the real parser aborts at its ceiling and requests no extra frame. Two actual completed refusal Futures reach a reduced fence retry ceiling two, ending that service retry metadata without calling lease settlement. No process-cleanup or account-release proof is inferred.",
+   "kind": "count",
+   "test": "test_probe_event_counter_and_earlier_fence_refusals_reach_their_limits"
   },
   "bridge.py::place_worker_result": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual canonical result bytes write the original worker export at an exact reduced byte ceiling; one byte past refuses before creating any export input. The result client independently receives the actual oversized bytes and refuses history_invalid_input before looking up an endpoint.",
+   "kind": "bytes",
+   "test": "test_client_result_body_and_worker_export_cross_byte_limits_before_io"
   },
   "bridge.py::run_child": {
    "checks": 4,
@@ -407,8 +437,9 @@
   },
   "bridge.py::run_codex": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "An actual inert Codex answer over 600 bytes crosses reduced MAX_RESULT_BYTES=200. The bridge fences unparseable_result and keeps exactly 200 bytes with truncated=true; the answer buffer ends after the run.",
+   "kind": "bytes",
+   "test": "test_an_over_cap_answer_is_truncated_with_a_flag_not_skipped"
   },
   "bridge.py::scrub_child_answer": {
    "checks": 1,
@@ -417,8 +448,9 @@
   },
   "bridge_liveness.py::bind": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Two real inert worker executions fill independent reduced registry/owner quotas two. A third real ticket is refused by registry; a separately issued real supervisor is refused by the full owner. Actual fixed returns confirm cleanup, original release acknowledges and retirement frees both populations, and a fourth execution is admitted.",
+   "kind": "count",
+   "test": "test_execution_and_bridge_slots_cross_limits_then_release_for_fresh_work"
   },
   "capacity_status_contracts.py::checked_capacity_status": {
    "checks": 1,
@@ -432,13 +464,15 @@
   },
   "claim_denial.py::verify_denial_closure": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real owner-generated denial closure and real project-bound lease evidence pass exact reduced independent byte limits and refuse one byte beyond; restoring budgets accepts the same original values. Temporary verifier/attestation buffers end with the call.",
+   "kind": "bytes",
+   "test": "test_actual_denial_and_bound_lease_evidence_cross_reader_byte_limits"
   },
   "claim_storage.py::_verify_historical_storage_evidence": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_storage_evidence_encoder_and_both_readers_cross_limits"
   },
   "claim_storage.py::capture_storage_evidence": {
    "checks": 1,
@@ -448,13 +482,15 @@
   },
   "claim_storage.py::encode_storage_evidence": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_storage_evidence_encoder_and_both_readers_cross_limits"
   },
   "claim_storage.py::verify_storage_evidence": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_storage_evidence_encoder_and_both_readers_cross_limits"
   },
   "claude_activity.py::_count": {
    "checks": 1,
@@ -464,18 +500,21 @@
   },
   "claude_activity.py::_partial": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Real stream fragments are coalesced inside PARTIAL_ACTIVITY_SECONDS; time then reaches the interval and advances through five further intervals. New fragments count while repeated frames never become new activity. Stream partial state ends when its message completes.",
+   "kind": "time",
+   "test": "test_partial_fragments_of_the_requested_model_count_at_most_once_per_interval"
   },
   "claude_host.py::_settings": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real regular files hold valid JSON at an exact reduced byte ceiling, one extra space refuses, then restoring exact bytes succeeds. Each opened file descriptor closes on every return/refusal.",
+   "kind": "bytes",
+   "test": "test_real_settings_and_exit_files_cross_exact_byte_limits"
   },
   "cleanup_contracts.py::encode_cleanup_evidence": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_cleanup_and_execution_grant_encoders_and_verifiers_cross_limits"
   },
   "cleanup_contracts.py::verify_cleanup_evidence": {
    "checks": 1,
@@ -497,8 +536,9 @@
   },
   "client_runtime.py::record_codex_result_client": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual canonical result bytes write the original worker export at an exact reduced byte ceiling; one byte past refuses before creating any export input. The result client independently receives the actual oversized bytes and refuses history_invalid_input before looking up an endpoint.",
+   "kind": "bytes",
+   "test": "test_client_result_body_and_worker_export_cross_byte_limits_before_io"
   },
   "codex_activity.py::observe": {
    "checks": 2,
@@ -508,28 +548,33 @@
   },
   "codex_preparation.py::_build": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual prospective inputs encode at their exact reduced byte budget and refuse at budget+1. The real preparation builder independently receives those oversized bytes and returns preparation_failed_at_decode with no workspace or started child; intake buffers end on refusal.",
+   "kind": "bytes",
+   "test": "test_preparation_payload_and_real_build_refuse_past_input_budget"
   },
   "codex_preparation.py::preparation_payload": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual prospective inputs encode at their exact reduced byte budget and refuse at budget+1. The real preparation builder independently receives those oversized bytes and returns preparation_failed_at_decode with no workspace or started child; intake buffers end on refusal.",
+   "kind": "bytes",
+   "test": "test_preparation_payload_and_real_build_refuse_past_input_budget"
   },
   "codex_preparation.py::submit": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real original preparation remains held at reduced retained-buffer and export byte reservations, independently. A second intake exceeds each one-slot budget and refuses preparation_full until observed cleanup returns capacity.",
+   "kind": "bytes",
+   "test": "test_each_byte_budget_limits_intake_even_with_an_idle_prestarted_worker"
   },
   "codex_worker.py::_decode_input": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual original worker input, schema and canonical report cross independent exact reduced byte budgets. A controlled runner result then feeds the real execution result validator and canonical encoder: its body fits exactly and one byte beyond refuses worker_input_invalid with no body. This is output validation evidence, not native execution or cleanup proof.",
+   "kind": "bytes",
+   "test": "test_worker_decode_report_and_output_cross_independent_byte_limits"
   },
   "codex_worker.py::_execute": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual original worker input, schema and canonical report cross independent exact reduced byte budgets. A controlled runner result then feeds the real execution result validator and canonical encoder: its body fits exactly and one byte beyond refuses worker_input_invalid with no body. This is output validation evidence, not native execution or cleanup proof.",
+   "kind": "bytes",
+   "test": "test_worker_decode_report_and_output_cross_independent_byte_limits"
   },
   "codex_worker.py::_safe_raw_answer": {
    "checks": 1,
@@ -539,13 +584,15 @@
   },
   "codex_worker.py::_safe_report": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual original worker input, schema and canonical report cross independent exact reduced byte budgets. A controlled runner result then feeds the real execution result validator and canonical encoder: its body fits exactly and one byte beyond refuses worker_input_invalid with no body. This is output validation evidence, not native execution or cleanup proof.",
+   "kind": "bytes",
+   "test": "test_worker_decode_report_and_output_cross_independent_byte_limits"
   },
   "codex_worker.py::prepare": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual MAX_INPUT_BYTES+1 bytes are refused by preparation with no reserved job, registry execution or launch. Invalid trusted limits also refuse before worker startup.",
+   "kind": "bytes",
+   "test": "test_oversized_input_and_invalid_limits_do_not_reserve_or_launch"
   },
   "collector_client.py::health": {
    "checks": 2,
@@ -560,8 +607,9 @@
   },
   "collector_exit.py::read_exit": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real regular files hold valid JSON at an exact reduced byte ceiling, one extra space refuses, then restoring exact bytes succeeds. Each opened file descriptor closes on every return/refusal.",
+   "kind": "bytes",
+   "test": "test_real_settings_and_exit_files_cross_exact_byte_limits"
   },
   "collector_runtime.py::_client_health_data": {
    "checks": 1,
@@ -599,8 +647,9 @@
   },
   "control_api.py::decode_control_response": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real product response bytes from actual original handlers decode at an exact reduced newline-inclusive frame ceiling, refuse at one byte past and decode after restoration. Each service independently refuses its oversized output with its fixed unavailable reason. Per-call response buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_control_dispatch_orchestration_and_read_response_decoders_cross_frames"
   },
   "control_api.py::encode_control_request": {
    "checks": 1,
@@ -621,8 +670,9 @@
   },
   "control_loop.py::_step": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual socket input fills MAX_CONTROL_FRAME_BYTES before newline and closes before handler work; a pipelined frame also refuses. Its peer buffer ends on drop. Source reviewed only in this no-socket continuation.",
+   "kind": "bytes",
+   "test": "test_oversized_and_pipelined_input_closes_without_invoking_handler"
   },
   "control_service.py::__post_init__": {
    "checks": 1,
@@ -631,8 +681,9 @@
   },
   "control_service.py::handle": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real product response bytes from actual original handlers decode at an exact reduced newline-inclusive frame ceiling, refuse at one byte past and decode after restoration. Each service independently refuses its oversized output with its fixed unavailable reason. Per-call response buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_control_dispatch_orchestration_and_read_response_decoders_cross_frames"
   },
   "core_api.py::_accept_loop": {
    "checks": 2,
@@ -672,8 +723,9 @@
   },
   "core_api.py::_need_str": {
    "checks": 1,
-   "ends": "a per-call length and control-character check on a caller-supplied id or short string; it ends with the call, nothing accumulates",
-   "kind": "bytes"
+   "ends": "Real strings and version bytes cross exact reduced length ceilings; canonical event info passes at its byte length and refuses at length-1. Rejected values do not occupy later calls; valid later values remain usable.",
+   "kind": "bytes",
+   "test": "test_scalar_text_and_client_version_cross_reduced_limits"
   },
   "core_api.py::_need_text": {
    "checks": 1,
@@ -759,8 +811,9 @@
   },
   "dispatch_api.py::decode_dispatch_response": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real product response bytes from actual original handlers decode at an exact reduced newline-inclusive frame ceiling, refuse at one byte past and decode after restoration. Each service independently refuses its oversized output with its fixed unavailable reason. Per-call response buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_control_dispatch_orchestration_and_read_response_decoders_cross_frames"
   },
   "dispatch_api.py::encode_dispatch_request": {
    "checks": 1,
@@ -770,13 +823,15 @@
   },
   "egress_proxy.py::_read_head": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real wire bytes pass at exact reduced newline-inclusive frame ceilings and one extra byte refuses. A byte-stream connection supplies an exact proxy HTTP head and then one byte beyond; the head refuses without opening a socket. Local buffers end with each read/peek.",
+   "kind": "bytes",
+   "test": "test_original_wire_peeks_and_proxy_head_cross_actual_byte_limits"
   },
   "egress_proxy.py::write": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual journal JSON passes at its exact reduced file ceiling and reading/writing refuses one byte beyond without replacing it. A real cleanup marker gains one byte and stops proving cleanup. Three actual log records cross a two-record byte ceiling, rotating exactly two records and retaining one in the current log.",
+   "kind": "bytes",
+   "test": "test_launch_journal_file_marker_and_rotation_cross_byte_limits"
   },
   "evaluation.py::evaluate": {
    "checks": 1,
@@ -791,8 +846,9 @@
   },
   "event_shapes.py::frame": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real frames cross reduced MAX_LINES=2 and MAX_RUN_BYTES=1; recording truncates and finishes without disturbing the run. Per-run shape buffers end at finished, and later records continue.",
+   "kind": "bytes",
+   "test": "test_recording_failures_and_limits_never_reach_the_run"
   },
   "execution_activity.py::_sample": {
    "checks": 1,
@@ -807,48 +863,57 @@
   },
   "execution_grant.py::encode": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_cleanup_and_execution_grant_encoders_and_verifiers_cross_limits"
   },
   "execution_grant.py::verify_execution_grant": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_cleanup_and_execution_grant_encoders_and_verifiers_cross_limits"
   },
   "gate_policy.py::_patch_ops": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual gate requests cross independent reduced shell/argv byte budgets, patch byte budget, nested-shell and uv-run depth budgets and brace-alternative count. Exact limits accept; one past refuses with its fixed gate rule. Parser work ends per request.",
+   "kind": "bytes",
+   "test": "test_gate_command_patch_nesting_and_pattern_cross_independent_limits"
   },
   "gate_policy.py::argv": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual gate requests cross independent reduced shell/argv byte budgets, patch byte budget, nested-shell and uv-run depth budgets and brace-alternative count. Exact limits accept; one past refuses with its fixed gate rule. Parser work ends per request.",
+   "kind": "bytes",
+   "test": "test_gate_command_patch_nesting_and_pattern_cross_independent_limits"
   },
   "gate_policy.py::nested": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Actual gate requests cross independent reduced shell/argv byte budgets, patch byte budget, nested-shell and uv-run depth budgets and brace-alternative count. Exact limits accept; one past refuses with its fixed gate rule. Parser work ends per request.",
+   "kind": "count",
+   "test": "test_gate_command_patch_nesting_and_pattern_cross_independent_limits"
   },
   "gate_policy.py::record_row": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real command over 2000 characters exceeds RECORD_SUBJECT_LIMIT; the emitted row retains a bounded prefix, the truncation flag and full subject digest. Per-request subject work ends on return.",
+   "kind": "bytes",
+   "test": "test_the_row_matches_the_client_ids_and_bounds_the_subject"
   },
   "gate_policy.py::runner": {
    "checks": 1,
-   "ends": "per request: how deeply one command nests a runner (MAX_NESTING); computed for one hook request, nothing kept",
-   "kind": "count"
+   "ends": "Actual gate requests cross independent reduced shell/argv byte budgets, patch byte budget, nested-shell and uv-run depth budgets and brace-alternative count. Exact limits accept; one past refuses with its fixed gate rule. Parser work ends per request.",
+   "kind": "count",
+   "test": "test_gate_command_patch_nesting_and_pattern_cross_independent_limits"
   },
   "gate_policy.py::sequence": {
    "checks": 1,
-   "ends": "per request: brace alternatives of one Glob/Grep pattern (MAX_PATTERN_ALTERNATIVES); the list lives only for that request",
-   "kind": "count"
+   "ends": "Actual gate requests cross independent reduced shell/argv byte budgets, patch byte budget, nested-shell and uv-run depth budgets and brace-alternative count. Exact limits accept; one past refuses with its fixed gate rule. Parser work ends per request.",
+   "kind": "count",
+   "test": "test_gate_command_patch_nesting_and_pattern_cross_independent_limits"
   },
   "gate_policy.py::shell": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual gate requests cross independent reduced shell/argv byte budgets, patch byte budget, nested-shell and uv-run depth budgets and brace-alternative count. Exact limits accept; one past refuses with its fixed gate rule. Parser work ends per request.",
+   "kind": "bytes",
+   "test": "test_gate_command_patch_nesting_and_pattern_cross_independent_limits"
   },
   "hardened_git.py::_call_problem": {
    "checks": 1,
@@ -857,8 +922,9 @@
   },
   "hardened_git.py::build_candidate_tree": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real committed executable bytes pass their exact reduced read ceiling and fail at one byte past. Actual git patch bytes exceed a reduced byte ceiling before candidate creation; restoring creates a genuine two-path candidate. Its merge refuses reduced path count one, then merges with count two.",
+   "kind": "bytes",
+   "test": "test_git_patch_merge_path_count_and_committed_executable_cross_limits"
   },
   "hardened_git.py::git_version_problem": {
    "checks": 1,
@@ -926,13 +992,15 @@
   },
   "history_service.py::_wire_operation": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real wire bytes pass at exact reduced newline-inclusive frame ceilings and one extra byte refuses. A byte-stream connection supplies an exact proxy HTTP head and then one byte beyond; the head refuses without opening a socket. Local buffers end with each read/peek.",
+   "kind": "bytes",
+   "test": "test_original_wire_peeks_and_proxy_head_cross_actual_byte_limits"
   },
   "history_service.py::handle": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Forty actual terminal commits exceed a wire delivery-page byte ceiling. The actual history service trims its list until the full newline-inclusive envelope fits and keyset continuation returns every delivery exactly once.",
+   "kind": "bytes",
+   "test": "test_terminal_replay_receipt_binding_and_wire_paging_are_bounded"
   },
   "holds_report_contracts.py::checked_holds_report": {
    "checks": 1,
@@ -942,53 +1010,63 @@
   },
   "hook_config.py::parse_local_manifest": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real managed/project files and legacy signer files contain exact reduced-size bytes then one byte beyond; each reader refuses oversized bytes and later valid reads still work. Actual local install-manifest JSON crosses its own byte ceiling. Opened descriptors close on all paths.",
+   "kind": "bytes",
+   "test": "test_managed_project_and_legacy_signer_files_cross_byte_limits"
   },
   "host_commands.py::_manifest_files": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Real manifest entries cross reduced count two and refuse without affecting a later valid manifest. Three real directory entries exceed a page limit two; explicit removals return the remaining entry then baseline empty. Per-scan lists end on return.",
+   "kind": "count",
+   "test": "test_manifest_and_directory_populations_cross_reduced_count_limits"
   },
   "host_commands.py::unexpected_entries": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Real manifest entries cross reduced count two and refuse without affecting a later valid manifest. Three real directory entries exceed a page limit two; explicit removals return the remaining entry then baseline empty. Per-scan lists end on return.",
+   "kind": "count",
+   "test": "test_manifest_and_directory_populations_cross_reduced_count_limits"
   },
   "host_open_contracts.py::checked_open_provenance": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_open_provenance_and_assignment_capture_cross_limits"
   },
   "host_open_contracts.py::snapshot": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_original_contexts_cross_their_own_snapshot_byte_limits"
   },
   "host_open_contracts.py::verify_open_provenance": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_open_provenance_and_assignment_capture_cross_limits"
   },
   "host_result_contracts.py::snapshot": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_original_contexts_cross_their_own_snapshot_byte_limits"
   },
   "launch_journal.py::_checked_container_entry": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real journal intent written through the ordinary fake-engine fixture validates two stop-detail bytes at a reduced ceiling two; a third byte refuses. No engine is started, and S27 container evidence remains separate.",
+   "kind": "bytes",
+   "test": "test_container_journal_stop_detail_crosses_bytes_without_claiming_engine_evidence"
   },
   "launch_journal.py::_confirmed": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual journal JSON passes at its exact reduced file ceiling and reading/writing refuses one byte beyond without replacing it. A real cleanup marker gains one byte and stops proving cleanup. Three actual log records cross a two-record byte ceiling, rotating exactly two records and retaining one in the current log.",
+   "kind": "bytes",
+   "test": "test_launch_journal_file_marker_and_rotation_cross_byte_limits"
   },
   "launch_journal.py::_read_entry": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual journal JSON passes at its exact reduced file ceiling and reading/writing refuses one byte beyond without replacing it. A real cleanup marker gains one byte and stops proving cleanup. Three actual log records cross a two-record byte ceiling, rotating exactly two records and retaining one in the current log.",
+   "kind": "bytes",
+   "test": "test_launch_journal_file_marker_and_rotation_cross_byte_limits"
   },
   "launch_journal.py::_read_recovery": {
    "checks": 1,
@@ -1004,13 +1082,15 @@
   },
   "launch_journal.py::_write": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual journal JSON passes at its exact reduced file ceiling and reading/writing refuses one byte beyond without replacing it. A real cleanup marker gains one byte and stops proving cleanup. Three actual log records cross a two-record byte ceiling, rotating exactly two records and retaining one in the current log.",
+   "kind": "bytes",
+   "test": "test_launch_journal_file_marker_and_rotation_cross_byte_limits"
   },
   "launch_journal.py::prune": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Five real journal entries include three tombstones beyond TOMBSTONE_MS and two recent entries. Repeated prune passes at reduced MAX_ENTRIES=2 remove every old tombstone while keeping recent entries; scan buffers end each pass.",
+   "kind": "time",
+   "test": "test_D6a_old_tombstones_past_the_cap_are_pruned_in_later_passes"
   },
   "launch_journal.py::write_recovery": {
    "checks": 1,
@@ -1020,13 +1100,15 @@
   },
   "learning_analysis.py::analyze_outcomes": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "The real nonempty analyzer first sees fresh evidence, then evidence aged 990 ms at max_age_ms=10; its exact report switches to stale_evidence and historical_behavior_may_not_match_current_package. Local analysis ends on return.",
+   "kind": "time",
+   "test": "test_fresh_nonempty_core_calculation_blocks_owner_imports_and_io"
   },
   "learning_contracts.py::parse_bounded_json_value": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real valid JSON and canonical service requests pass at their exact byte length and refuse when the reduced budget is one byte smaller. Per-call buffers end on return/refusal; later ordinary encoding succeeds.",
+   "kind": "bytes",
+   "test": "test_json_value_and_service_encoder_cross_exact_reduced_byte_limits"
   },
   "learning_contracts.py::validate_client_diagnostics": {
    "checks": 1,
@@ -1035,8 +1117,9 @@
   },
   "learning_contracts.py::validate_learning_record": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real probe payload/normalized packet/reply, learning record, assignment, final JSON text and canonical signer bytes cross each independent reduced byte ceiling. Exact sizes succeed, one byte beyond refuses, later valid calls succeed. Captures end on return/refusal; no authority is inferred from serialization.",
+   "kind": "bytes",
+   "test": "test_probe_record_and_result_values_cross_independent_byte_limits"
   },
   "learning_contracts.py::validate_provider_usage": {
    "checks": 2,
@@ -1052,8 +1135,9 @@
   },
   "learning_cycle_core.py::plan_learning_cycle": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real empty plan exceeds a reduced MAX_PLAN_BYTES=1 and refuses plan_bytes; temporary plan allocation ends on return/refusal. Independent population and snapshot bounds are also exceeded.",
+   "kind": "bytes",
+   "test": "test_bounds_refuse_instead_of_truncating_or_returning_empty"
   },
   "learning_cycle_core.py::select_mining_outcomes": {
    "checks": 1,
@@ -1079,13 +1163,15 @@
   },
   "learning_engine.py::_committed_and_clean": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real committed executable bytes pass their exact reduced read ceiling and fail at one byte past. Actual git patch bytes exceed a reduced byte ceiling before candidate creation; restoring creates a genuine two-path candidate. Its merge refuses reduced path count one, then merges with count two.",
+   "kind": "bytes",
+   "test": "test_git_patch_merge_path_count_and_committed_executable_cross_limits"
   },
   "learning_engine.py::_copy_and_digest_runtime_tree": {
    "checks": 6,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real nested directories exceed reduced depth one; a real four-byte module exceeds reduced byte budget three. Traversal/copy refuses and local work ends rather than silently truncating.",
+   "kind": "bytes",
+   "test": "test_operational_check_runtime_tree_bounds_depth_and_copied_bytes"
   },
   "learning_engine.py::_homebrew_runtime_paths": {
    "checks": 1,
@@ -1105,13 +1191,15 @@
   },
   "learning_engine.py::_read_managed_bytes": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real managed/project files and legacy signer files contain exact reduced-size bytes then one byte beyond; each reader refuses oversized bytes and later valid reads still work. Actual local install-manifest JSON crosses its own byte ceiling. Opened descriptors close on all paths.",
+   "kind": "bytes",
+   "test": "test_managed_project_and_legacy_signer_files_cross_byte_limits"
   },
   "learning_engine.py::_runtime_library_identities": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real two-byte pinned library under a private fixture Cellar fits independent identity and copied-library aggregate budgets two; reducing each to one refuses the actual bytes. A valid snapshot contains exactly the original bytes; temporary snapshot directories end with caller cleanup.",
+   "kind": "bytes",
+   "test": "test_runtime_library_identity_and_snapshot_cross_actual_byte_budgets"
   },
   "learning_engine.py::_security_findings": {
    "checks": 2,
@@ -1121,8 +1209,9 @@
   },
   "learning_engine.py::_snapshot_runtime_libraries": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real two-byte pinned library under a private fixture Cellar fits independent identity and copied-library aggregate budgets two; reducing each to one refuses the actual bytes. A valid snapshot contains exactly the original bytes; temporary snapshot directories end with caller cleanup.",
+   "kind": "bytes",
+   "test": "test_runtime_library_identity_and_snapshot_cross_actual_byte_budgets"
   },
   "learning_engine.py::_wait_for_qa_process": {
    "checks": 1,
@@ -1142,13 +1231,15 @@
   },
   "learning_source_image.py::_digest": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real registered backup is truncated to MAX_BACKUP_BYTES+1 and capture refuses history_learning_capacity before reading it; digest file descriptor and temporary work end on refusal.",
+   "kind": "bytes",
+   "test": "test_oversized_sparse_backup_refuses_before_read"
   },
   "learning_source_image.py::_page": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Seventy real stored-file fixture rows have 30000-byte paths; aggregate bytes exceed PAGE_BYTES, requiring more than eight bounded pages without losing any of the 71 rows. Per-page buffers end before the next page.",
+   "kind": "bytes",
+   "test": "test_rows_and_bytes_use_keyset_pages_without_losing_unconsumed_rows"
   },
   "learning_store.py::_accept_project_terminal": {
    "checks": 1,
@@ -1157,13 +1248,15 @@
   },
   "learning_store.py::_attestation_rows_locked": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real signer file/history and captured attestation rows pass their exact independent reduced byte ceilings and refuse one byte past. The intake independently validates captured row bytes; restoring each budget accepts the same original values. Per-call buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_owner_file_generation_attestation_and_intake_bytes_cross_limits"
   },
   "learning_store.py::_check_active_capacity_locked": {
    "checks": 6,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Eight actual claim writes fill an independently configured live limit eight, exceeding the installed default six; a ninth refuses and a direct locked capacity read refuses. Completed/crashed/expired holds release through the account register, never by historical row count.",
+   "kind": "count",
+   "test": "test_explicit_larger_installed_fixture_policy_still_counts_every_claim"
   },
   "learning_store.py::_claim_commit": {
    "checks": 1,
@@ -1177,8 +1270,9 @@
   },
   "learning_store.py::_claim_context_locked": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Real original open/observation rows are read independently by legacy JSON and scalar contexts at reduced freshness two milliseconds and three milliseconds. Exact age succeeds, MAX+1 yields claim_observation_missing, then exact succeeds again; no claim or refreshed observation is written.",
+   "kind": "time",
+   "test": "test_legacy_and_scalar_claim_contexts_cross_observation_age_independently"
   },
   "learning_store.py::_claim_observation_window": {
    "checks": 1,
@@ -1187,13 +1281,15 @@
   },
   "learning_store.py::_claim_preflight": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine armed-lease evidence exceeds a reduced preflight byte ceiling by one byte and refuses claim_storage_invalid before owner capture. Restoring the budget admits the genuine original claim through its real writer.",
+   "kind": "bytes",
+   "test": "test_release_ack_and_claim_preflight_refuse_oversized_bytes_before_authority_work"
   },
   "learning_store.py::_claim_scalar_context_locked": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "Real original open/observation rows are read independently by legacy JSON and scalar contexts at reduced freshness two milliseconds and three milliseconds. Exact age succeeds, MAX+1 yields claim_observation_missing, then exact succeeds again; no claim or refreshed observation is written.",
+   "kind": "time",
+   "test": "test_legacy_and_scalar_claim_contexts_cross_observation_age_independently"
   },
   "learning_store.py::_connect": {
    "checks": 2,
@@ -1202,8 +1298,9 @@
   },
   "learning_store.py::_dispatch": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "The real collector dispatch method creates 4096 actual local binding entries through its writer with a controlled ledger adapter. The 4097th refuses binding_capacity; after their 300000-ms expiry a fresh bind succeeds with one entry. Real byte-stream request input crosses a reduced ceiling three and refuses request_oversized before JSON. This is local metadata/byte evidence, not enrollment proof.",
+   "kind": "count",
+   "test": "test_collector_binding_population_and_request_bytes_cross_real_limits"
   },
   "learning_store.py::_expired_event_window": {
    "checks": 2,
@@ -1218,13 +1315,15 @@
   },
   "learning_store.py::_handle": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "The real collector dispatch method creates 4096 actual local binding entries through its writer with a controlled ledger adapter. The 4097th refuses binding_capacity; after their 300000-ms expiry a fresh bind succeeds with one entry. Real byte-stream request input crosses a reduced ceiling three and refuses request_oversized before JSON. This is local metadata/byte evidence, not enrollment proof.",
+   "kind": "bytes",
+   "test": "test_collector_binding_population_and_request_bytes_cross_real_limits"
   },
   "learning_store.py::_holds_account_restrictions_locked": {
    "checks": 5,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "time"
+   "ends": "A genuine paid-usage run record blocks deletion at current owner time even when the caller offers a later time. At owner time beyond the one-day horizon plus one millisecond deletion succeeds; restriction evidence no longer blocks the account.",
+   "kind": "time",
+   "test": "test_a_project_holding_account_restrictions_cannot_be_deleted"
   },
   "learning_store.py::_migrate": {
    "checks": 1,
@@ -1233,23 +1332,27 @@
   },
   "learning_store.py::_owner_generation_locked": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real signer file/history and captured attestation rows pass their exact independent reduced byte ceilings and refuse one byte past. The intake independently validates captured row bytes; restoring each budget accepts the same original values. Per-call buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_owner_file_generation_attestation_and_intake_bytes_cross_limits"
   },
   "learning_store.py::_owner_signer_bytes": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real signer file/history and captured attestation rows pass their exact independent reduced byte ceilings and refuse one byte past. The intake independently validates captured row bytes; restoring each budget accepts the same original values. Per-call buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_owner_file_generation_attestation_and_intake_bytes_cross_limits"
   },
   "learning_store.py::_plan_project_backups": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real project backup plan passes its exact byte estimate and refuses a smaller ceiling before writing. At reduced pending check-receipt quota two, actual owner writes fill the quota, a third refuses, and TTL expiry allows a fresh receipt. Only the independent active-scope predicate is a controlled result over genuine original pair metadata; no current-native-authority claim.",
+   "kind": "bytes",
+   "test": "test_backup_plan_worker_artifact_and_account_check_receipts_cross_limits"
   },
   "learning_store.py::_read_worker_result_locked": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "The actual owner file writer refuses canonical result bytes beyond a reduced ceiling and writes them after restoration. A metadata adapter supplies that original writer path/digest to the actual file reader, which reads exact bytes and refuses one byte past. This is genuine file/byte evidence, not a registered outcome or native-authority claim.",
+   "kind": "bytes",
+   "test": "test_native_worker_result_writer_and_retained_reader_cross_byte_limits"
   },
   "learning_store.py::_release_active_capacity": {
    "checks": 1,
@@ -1258,8 +1361,9 @@
   },
   "learning_store.py::_release_due_locked": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "More than one genuine pending account binding expires; repeated actual hold-release calls limited to one release exactly one each and drain to zero. Three genuine unconsumed QA receipts and companion requests exceed a purge batch one; real retention purges all groups without leaving companions.",
+   "kind": "count",
+   "test": "test_account_binding_sweep_and_project_qa_purge_drain_past_batch_one"
   },
   "learning_store.py::_schema_behind": {
    "checks": 1,
@@ -1273,13 +1377,15 @@
   },
   "learning_store.py::_write_streamed_backup": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real project records make a backup larger than a reduced 4096-byte budget despite a one-byte plan estimate. The streamed write refuses, removes its file and registers nothing; later scopes have no partial artifact charge.",
+   "kind": "bytes",
+   "test": "test_a_file_over_the_limit_is_refused_and_removed_even_when_the_plan_fitted"
   },
   "learning_store.py::_write_worker_result": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "The actual owner file writer refuses canonical result bytes beyond a reduced ceiling and writes them after restoration. A metadata adapter supplies that original writer path/digest to the actual file reader, which reads exact bytes and refuses one byte past. This is genuine file/byte evidence, not a registered outcome or native-authority claim.",
+   "kind": "bytes",
+   "test": "test_native_worker_result_writer_and_retained_reader_cross_byte_limits"
   },
   "learning_store.py::account_capacity": {
    "checks": 3,
@@ -1320,8 +1426,9 @@
   },
   "learning_store.py::commit_host_result": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "An actual verification-required host result is under one MiB UTF-8 but escapes to 1.2 MiB canonical JSON; owner commit refuses before consumption/artifact write, and a subsequent valid result on that run commits successfully.",
+   "kind": "bytes",
+   "test": "test_an_oversized_canonical_result_is_refused_before_the_run_is_consumed"
   },
   "learning_store.py::commit_upgrade_reconciliation": {
    "checks": 2,
@@ -1347,28 +1454,33 @@
   },
   "learning_store.py::issue_operational_check_receipt": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "A real project backup plan passes its exact byte estimate and refuses a smaller ceiling before writing. At reduced pending check-receipt quota two, actual owner writes fill the quota, a third refuses, and TTL expiry allows a fresh receipt. Only the independent active-scope predicate is a controlled result over genuine original pair metadata; no current-native-authority claim.",
+   "kind": "count",
+   "test": "test_backup_plan_worker_artifact_and_account_check_receipts_cross_limits"
   },
   "learning_store.py::issue_result_repair_receipt": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Real health output fits its exact newline-inclusive reduced frame cap and one byte beyond returns account_incompatible. The upgrade peek independently refuses MAX+1 input. Two genuine repair receipt writes fill a reduced pending ceiling two, a third refuses, then expiry deletes old receipts and admits a fresh one.",
+   "kind": "count",
+   "test": "test_account_output_upgrade_gate_and_repair_receipt_quota_cross_limits"
   },
   "learning_store.py::legacy_signers_digest": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real managed/project files and legacy signer files contain exact reduced-size bytes then one byte beyond; each reader refuses oversized bytes and later valid reads still work. Actual local install-manifest JSON crosses its own byte ceiling. Opened descriptors close on all paths.",
+   "kind": "bytes",
+   "test": "test_managed_project_and_legacy_signer_files_cross_byte_limits"
   },
   "learning_store.py::migrate_legacy_state": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A genuine legacy state with approved signer digest targets a socket path beyond a reduced 20-byte ceiling. Migration refuses STATE_SOCKET_TOO_LONG before copying or creating target state.",
+   "kind": "bytes",
+   "test": "test_a_new_folder_too_long_for_the_socket_refuses_before_copying"
   },
   "learning_store.py::open_host_run": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "A genuinely claimed binding is sweep-released then the clock rolls back. At a reduced live+1 limit, one fresh attempt fits and the next is refused; released historical bindings do not consume live capacity.",
+   "kind": "count",
+   "test": "test_RS_A_G4_the_legacy_open_cap_admits_by_the_count_the_status_reports"
   },
   "learning_store.py::prepare_upgrade_reconciliation": {
    "checks": 1,
@@ -1377,8 +1489,9 @@
   },
   "learning_store.py::record_claude_rate_limit_event": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "More than 200 real in-run event offers cross MAX_RUN_RATE_LIMIT_RECORDS=64, refuse further benign events while preserving a merged most-restrictive headroom record and 64 retained records. The population ends with run retention.",
+   "kind": "count",
+   "test": "test_a_run_cannot_record_rate_limit_events_without_bound"
   },
   "learning_store.py::recorded_owner_key": {
    "checks": 1,
@@ -1427,23 +1540,27 @@
   },
   "merge_library.py::_validate": {
    "checks": 3,
-   "ends": "per-merge size and path limits on one landing's inputs (MAX_FILE_BYTES, MAX_PATHS, MAX_LANDING_BYTES); the counted files and events belong to a single merge operation and end with it, nothing accumulates across merges (0.8.50 merge library)",
-   "kind": "bytes"
+   "ends": "A genuine sealed fixture batch and actual 4097-byte candidate file exceed reduced 4096-byte per-file and aggregate budgets; real validation refuses each independently, while the exact per-file budget succeeds. The actual no-follow store reader independently reads exact bytes and refuses the oversized file.",
+   "kind": "bytes",
+   "test": "test_merge_library_file_and_aggregate_validation_cross_actual_byte_limits"
   },
   "merge_library.py::read": {
    "checks": 2,
-   "ends": "per-merge size and path limits on one landing's inputs (MAX_FILE_BYTES, MAX_PATHS, MAX_LANDING_BYTES); the counted files and events belong to a single merge operation and end with it, nothing accumulates across merges (0.8.50 merge library)",
-   "kind": "bytes"
+   "ends": "A genuine sealed fixture batch and actual 4097-byte candidate file exceed reduced 4096-byte per-file and aggregate budgets; real validation refuses each independently, while the exact per-file budget succeeds. The actual no-follow store reader independently reads exact bytes and refuses the oversized file.",
+   "kind": "bytes",
+   "test": "test_merge_library_file_and_aggregate_validation_cross_actual_byte_limits"
   },
   "open_scope_contracts.py::checked_open_scope": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_open_scope_proof_and_account_reply_cross_independent_byte_limits"
   },
   "open_scope_contracts.py::snapshot": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_original_contexts_cross_their_own_snapshot_byte_limits"
   },
   "open_withdrawal.py::custody_matches": {
    "checks": 1,
@@ -1453,8 +1570,9 @@
   },
   "operational_qa_contracts.py::checked_operational_qa": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Two real staged QA fixture chunks have different byte sizes. Reducing the byte budget to the first size leaves its own prepare valid but its replay refuses the following historical chunk beyond the budget; restoring accepts exact replay. The actual canonical QA record also crosses its own independent byte ceiling.",
+   "kind": "bytes",
+   "test": "test_qa_following_chunk_replay_and_record_contract_cross_byte_limits"
   },
   "orchestration_api.py::__init__": {
    "checks": 1,
@@ -1469,8 +1587,9 @@
   },
   "orchestration_api.py::decode_orchestration_response": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real product response bytes from actual original handlers decode at an exact reduced newline-inclusive frame ceiling, refuse at one byte past and decode after restoration. Each service independently refuses its oversized output with its fixed unavailable reason. Per-call response buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_control_dispatch_orchestration_and_read_response_decoders_cross_frames"
   },
   "orchestration_api.py::encode_orchestration_request": {
    "checks": 1,
@@ -1485,8 +1604,9 @@
   },
   "orchestration_service.py::handle": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real product response bytes from actual original handlers decode at an exact reduced newline-inclusive frame ceiling, refuse at one byte past and decode after restoration. Each service independently refuses its oversized output with its fixed unavailable reason. Per-call response buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_control_dispatch_orchestration_and_read_response_decoders_cross_frames"
   },
   "orchestration_store.py::<module>": {
    "checks": 4,
@@ -1514,8 +1634,9 @@
   },
   "orchestration_store.py::_positions": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Three genuine registered runs/leases cross independent reduced count ceilings two; report and verification reads refuse rather than truncate. Recovery batches of one settle all three original registrations, then return zero; restoring verification budget reads all three original lease positions.",
+   "kind": "count",
+   "test": "test_orchestration_positions_reports_and_recovery_cross_reduced_counts"
   },
   "orchestration_store.py::apply": {
    "checks": 2,
@@ -1537,13 +1658,15 @@
   },
   "orchestration_store.py::purge_closed": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Three real closed orchestrations exceed a purge batch one. A retained result names the first, but repeated keyset passes still purge later eligible orchestrations without losing their position.",
+   "kind": "count",
+   "test": "test_034_R1g_a_closed_orchestration_still_named_never_holds_back_a_later_one"
   },
   "owned_execution.py::issue": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Two real inert worker executions fill independent reduced registry/owner quotas two. A third real ticket is refused by registry; a separately issued real supervisor is refused by the full owner. Actual fixed returns confirm cleanup, original release acknowledges and retirement frees both populations, and a fourth execution is admitted.",
+   "kind": "count",
+   "test": "test_execution_and_bridge_slots_cross_limits_then_release_for_fresh_work"
   },
   "owned_execution.py::retain_cleanup": {
    "checks": 1,
@@ -1553,28 +1676,33 @@
   },
   "owner_key_contracts.py::checked_public_key": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A canonical RSA signer line of exactly OWNER_SIGNERS_MAX_BYTES is accepted; a larger real public key is refused. Captured signer bytes are per-call and end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_maximal_current_signer_line_is_supported_and_larger_is_refused"
   },
   "owner_key_contracts.py::owner_public_key_from_line": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "The exact maximal real signer line parses; appending a newline creates MAX+1 bytes and is refused. Per-call signer buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_maximal_current_signer_line_is_supported_and_larger_is_refused"
   },
   "prepared_dispatch.py::handle": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "A real authorized typed intake fills a dispatch service lifetime quota one; replay stays known and a second context refuses dispatch_full. Closing the old metadata custodian and constructing a fully separate fresh owner/service admits new work. No execution is claimed: the original persistence factory and execution registry remain unused. Product M11 drives automatic exhausted-host replacement; no lifetime exemption.",
+   "kind": "count",
+   "test": "test_dispatch_metadata_lifetime_refuses_overflow_and_new_service_has_fresh_slots"
   },
   "process_tree.py::_linux_environment": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "An actual pipe carries a valid app-server response at an exact byte ceiling and one byte past refuses output-too-large. A real file supplies proc-reader bytes through a path seam and crosses two bytes. A genuine payload vector validates at its byte length and refuses at length-1. No process-identity or signature-authority claim is made.",
+   "kind": "bytes",
+   "test": "test_pipe_response_proc_reader_and_signature_payload_cross_byte_limits"
   },
   "process_tree.py::_remember_cleanup": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Twenty process identities arrive in waves of five at a reduced live-unproven limit of eight. Proven exits free entries, retained identities stay bounded, and root wait confirms cleanup; a companion test refuses twenty simultaneously live identities.",
+   "kind": "count",
+   "test": "test_a_tree_of_more_processes_than_the_limit_is_confirmed_when_few_are_live_at_once"
   },
   "project_backup.py::estimate_bytes": {
    "checks": 1,
@@ -1605,13 +1733,15 @@
   },
   "project_driver.py::_authorize_dispatch": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Actual driver intake writers fill reduced count two and close the third byte-stream peer; reads accept exact frames and close MAX+1 before routing. 257 actual status-token authorizations rotate the oldest at ceiling 256 while preserving the pinned submit token; removing the run ends all its token authority. No native authority is asserted by fixture callbacks.",
+   "kind": "count",
+   "test": "test_driver_intake_and_dispatch_token_populations_cross_their_limits"
   },
   "project_driver.py::_fence_earlier": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "A controlled runner adapter offers actual valid init and three rate-limit frames at a reduced event ceiling two: the real parser aborts at its ceiling and requests no extra frame. Two actual completed refusal Futures reach a reduced fence retry ceiling two, ending that service retry metadata without calling lease settlement. No process-cleanup or account-release proof is inferred.",
+   "kind": "count",
+   "test": "test_probe_event_counter_and_earlier_fence_refusals_reach_their_limits"
   },
   "project_driver.py::_fence_later": {
    "checks": 1,
@@ -1633,8 +1763,9 @@
   },
   "project_driver.py::_read_intake": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual driver intake writers fill reduced count two and close the third byte-stream peer; reads accept exact frames and close MAX+1 before routing. 257 actual status-token authorizations rotate the oldest at ceiling 256 while preserving the pinned submit token; removing the run ends all its token authority. No native authority is asserted by fixture callbacks.",
+   "kind": "bytes",
+   "test": "test_driver_intake_and_dispatch_token_populations_cross_their_limits"
   },
   "project_driver.py::_register": {
    "checks": 1,
@@ -1668,8 +1799,9 @@
   },
   "project_driver.py::handle": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Actual driver intake writers fill reduced count two and close the third byte-stream peer; reads accept exact frames and close MAX+1 before routing. 257 actual status-token authorizations rotate the oldest at ceiling 256 while preserving the pinned submit token; removing the run ends all its token authority. No native authority is asserted by fixture callbacks.",
+   "kind": "count",
+   "test": "test_driver_intake_and_dispatch_token_populations_cross_their_limits"
   },
   "project_driver.py::record_claude_rate_limit_event": {
    "checks": 1,
@@ -1691,23 +1823,27 @@
   },
   "project_history.py::_checked_record": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real canonical learning record, attempt/lease bindings, committed result artifact and observation cross independent exact reduced byte ceilings. One byte beyond each refuses, restoring the ceiling permits the same original value. Result-file descriptors close on refusal/return; no charge is silently dropped.",
+   "kind": "bytes",
+   "test": "test_history_record_binding_and_result_file_cross_byte_limits"
   },
   "project_history.py::_lease_binding": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real canonical learning record, attempt/lease bindings, committed result artifact and observation cross independent exact reduced byte ceilings. One byte beyond each refuses, restoring the ceiling permits the same original value. Result-file descriptors close on refusal/return; no charge is silently dropped.",
+   "kind": "bytes",
+   "test": "test_history_record_binding_and_result_file_cross_byte_limits"
   },
   "project_history.py::_read_result_file": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real canonical learning record, attempt/lease bindings, committed result artifact and observation cross independent exact reduced byte ceilings. One byte beyond each refuses, restoring the ceiling permits the same original value. Result-file descriptors close on refusal/return; no charge is silently dropped.",
+   "kind": "bytes",
+   "test": "test_history_record_binding_and_result_file_cross_byte_limits"
   },
   "project_history.py::_result_binding": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real canonical learning record, attempt/lease bindings, committed result artifact and observation cross independent exact reduced byte ceilings. One byte beyond each refuses, restoring the ceiling permits the same original value. Result-file descriptors close on refusal/return; no charge is silently dropped.",
+   "kind": "bytes",
+   "test": "test_history_record_binding_and_result_file_cross_byte_limits"
   },
   "project_history.py::release_earlier_unarmed_leases": {
    "checks": 1,
@@ -1728,23 +1864,27 @@
   },
   "project_history.py::_result_file_info": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real canonical learning record, attempt/lease bindings, committed result artifact and observation cross independent exact reduced byte ceilings. One byte beyond each refuses, restoring the ceiling permits the same original value. Result-file descriptors close on refusal/return; no charge is silently dropped.",
+   "kind": "bytes",
+   "test": "test_history_record_binding_and_result_file_cross_byte_limits"
   },
   "project_history.py::attest_bound_result_lease": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real owner-generated denial closure and real project-bound lease evidence pass exact reduced independent byte limits and refuse one byte beyond; restoring budgets accepts the same original values. Temporary verifier/attestation buffers end with the call.",
+   "kind": "bytes",
+   "test": "test_actual_denial_and_bound_lease_evidence_cross_reader_byte_limits"
   },
   "project_history.py::candidates": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR RSF-S7: settlement evidence candidate reads are bounded by limit * PURGE_SCAN_FACTOR, scalar positions only, with a fair cursor; at most limit expired closures are cleared per pass.",
-   "kind": "count"
+   "ends": "Three actual expired committed results exceed a cleanup page one. Two unlink failures leave retiring charged rows; repeated cursor pages still reach and remove the third. Page buffers end each pass and failed rows retain custody.",
+   "kind": "count",
+   "test": "test_multiple_bad_expirations_cannot_starve_a_later_candidate"
   },
   "project_history.py::learning_outcome_page": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Seventy real wide outcomes with 64 evidence and 64 skill digests exceed the aggregate page byte ceiling. Real keyset pages obey row/byte budgets and return every original tuple exactly, without decoding/hashing on the owner path.",
+   "kind": "bytes",
+   "test": "test_exact_bytes_and_sequence_pagination_without_owner_json_or_hash_work"
   },
   "project_history.py::open_withdrawals": {
    "checks": 1,
@@ -1754,8 +1894,9 @@
   },
   "project_history.py::pending_terminals": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Forty real committed terminals cross the encoded delivery-page byte budget; keyset continuation returns every sequence once in bounded pages. Page buffers end on return.",
+   "kind": "bytes",
+   "test": "test_delivery_pages_bound_encoded_bytes_and_allow_continuation"
   },
   "project_history.py::record_registered_run": {
    "checks": 2,
@@ -1780,13 +1921,15 @@
   },
   "project_history.py::settle_earlier_registrations": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Three genuine registered runs/leases cross independent reduced count ceilings two; report and verification reads refuse rather than truncate. Recovery batches of one settle all three original registrations, then return zero; restoring verification budget reads all three original lease positions.",
+   "kind": "count",
+   "test": "test_orchestration_positions_reports_and_recovery_cross_reduced_counts"
   },
   "project_history.py::window": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Five genuine finished runs exceed a requested row ceiling three; the report truncates instead of refusing the window. Each bounded read page ends on return.",
+   "kind": "count",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
   },
   "project_holds_report.py::_custody": {
    "checks": 2,
@@ -1825,8 +1968,9 @@
   },
   "project_ingress.py::_step": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual socket input fills MAX_FRAME_BYTES before newline and closes before writer work; multiple frames also refuse. Its peer buffer ends on drop. Source reviewed only in this no-socket continuation.",
+   "kind": "bytes",
+   "test": "test_oversized_and_multiple_frames_close_before_writer_work"
   },
   "project_ingress.py::attach": {
    "checks": 1,
@@ -1841,8 +1985,9 @@
   },
   "project_learning_activation.py::staged_imports": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Three genuinely staged empty imports (configured capacity three) exceed a reduced enumeration bound one and return only its two-row overflow sentinel. A genuine owner backup transferred to original inert image chunks crosses its exact reduced chunk byte ceiling: replay fits exactly and MAX+1 refuses.",
+   "kind": "count",
+   "test": "test_staged_import_pages_and_source_chunk_bytes_cross_limits"
   },
   "project_learning_activation.py::written_since": {
    "checks": 1,
@@ -1851,8 +1996,9 @@
   },
   "project_learning_chunks.py::record_chunk_membership": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real derived learning records/feedback and actual chunk-membership writes cross independent reduced record/signature/membership byte ceilings. Refusal creates no membership row; restoring budgets writes real records and allows exact replay. Signatures are fixture data, not live owner authority.",
+   "kind": "bytes",
+   "test": "test_derived_learning_record_feedback_and_membership_cross_byte_limits"
   },
   "project_learning_corpus.py::_prepare_chunk": {
    "checks": 5,
@@ -1868,8 +2014,9 @@
   },
   "project_learning_corpus.py::import_attestations": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real staged corpus includes original signature bytes exceeding reduced MAX_CHUNK_BYTES=1; reading refuses rather than emitting a partial signature. Later unpatched PK reads close every cursor.",
+   "kind": "bytes",
+   "test": "test_raw_byte_envelope_and_pk_queries_close_every_cursor"
   },
   "project_learning_corpus.py::import_records": {
    "checks": 2,
@@ -1879,8 +2026,9 @@
   },
   "project_learning_identity.py::_outcomes": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A genuine stored outcome exceeds reduced aggregate preparation byte budget one; preparation refuses with no partial results. The same test independently crosses the case count; bounded captures end on refusal/return.",
+   "kind": "bytes",
+   "test": "test_batch_or_aggregate_byte_exhaustion_refuses_without_partial_results"
   },
   "project_learning_identity.py::_references": {
    "checks": 1,
@@ -1890,13 +2038,15 @@
   },
   "project_learning_identity.py::prepare_candidate": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real 65537-byte candidate input crosses MAX_RECORD_BYTES and refuses before any outcome read; no partial candidate record can be written and request buffers end on refusal.",
+   "kind": "bytes",
+   "test": "test_candidate_input_is_byte_bounded_and_closed_before_any_outcome_read"
   },
   "project_learning_live.py::append_learning_records": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real derived learning records/feedback and actual chunk-membership writes cross independent reduced record/signature/membership byte ceilings. Refusal creates no membership row; restoring budgets writes real records and allows exact replay. Signatures are fixture data, not live owner authority.",
+   "kind": "bytes",
+   "test": "test_derived_learning_record_feedback_and_membership_cross_byte_limits"
   },
   "project_learning_live.py::cycle": {
    "checks": 1,
@@ -1930,33 +2080,39 @@
   },
   "project_learning_owner.py::record_feedback": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real derived learning records/feedback and actual chunk-membership writes cross independent reduced record/signature/membership byte ceilings. Refusal creates no membership row; restoring budgets writes real records and allows exact replay. Signatures are fixture data, not live owner authority.",
+   "kind": "bytes",
+   "test": "test_derived_learning_record_feedback_and_membership_cross_byte_limits"
   },
   "project_learning_qa.py::_entry": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A QA entry carrying 65537 real content bytes crosses MAX_RECORD_BYTES and refuses; strict canonical/type controls remain. Per-entry captures end on refusal.",
+   "kind": "bytes",
+   "test": "test_closed_types_canonical_metadata_and_bounds"
   },
   "project_learning_qa.py::_page": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Twenty genuinely staged large QA rows cross a 262144-byte page budget, forcing pages smaller than the row ceiling 64; keyset continuation collects all original rows. Each page cursor is closed and no read leaves a transaction open.",
+   "kind": "bytes",
+   "test": "test_bounded_indexed_pages_and_cursor_close"
   },
   "project_learning_qa.py::_prepare": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real canonical QA entry bytes exceed reduced MAX_BYTES=1 and preparation refuses; 65 rows also exceed the independent 64-row bound. Temporary arrays end on refusal/return.",
+   "kind": "bytes",
+   "test": "test_closed_types_canonical_metadata_and_bounds"
   },
   "project_learning_qa.py::stage_qa_chunk": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Two real staged QA fixture chunks have different byte sizes. Reducing the byte budget to the first size leaves its own prepare valid but its replay refuses the following historical chunk beyond the budget; restoring accepts exact replay. The actual canonical QA record also crosses its own independent byte ceiling.",
+   "kind": "bytes",
+   "test": "test_qa_following_chunk_replay_and_record_contract_cross_byte_limits"
   },
   "project_learning_source.py::stage_image_chunk": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Three genuinely staged empty imports (configured capacity three) exceed a reduced enumeration bound one and return only its two-row overflow sentinel. A genuine owner backup transferred to original inert image chunks crosses its exact reduced chunk byte ceiling: replay fits exactly and MAX+1 refuses.",
+   "kind": "bytes",
+   "test": "test_staged_import_pages_and_source_chunk_bytes_cross_limits"
   },
   "project_monitor.py::__init__": {
    "checks": 1,
@@ -1982,33 +2138,39 @@
   },
   "project_orchestration_report.py::orchestration_report": {
    "checks": 7,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; U1 automatic runner/core continuation replaces the current orchestration at independent run/report/event caps; direct guard behavior and reserved close capacity are preserved",
-   "kind": "count"
+   "ends": "Three genuine registered runs/leases cross independent reduced count ceilings two; report and verification reads refuse rather than truncate. Recovery batches of one settle all three original registrations, then return zero; restoring verification budget reads all three original lease positions.",
+   "kind": "count",
+   "test": "test_orchestration_positions_reports_and_recovery_cross_reduced_counts"
   },
   "project_qa_checks.py::_report": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Two individually valid 256-item check arrays produce canonical bytes greater than 65536; real issue refuses before private artifact reads, leaving no receipt. Report buffers end on refusal/return.",
+   "kind": "bytes",
+   "test": "test_report_byte_limit_refuses_before_original_private_artifact_io"
   },
   "project_qa_checks.py::issue_check_receipt": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "A real issued receipt fills a reduced pending limit of one; a second request refuses without replacement, and the first replay remains exact. Expiry/retention purging removes receipts and request rows; a companion test independently fills the retained cap.",
+   "kind": "count",
+   "test": "test_pending_and_retained_capacity_refuse_without_replacing_known_rows"
   },
   "project_qa_checks.py::purge_old_qa": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "More than one genuine pending account binding expires; repeated actual hold-release calls limited to one release exactly one each and drain to zero. Three genuine unconsumed QA receipts and companion requests exceed a purge batch one; real retention purges all groups without leaving companions.",
+   "kind": "count",
+   "test": "test_account_binding_sweep_and_project_qa_purge_drain_past_batch_one"
   },
   "project_qa_commit.py::commit_operational_qa": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "One fully valid original worker/verifier QA pair is offered past a reduced retained-QA ceiling zero. The actual count guard refuses history_result_capacity with no QA row; restoring the ceiling commits the same genuine pair. QA/request/receipt groups end by the tested retention purge; the independent one-QA-per-worker replay rule is preserved.",
+   "kind": "count",
+   "test": "test_qa_count_cap_refuses_a_genuine_pair_at_zero_then_restoration_commits_it"
   },
   "project_release_ack.py::record_account_release": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual three-byte release evidence exceeds reduced two-byte ACK capture limit and refuses before transaction/authority work, leaving SQL changes unchanged. This proves capture bounds only, never a fabricated cleanup or account receipt.",
+   "kind": "bytes",
+   "test": "test_release_ack_and_claim_preflight_refuse_oversized_bytes_before_authority_work"
   },
   "project_request_queue.py::__post_init__": {
    "checks": 2,
@@ -2017,8 +2179,9 @@
   },
   "project_request_queue.py::execute": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "An actual original history-service reply exceeds a reduced newline-inclusive output frame ceiling by one byte. Queue execution withholds it and take refuses; the failed slot is removed. A fresh request then executes and returns the exact original reply at its exact ceiling, with retained count zero.",
+   "kind": "bytes",
+   "test": "test_project_request_execution_bounds_real_response_and_frees_the_failed_slot"
   },
   "project_request_queue.py::prepare": {
    "checks": 2,
@@ -2099,28 +2262,33 @@
   },
   "provider_observation_contracts.py::checked_observation_reply": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Actual inert provider probes produce canonical records: worker output, retained record reads and reply validation independently cross exact reduced byte ceilings. Three real completed observation journals exceed batch one; repeated real purge deletes every request and companion origin then returns zero. Temporary buffers end with each call.",
+   "kind": "bytes",
+   "test": "test_observation_worker_retained_reply_and_purge_cross_independent_limits"
   },
   "providers.py::_response": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "An actual pipe carries a valid app-server response at an exact byte ceiling and one byte past refuses output-too-large. A real file supplies proc-reader bytes through a path seam and crosses two bytes. A genuine payload vector validates at its byte length and refuses at length-1. No process-identity or signature-authority claim is made.",
+   "kind": "bytes",
+   "test": "test_pipe_response_proc_reader_and_signature_payload_cross_byte_limits"
   },
   "providers.py::parse_client_version": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real strings and version bytes cross exact reduced length ceilings; canonical event info passes at its byte length and refuses at length-1. Rejected values do not occupy later calls; valid later values remain usable.",
+   "kind": "bytes",
+   "test": "test_scalar_text_and_client_version_cross_reduced_limits"
   },
   "rate_limit_contracts.py::__post_init__": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real strings and version bytes cross exact reduced length ceilings; canonical event info passes at its byte length and refuses at length-1. Rejected values do not occupy later calls; valid later values remain usable.",
+   "kind": "bytes",
+   "test": "test_scalar_text_and_client_version_cross_reduced_limits"
   },
   "rate_limit_contracts.py::_scalar": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real strings and version bytes cross exact reduced length ceilings; canonical event info passes at its byte length and refuses at length-1. Rejected values do not occupy later calls; valid later values remain usable.",
+   "kind": "bytes",
+   "test": "test_scalar_text_and_client_version_cross_reduced_limits"
   },
   "rate_limit_contracts.py::bounded_rate_limit_info": {
    "checks": 2,
@@ -2130,8 +2298,9 @@
   },
   "release_contracts.py::capture_cleanup_evidence": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Independent raw evidence captures accept two real bytes at a reduced ceiling two, refuse three, and accept two again; this tests capture bounds, not authentication of the captured bytes.",
+   "kind": "bytes",
+   "test": "test_captured_receipt_bytes_cross_each_independent_limit"
   },
   "result_contracts.py::__post_init__": {
    "checks": 3,
@@ -2140,18 +2309,21 @@
   },
   "result_contracts.py::as_data": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real canonical learning record, attempt/lease bindings, committed result artifact and observation cross independent exact reduced byte ceilings. One byte beyond each refuses, restoring the ceiling permits the same original value. Result-file descriptors close on refusal/return; no charge is silently dropped.",
+   "kind": "bytes",
+   "test": "test_history_record_binding_and_result_file_cross_byte_limits"
   },
   "result_contracts.py::assignment_bytes": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real probe payload/normalized packet/reply, learning record, assignment, final JSON text and canonical signer bytes cross each independent reduced byte ceiling. Exact sizes succeed, one byte beyond refuses, later valid calls succeed. Captures end on return/refusal; no authority is inferred from serialization.",
+   "kind": "bytes",
+   "test": "test_probe_record_and_result_values_cross_independent_byte_limits"
   },
   "result_contracts.py::checked_result_body": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A genuinely reserved attempt receives actual MAX_RESULT_BODY_BYTES+1 bytes; commit refuses history_invalid_input, creates no artifact and publishes no terminal. The per-call body ends on refusal.",
+   "kind": "bytes",
+   "test": "test_invalid_oversized_noncanonical_or_wrong_digest_bodies_leave_no_files"
   },
   "result_persistence.py::__init__": {
    "checks": 1,
@@ -2166,33 +2338,39 @@
   },
   "result_persistence.py::acknowledge_release": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real reserved persistence job receives three actual bytes beyond independently reduced two-byte open, denial, execution/provenance, terminal and cleanup capture budgets. Each refuses history_invalid_input before enqueue/authority work, preserves the whole job snapshot and launches nothing. Earlier-lease capture separately refuses before queueing; this is byte capture evidence, not authenticated receipt evidence.",
+   "kind": "bytes",
+   "test": "test_persistence_capture_defences_refuse_actual_bytes_past_each_limit"
   },
   "result_persistence.py::acknowledge_terminal": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real reserved persistence job receives three actual bytes beyond independently reduced two-byte open, denial, execution/provenance, terminal and cleanup capture budgets. Each refuses history_invalid_input before enqueue/authority work, preserves the whole job snapshot and launches nothing. Earlier-lease capture separately refuses before queueing; this is byte capture evidence, not authenticated receipt evidence.",
+   "kind": "bytes",
+   "test": "test_persistence_capture_defences_refuse_actual_bytes_past_each_limit"
   },
   "result_persistence.py::consume_execution": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real reserved persistence job receives three actual bytes beyond independently reduced two-byte open, denial, execution/provenance, terminal and cleanup capture budgets. Each refuses history_invalid_input before enqueue/authority work, preserves the whole job snapshot and launches nothing. Earlier-lease capture separately refuses before queueing; this is byte capture evidence, not authenticated receipt evidence.",
+   "kind": "bytes",
+   "test": "test_persistence_capture_defences_refuse_actual_bytes_past_each_limit"
   },
   "result_persistence.py::record_host_open": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real reserved persistence job receives three actual bytes beyond independently reduced two-byte open, denial, execution/provenance, terminal and cleanup capture budgets. Each refuses history_invalid_input before enqueue/authority work, preserves the whole job snapshot and launches nothing. Earlier-lease capture separately refuses before queueing; this is byte capture evidence, not authenticated receipt evidence.",
+   "kind": "bytes",
+   "test": "test_persistence_capture_defences_refuse_actual_bytes_past_each_limit"
   },
   "result_persistence.py::settle_denial": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real reserved persistence job receives three actual bytes beyond independently reduced two-byte open, denial, execution/provenance, terminal and cleanup capture budgets. Each refuses history_invalid_input before enqueue/authority work, preserves the whole job snapshot and launches nothing. Earlier-lease capture separately refuses before queueing; this is byte capture evidence, not authenticated receipt evidence.",
+   "kind": "bytes",
+   "test": "test_persistence_capture_defences_refuse_actual_bytes_past_each_limit"
   },
   "result_persistence.py::settle_earlier_lease": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A real reserved persistence job receives three actual bytes beyond independently reduced two-byte open, denial, execution/provenance, terminal and cleanup capture budgets. Each refuses history_invalid_input before enqueue/authority work, preserves the whole job snapshot and launches nothing. Earlier-lease capture separately refuses before queueing; this is byte capture evidence, not authenticated receipt evidence.",
+   "kind": "bytes",
+   "test": "test_persistence_capture_defences_refuse_actual_bytes_past_each_limit"
   },
   "result_read_api.py::__init__": {
    "checks": 1,
@@ -2207,8 +2385,9 @@
   },
   "result_read_api.py::decode_result_read_response": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real product response bytes from actual original handlers decode at an exact reduced newline-inclusive frame ceiling, refuse at one byte past and decode after restoration. Each service independently refuses its oversized output with its fixed unavailable reason. Per-call response buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_control_dispatch_orchestration_and_read_response_decoders_cross_frames"
   },
   "result_read_api.py::encode_result_read_request": {
    "checks": 1,
@@ -2218,13 +2397,15 @@
   },
   "result_read_service.py::handle": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real product response bytes from actual original handlers decode at an exact reduced newline-inclusive frame ceiling, refuse at one byte past and decode after restoration. Each service independently refuses its oversized output with its fixed unavailable reason. Per-call response buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_control_dispatch_orchestration_and_read_response_decoders_cross_frames"
   },
   "routing.py::_read_project_regular": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real managed/project files and legacy signer files contain exact reduced-size bytes then one byte beyond; each reader refuses oversized bytes and later valid reads still work. Actual local install-manifest JSON crosses its own byte ceiling. Opened descriptors close on all paths.",
+   "kind": "bytes",
+   "test": "test_managed_project_and_legacy_signer_files_cross_byte_limits"
   },
   "routing.py::_validate_admission_settings": {
    "checks": 1,
@@ -2239,8 +2420,9 @@
   },
   "run_provenance.py::checked_run_provenance": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine original writer-produced fixture values serialize/verify at their exact reduced byte ceiling, refuse when their own independent ceiling is one byte smaller, and succeed again afterward. Per-call buffers and captures end on return/refusal. This proves the byte boundary, not native caller authority.",
+   "kind": "bytes",
+   "test": "test_actual_run_provenance_and_retained_record_cross_limits"
   },
   "service_enrollment.py::__init__": {
    "checks": 1,
@@ -2249,18 +2431,21 @@
   },
   "service_enrollment.py::_consume_proof": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real signed enrollment lines and owner-made proof files cross reduced independent context/preamble byte ceilings. Exact context reads and verifier lines succeed; MAX+1 refuses before attachment. An actual frontend byte-stream peer fills its preamble bound and receives service_refused_enrollment; an oversized real endpoint path refuses before opening a socket.",
+   "kind": "bytes",
+   "test": "test_enrollment_consumer_verifier_and_frontend_cross_byte_limits_without_sockets"
   },
   "service_enrollment.py::_subject": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real absolute subjects cross a reduced byte ceiling. A real context proof is written at two bytes, three refuses without another proof; signed preambles fit an exact newline-inclusive ceiling and refuse one byte past. Buffers end on refusal; proofs retain their ordinary prune lifetime.",
+   "kind": "bytes",
+   "test": "test_enrollment_subject_context_and_preamble_cross_reduced_limits"
   },
   "service_enrollment.py::enrollment_preamble": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real absolute subjects cross a reduced byte ceiling. A real context proof is written at two bytes, three refuses without another proof; signed preambles fit an exact newline-inclusive ceiling and refuse one byte past. Buffers end on refusal; proofs retain their ordinary prune lifetime.",
+   "kind": "bytes",
+   "test": "test_enrollment_subject_context_and_preamble_cross_reduced_limits"
   },
   "service_enrollment.py::prune_proofs": {
    "checks": 1,
@@ -2270,33 +2455,39 @@
   },
   "service_enrollment.py::verify": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real signed enrollment lines and owner-made proof files cross reduced independent context/preamble byte ceilings. Exact context reads and verifier lines succeed; MAX+1 refuses before attachment. An actual frontend byte-stream peer fills its preamble bound and receives service_refused_enrollment; an oversized real endpoint path refuses before opening a socket.",
+   "kind": "bytes",
+   "test": "test_enrollment_consumer_verifier_and_frontend_cross_byte_limits_without_sockets"
   },
   "service_host.py::__init__": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Genuine owner state paths/project scope are longer than a reduced socket-path ceiling one. Project-host construction refuses before calling its history/runtime factory or creating any listener.",
+   "kind": "bytes",
+   "test": "test_project_host_socket_path_cap_refuses_before_runtime_or_listener_creation"
   },
   "service_host.py::_enroll": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real signed enrollment lines and owner-made proof files cross reduced independent context/preamble byte ceilings. Exact context reads and verifier lines succeed; MAX+1 refuses before attachment. An actual frontend byte-stream peer fills its preamble bound and receives service_refused_enrollment; an oversized real endpoint path refuses before opening a socket.",
+   "kind": "bytes",
+   "test": "test_enrollment_consumer_verifier_and_frontend_cross_byte_limits_without_sockets"
   },
   "service_host.py::listen": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real signed enrollment lines and owner-made proof files cross reduced independent context/preamble byte ceilings. Exact context reads and verifier lines succeed; MAX+1 refuses before attachment. An actual frontend byte-stream peer fills its preamble bound and receives service_refused_enrollment; an oversized real endpoint path refuses before opening a socket.",
+   "kind": "bytes",
+   "test": "test_enrollment_consumer_verifier_and_frontend_cross_byte_limits_without_sockets"
   },
   "service_protocol.py::canonical_request_bytes": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real valid JSON and canonical service requests pass at their exact byte length and refuse when the reduced budget is one byte smaller. Per-call buffers end on return/refusal; later ordinary encoding succeeds.",
+   "kind": "bytes",
+   "test": "test_json_value_and_service_encoder_cross_exact_reduced_byte_limits"
   },
   "service_protocol.py::decode_service_request": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "A valid request padded to exactly MAX_CONTROL_REQUEST_BYTES decodes; one extra space and MAX+1 invalid bytes refuse request_too_large. Request buffers end with decoding/refusal.",
+   "kind": "bytes",
+   "test": "test_transport_bytes_and_parser_failures_have_only_fixed_codes"
   },
   "service_queue.py::__post_init__": {
    "checks": 5,
@@ -2376,8 +2567,9 @@
   },
   "signature_execution.py::_exchange": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "An actual fixed helper emits its valid READY prefix and 2161 output bytes beyond the configured response cap. Execution returns signature_execution_output_limit, no indices and one reaped original root. Source reviewed; no process/sandbox execution claim in this continuation.",
+   "kind": "bytes",
+   "test": "test_actual_oversized_output_cannot_escape_the_response_cap"
   },
   "signature_input_wire.py::__post_init__": {
    "checks": 2,
@@ -2432,8 +2624,9 @@
   },
   "signature_job_intake.py::_validate_inputs": {
    "checks": 3,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real signer file/history and captured attestation rows pass their exact independent reduced byte ceilings and refuse one byte past. The intake independently validates captured row bytes; restoring each budget accepts the same original values. Per-call buffers end on return/refusal.",
+   "kind": "bytes",
+   "test": "test_owner_file_generation_attestation_and_intake_bytes_cross_limits"
   },
   "signature_job_intake.py::select_next": {
    "checks": 1,
@@ -2443,8 +2636,9 @@
   },
   "signature_payloads.py::_check_payload": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "An actual pipe carries a valid app-server response at an exact byte ceiling and one byte past refuses output-too-large. A real file supplies proc-reader bytes through a path seam and crosses two bytes. A genuine payload vector validates at its byte length and refuses at length-1. No process-identity or signature-authority claim is made.",
+   "kind": "bytes",
+   "test": "test_pipe_response_proc_reader_and_signature_payload_cross_byte_limits"
   },
   "signature_payloads.py::decode_signature_payloads": {
    "checks": 2,
@@ -2472,18 +2666,21 @@
   },
   "terminal_delivery.py::capture_terminal_evidence": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Independent raw evidence captures accept two real bytes at a reduced ceiling two, refuse three, and accept two again; this tests capture bounds, not authentication of the captured bytes.",
+   "kind": "bytes",
+   "test": "test_captured_receipt_bytes_cross_each_independent_limit"
   },
   "write_merge.py::_merge_locked": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "count"
+   "ends": "Real committed executable bytes pass their exact reduced read ceiling and fail at one byte past. Actual git patch bytes exceed a reduced byte ceiling before candidate creation; restoring creates a genuine two-path candidate. Its merge refuses reduced path count one, then merges with count two.",
+   "kind": "count",
+   "test": "test_git_patch_merge_path_count_and_committed_executable_cross_limits"
   },
   "write_merge.py::_merge_prepared": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
-   "kind": "bytes"
+   "ends": "Real merge candidate exceeds reduced undo budget 40 bytes (and independent file budget 16). Merge stops write_merge_too_large without changing owner files; per-merge preparation ends and temporary work is removed.",
+   "kind": "bytes",
+   "test": "test_too_large_stops_the_merge"
   },
   "learning_store.py::wake_reconcile_candidates": {
    "checks": 1,

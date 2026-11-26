@@ -148,3 +148,41 @@
 
 ## S15-O0C-REPEAT-EXPIRY fix
 No existing assertion changed or removed. Added test (new): an expired repeat generation that cleanup must keep is refused `probe_conflict`, never returned.
+
+## Decision 382 continuation 2 at 4bc4dbbd
+
+- **No existing test assertion changed or was removed. No runtime source or
+  lifetime guard implementation/assertion changed.** Decision **382** remains
+  the authority for old **all entries require ends+test** → new **all entries
+  require kind+ends; count/bytes/time additionally require a real past-limit
+  test; validation/read_only/precondition require ends only**. No exemption.
+- Registry old: 197 absent tests (34 count / 147 bytes / 16 time) → new: 197
+  concrete existing/new past-limit bindings and specific end/stimulus text.
+  Strict guard RED at HEAD → GREEN, 547 retained sites, zero missing bounded
+  bindings. No entry deleted in this continuation; the six earlier authorized
+  stale removals have fresh complete-function grep/no-match evidence in the
+  audit. Original audit dispositions remain history, not blanket recertification.
+- Added tests use real reduced populations, buffers, files, clocks, store writers
+  and queue/worker owners. Controlled frontend/signature/metadata seams isolate
+  the stated cap; they do not establish native authorization. The worker-result
+  reader uses actual writer bytes/digest with a metadata adapter. The QA cap
+  uses one genuine pair above a reduced ceiling of zero; a draft second-pair
+  stimulus conflicted with the one-QA-per-worker rule and never reached the cap.
+  Account ingress uses actual grouping with controlled unfinished jobs, no frontend
+  thread/socket and no claim that synthetic groups establish real job custody.
+- Added matrix positives and 24 new release-suppression controls change no prior
+  oracle: each reached release/deletion is disabled independently and its same
+  positive release/baseline oracle must fail. Account controls disable the actual
+  SQLite trigger; host controls disable the exact dictionary deletion; project
+  controls suppress only their target release kind. There are 48 controls total.
+- New draft corrections (not changes to existing test assertions): wrong guessed
+  input error `worker_failed` → documented `worker_input_invalid`; guessed clock
+  reason `clock_unavailable` → fixed `monitor_unavailable`; direct fence return
+  → its actual `closure` envelope member; nonexistent runtime `_workers` → the
+  preparation owner's actual `_pool`. The release, zero-charge and deletion
+  expectations are unchanged. Account fault injection now targets the outer
+  transaction that actually changes the hold; earlier drafts cut a nested savepoint
+  or a read-only authorization transaction, before the intended release commit.
+- The matrix explicitly preserves intentional retention and no-acquisition rows,
+  the original B0-2 skip under 132/377, and S27a/b/c/d native container carry-ins.
+  Full-service source references are named separately from this no-socket run.

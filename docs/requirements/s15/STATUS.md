@@ -1,3 +1,48 @@
+# S15 — decision 382 continuation 2 complete at 4bc4dbbd
+
+The 197 remaining cap bindings are complete. The unchanged strict guard is
+**GREEN**, with no exemption: all **547** retained entries have kind and ends;
+all **454 count/bytes/time** entries name real past-limit tests. The continuation
+bound **34 count / 147 bytes / 16 time** sites. All six earlier stale removals
+retain fresh complete-function grep/no-match evidence; no additional site was
+removed. Audit: [cap-binding-audit.json](cap-binding-audit.json).
+
+The hold-kind × failure-exit evidence index is
+[hold-failure-matrix.md](hold-failure-matrix.md). Added actual account transaction
+cuts (six paths × three cuts), local fixed-worker failure before launch,
+worker/result/execution/monitor cleanup, host/probe preparation cancellation
+and failure, project withdrawal/account-final/fence/completed/custody releases,
+five monitor exits, refusal without downstream acquisition, and lost/duplicate
+request controls. **24 new independent release mutations; 48 total**, applying
+the same positive release oracles. Existing store matrix/recovery/churn rows
+remain green. Native container rows **S27a/S27b/S27c/S27d remain carry-ins**;
+the index distinguishes existing full-service source references from executed
+socket-free boundaries. No native authority or launched-container proof is
+claimed from a controlled fixture. Original B0-2 assertions and the 132/377 skip
+are unchanged.
+
+Final named runner: **98 tests / 11 modules, all passed**, **30.5 s elapsed /
+30.456 worker-s**, preflight 7.631 s, discovery 2.349 s.
+**metadata_errors: [], budget_failures: [], requirement_failures: []**.
+New failure matrix: 13.2 s; new owner caps: 10.2 s; extended contract caps: 0.8 s.
+Each is below 60 s. Existing unmeasured budget debt elsewhere is recorded in the
+result; no full/affected suite was run. Durable evidence:
+[decision-382-finish-results.json](decision-382-finish-results.json), including
+exact selected command, all module/test outcomes and times. No run remains in flight.
+
+Requirement evidence: S15-O0C-GUARD and S15-O0C-BINDINGS are green (197-unbound
+RED → zero-unbound GREEN); S15-RS8-RELEASE-PATHS and S15-RS8-MUTATION have the new
+rows/controls above; S15-RS8-SETTLEMENT, S15-RS8-MEMORY, S15-B0-2 and S15-O0C-P3
+remain green. Fixed first-record and repeat-expiry witnesses also pass at HEAD.
+New modules/checks are registered in layers, stages, timings, requirement source
+and catalogue. Assertion history is in [assertions.md](assertions.md).
+
+**No new product defect found; no runtime change, commit or socket.** No absolute
+home path was added to repository files. The statuses below are historical stops,
+retained for provenance; they do not describe the current binding/guard result.
+
+---
+
 # Decision 382 continuation — STOP: expired repeat-probe generation returned again
 
 ## S15-O0C-REPEAT-EXPIRY: FIXED (product)

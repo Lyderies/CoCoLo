@@ -28,17 +28,17 @@
   },
   {
    "id": "S15-RS8-MUTATION",
-   "statement": "RS-8: independently disabling each covered settlement or memory recovery release must make that same row fail its ordinary release oracle.",
+   "statement": "RS-8: independently disabling each covered settlement, memory, account-trigger, project-final, local worker/result/execution/monitor or preparation release makes the identical positive row oracle fail.",
    "source": "tests/requirements/s15.json#S15-RS8-MUTATION"
   },
   {
    "id": "S15-RS8-RELEASE-PATHS",
-   "statement": "RS-8: actual unsent/expired/successor lease and companion custody releases, lease-to-reservation transfer, custody retention, normal memory retirement, refusal and handover paths, primary and unattended orchestration close, and authenticated denial release once and replay without changing their first register release.",
+   "statement": "RS-8 / B0-6: account binding/slot/probe, project lease/reservation/open-binding/custody, driver/preparation/orchestration and local host worker/result/execution/monitor release paths retain uncertain custody, release once under their real predicates, and preserve first-release replay across applicable failure exits. Native container rows remain explicit S27a-d carry-ins.",
    "source": "tests/requirements/s15.json#S15-RS8-RELEASE-PATHS"
   },
   {
    "id": "S15-O0C-BINDINGS",
-   "statement": "O0c / decision 382: real populations and bytes beyond reduced session scans, queues, SQLite cursors, request frames, recursive cleaning, exit locations, usage arrays, escalation ladders and proof-pruning limits demonstrate bounded work or refusal and usable later scopes.",
+   "statement": "O0c / decision 382: actual count, byte and time populations cross each registered limit, using existing tests or reduced-limit fixtures with real owner/store/codec work, bounded refusal or draining, and later usable scopes.",
    "source": "tests/requirements/s15.json#S15-O0C-BINDINGS"
   },
   {
