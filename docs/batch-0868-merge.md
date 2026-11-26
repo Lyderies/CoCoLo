@@ -242,3 +242,23 @@ Both registrations are done (IP-B 0.8.68), tests first (red on 506f6d1a, green a
 - S8-HM3-5 (full run): not this wiring. It was `test_unrelated_lifetime_caps_bytes_are_preserved` (old byte-prefix rule), already replaced by the superset rule above; it passes.
 - Assertions changed: see docs/requirements/s11-hm2a/assertions.md (collector check-name lists gain `workspaces`; fixtures keep the real scratch folder out of healthy-collector tests).
 - Runs (TMPDIR=/tmp/claude-501/ipb-wire, `parallel_tests.py --jobs 3`, metadata_errors []): test_health_holds, test_health_workspaces, test_health_monitor, test_cli_status_client_boundary, test_learning_store, test_lifetime_cap_guard, test_health_containers, test_codex_preparation (28 s, 282 tests); test_memory_holds, test_memory_holds_lane, test_ledger_owner_wiring (17 s). test_runtime_release still fails on the expected stale digest (version bump comes later; the runtime source changed again here).
+
+## Full run 2 (HEAD d048e8b9, base ce81bd96)
+- Exit 1; 549 units; elapsed 669.8 s (wall 11:21); preflight 9.1 s vs job seconds 6724.8; metadata_errors: [].
+- requirement_failures: RS-B-B7-5, S8-HM3-3.
+- Failure 1: tests.test_project_service_startup (2 errors: test_HM3_faulted_service_reaches_health_monitor_status,
+  test_HM3_stop_signal_first_reaches_health_monitor_status): `ValueError: a check is registered once, with a run method`
+  at tests/test_project_service_startup.py:395 (`server.health_monitor.register(HoldsCheck(...))`); health_monitor.py:173
+  now registers HoldsCheck itself (S8/S11 wiring). Rerun alone: same 2 errors. Base ce81bd96: 13 tests OK.
+  Classification: REGRESSION from the S8 wiring (the test registers a check the monitor now registers). Drives S8-HM3-3. Not fixed.
+- Failure 2: tests.test_b7b_budgets#0 (B3 'failed' vs 'met', timing measurement under load; drives RS-B-B7-5).
+  Rerun alone: 3 tests OK in 29 s. Classification: FLAKE (load).
+- Budget failures (over 60 s scenario / 5 s unit): test_b7b_budgets 65.6, test_claim_denial_recovery 70.8,
+  test_host_slots 60.6, test_project_start 195.7, test_routing_judgment 6.1 (unit), test_rsf_s3_resumable 63.0,
+  test_run_retention_scale 80.8. Alone: claim_denial 17 s OK, b7b 29 s OK. test_project_start alone 136 s (debt ceiling 183.4 in
+  scripts/test-budget-debt-0850.json; 195.7 in the full run exceeded it, 136 s alone is under it) -> load. The other four
+  modules (host_slots, rsf_s3_resumable, run_retention_scale, routing_judgment) cannot be rerun with plain `unittest`
+  (import test_framework fails outside the runner), so no alone-time was taken; they are barely over (except retention 80.8)
+  and have no debt entry. Classified load-related, unconfirmed.
+- Retire notices: test_container_stop, test_session_guard now within layer budget.
+- Only action needed: the test_project_service_startup regression (primary/builder to fix; no fix made here).
