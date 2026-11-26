@@ -996,8 +996,8 @@ class ProjectHistory:
                     if stat.S_ISREG(os.fstat(descriptor).st_mode):
                         raw = os.read(descriptor, self._MARKER_BYTES + 1)
                         data = parse_bounded_json(raw, max_bytes=self._MARKER_BYTES)
-                        copy = re.compile(rf"history\.sqlite3\.before-(?:22|23)\.[0-9]+(\.[0-9a-f]{{8}})?")
-                        partial = re.compile(rf"\.history\.sqlite3\.before-(?:22|23)\.[0-9]+\.[0-9a-f]{{16}}\.partial")
+                        copy = re.compile(r"history\.sqlite3\.before-(?:22|23)\.[0-9]+(\.[0-9a-f]{8})?")
+                        partial = re.compile(r"\.history\.sqlite3\.before-(?:22|23)\.[0-9]+\.[0-9a-f]{16}\.partial")
                         if (type(data) is dict and data.keys() == {"copy", "partial", "size", "sha256"}
                                 and type(data["copy"]) is str and copy.fullmatch(data["copy"])
                                 and type(data["partial"]) is str and partial.fullmatch(data["partial"])

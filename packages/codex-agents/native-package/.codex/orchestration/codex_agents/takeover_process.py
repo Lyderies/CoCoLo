@@ -145,7 +145,7 @@ class Kernel:
             except OSError:
                 from .process_tree import process_gone
                 return process_gone(pin.pid)
-        events = pin.control(None, 1, 0)
+        _events = pin.control(None, 1, 0)
         return bool(pin.events & select.KQ_NOTE_EXIT)
 
     def changed(self, pin):

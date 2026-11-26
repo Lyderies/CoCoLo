@@ -13,7 +13,6 @@ automatic retry or production client migration is enabled here.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-import re
 import hashlib
 import math
 import os

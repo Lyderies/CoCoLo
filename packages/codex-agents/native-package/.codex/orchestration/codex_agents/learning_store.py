@@ -163,7 +163,7 @@ from . import health_resources, health_workspaces, memory_holds
 from .health_monitor import HealthMonitor
 from .ledger_waits import LEDGER_LOCK_WAIT_MS, LEDGER_REQUEST_WAIT_MS  # noqa: F401 -- E1a, named here too
 from .account_claim_contracts import (
-    CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, RECEIPT_DENIAL_CODES, ClaimError, LaunchClaimInput,
+    MAX_CLAIM_INTEGER, RECEIPT_DENIAL_CODES, ClaimError, LaunchClaimInput,
     _DIGEST as _CLAIM_DIGEST, _REQUEST_ID as _CLAIM_REQUEST_ID, _PROJECT as _CLAIM_PROJECT,
     _RUN as _CLAIM_RUN,
     checked_claim_receipt, matches as claim_matches,
@@ -2878,7 +2878,6 @@ class LearningLedger:
     def _summarise_and_remove(self, groups: dict, now: int) -> int:
         """One transaction: each group's summary and removal under its own savepoint."""
         from .contracts import ContractError
-        from .learning_contracts import validate_learning_record
 
         removed = 0
         with self._account_transaction():

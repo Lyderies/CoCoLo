@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .admission_metadata import EVIDENCE_HORIZON_MS, FIVE_HOURS_MS, _headroom_components, _headroom_state
+from .admission_metadata import FIVE_HOURS_MS, _headroom_components, _headroom_state
 from .learning_contracts import content_digest, validate_provider_headroom
 
 CLAUDE_STATUS_RANK = {None: 0, "allowed": 0, "allowed_warning": 1, "rejected": 2}
