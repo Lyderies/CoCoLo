@@ -2024,6 +2024,27 @@ class FloorTests(unittest.TestCase):
                     learning_store.LearningLedger(state)
             self.assertEqual(before, {path: path.read_bytes() for path in before})
 
+    @requirements('RS-B-B4t-3', 'RS-B-B4t-9')
+    def test_a_store_written_by_this_build_refuses_0868_and_0869(self):
+        # IP-D (decision 370): the takeover floor this build writes is its own PACKAGE_VERSION (0.8.70), so the
+        # released 0.8.68 and 0.8.69 builds refuse a store that already carries the unverified marker.
+        from codex_agents import collector_client, project_history
+        from codex_agents.history_contracts import HistoryError
+        with tempfile.TemporaryDirectory(dir='/tmp') as folder:
+            directory = Path(folder).resolve() / 'history'
+            directory.mkdir(mode=0o700)
+            project = 'prj_' + '8' * 32
+            project_history.ProjectHistory(directory, project).close()
+            history = project_history.ProjectHistory(directory, project)
+            self.assertEqual([(1, '0.8.70')], [tuple(r) for r in history._connection.execute('SELECT * FROM runtime_floor')])
+            history.close()
+            before = (directory / 'history.sqlite3').read_bytes()
+            for older in ('0.8.68', '0.8.69'):
+                with mock.patch.object(collector_client, 'PACKAGE_VERSION', older):
+                    with self.assertRaises(HistoryError):
+                        project_history.ProjectHistory(directory, project)
+            self.assertEqual(before, (directory / 'history.sqlite3').read_bytes())
+
     @requirements('RS-B-B4t-3')
     def test_archived_0866_and_0832_cannot_reopen_either_published_store(self):
         from codex_agents import project_history, learning_store

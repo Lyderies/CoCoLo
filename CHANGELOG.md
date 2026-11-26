@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.70: a run the last update could not re-verify is recorded as unverified at hand-over, reported as its own harmless finding instead of an overdue hold, and its settlement is no longer retried against the account (IP-D; decisions 366, 367, 370).
+
 - Package 0.8.69: usage partial reasons now reach reply history, due holds drain at production cadence, low disk refuses new runs and run checks fail closed (IP-C).
 
 - Package 0.8.68: batch of health holds, workspace checks, run retention (indexes in schema 18), usage install and test-speed changes (IP-B).
