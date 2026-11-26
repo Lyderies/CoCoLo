@@ -78,3 +78,22 @@ Mutations (each reverted): a fake `from .health_holds import HoldsCheck` line in
 S13c: `packages/codex-agents/tests/test_lost_run_settlement.py` (test harness code, not product) `start_host_process` now uses `['-B']` when `dispatch_pycache` is None, else `-X pycache_prefix=...` (same fallback as `tests/test_project_driver.py` line 151).
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+## IP-B part 1: S9, S44a, S14b
+
+Merged with `git merge --no-ff` from the local worktree branches (shared object store). VERSION and the runtime digest are not bumped (after S5). The 349 index wiring for S14b is not done (needs S5's schema step). Modules ran with TMPDIR=/tmp/claude-501/batch11, `parallel_tests.py --jobs 4 --module ...`; metadata_errors empty each time.
+
+### S9 (decision 347) - commit 88c7b50c (merged 94a3c1a1)
+- Conflicts: none (automatic).
+- Modules: test_health_ledger, test_health_ledger_fix, test_health_holds, test_lifetime_cap_guard, test_learning_store, test_health_monitor (212 tests, 12.4 s, 0 failed).
+
+### S44a (decision 350) - commit 19b1613d (merged 50bd0ff2)
+- Conflicts: scripts/test-layers.json, test-requirements.json, test-stages.json, test-timings.json (both sides appended at the end of the same object). Resolved as a parsed-JSON union (base/ours/theirs three-way: new keys from both sides kept, no entry dropped, no value conflicts; same indent and escaping as before). Added S44A-1..3 requirements and the test_s44a_usage_install registration beside S9's entries.
+- Because S44a adds reply shapes/refusal steps/service_host ops, ran the op-set, reply-shape and refusal modules too: test_s44a_usage_install, test_b2_service_outcome, test_b2_service_outcome_round2, test_holds_report_socket, test_lifetime_cap_guard, test_reply_shape_compatibility, test_refusal_steps, test_contracts, test_usage_recheck, test_usage_report, test_project_result_usage, test_cli_status_client_boundary, test_health_holds (285 tests, 30.8 s, 0 failed). test_reply_shape_live is a soak module (needs --profile soak) and was not run.
+
+### S14b (decision 349) - commit 850309ef (merged e5a70144)
+- Conflicts: packages/codex-agents/tests/lifetime_caps.json plus the same four scripts/test-*.json files. Resolved by the same three-way parsed-JSON union. lifetime_caps.json: 514 (ours) + new S14b sites = 521 sites, every ours entry byte-for-value unchanged, all theirs entries present, note unchanged. Registry entries added: test_run_retention, test_run_retention_integration, test_run_retention_scale plus S14b requirements.
+- Modules: test_run_retention, _integration, _scale, test_learning_store, test_lifetime_cap_guard, test_health_holds, test_health_workspaces, test_health_ledger, test_health_ledger_fix, test_admission_capture_bytes, test_admission_capture_claim, test_admission_history_growth, test_admission_inputs, test_s44a_usage_install, test_cli_status_client_boundary, test_git_plumbing, test_codex_preparation, test_health_monitor, test_s13d_regressions (443 tests, 42.3 s, 0 failed).
+- Not run (heavy, left to the batch run): test_project_driver, test_project_start, test_project_service_startup, test_lost_run_settlement, test_account_lane_restart and other socket modules S14b touched; test_runtime_release (digest, expected).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
