@@ -1,0 +1,214 @@
+# S12 status
+
+Base `ce81bd96` (0.8.67), branch `feat/s12-lanes`. No VERSION or runtime catalogue edit.
+Codex built it in a sandbox (commit 6251a165); the unsandboxed finish found one product defect
+(below), fixed it, and ran the named modules and `--affected ce81bd96` (results at the end).
+Release acceptance still needs the primary's batch gates and review.
+
+## Fix round
+
+One fixed-scope round for review `040-s12-r1/RESULT-claude.md`
+(`READY-WITH-CORRECTIONS`), starting at `b5936394` on `feat/s12-lanes`.
+Builder rules, review and requirements were read before changes. Requirements
+were clarified first, then the new regressions were run red before runtime edits.
+Changes remain uncommitted in this sandbox. VERSION and the runtime digest
+catalogue are untouched.
+
+All test names in this table are in `tests.test_s12_account_lanes`.
+
+| Requirement / review item | Test | Red -> green evidence |
+| --- | --- | --- |
+| M10, H1c-1 / MED-1 | `S12RestartStatusTests.test_probe_kill_hint_requires_not_reaped_root` | Red: `tree_not_confirmed` status contained `kill 4242`. Green: no `kill` or `you can stop`, group check retained; `not_reaped` still has `kill 4242`. |
+| M10, H1c-1 / MED-1 | `S12RestartStatusTests.test_probe_kill_hint_skips_reaped_root_before_owned_unreaped_root` | Red: chose reaped root 4242. Green: chooses only unreaped root 5151. |
+| S12-N3 / LOW-1 | `S12SettlementLimitTests.test_raw_sqlite_busy_and_locked_remain_retryable_past_record_failure_limit` | Red in all five subcases: only three record attempts. Green: six attempts, zero budget consumption, no denial, one successful settlement after five transient failures. Includes raw `sqlite3.OperationalError('database is locked')`, table-lock text, BUSY, LOCKED and extended LOCKED codes. |
+| S12-N3 / LOW-1 negative control | `S12SettlementLimitTests.test_other_sqlite_operational_errors_still_exhaust_record_budget` | Passed before and after: three record attempts, one denial for `no such table`. Existing SQLReadError busy/value-limit controls remain unchanged and pass. |
+| H1c-3, H1c-1 / LOW-2 | `S12SignatureBirthTests.test_missing_signature_process_record_waits_boundedly_and_names_missing_evidence` | Red: generic status omitted the missing record. Green: ten zero-timeout waits retain custody with named birth/parent process-record evidence, no signal or kill instruction; a successful owned-handle wait plus guarded descendant proof permits exactly one release and closes the pipes. |
+| H1c-3 / LOW-2 | `S12SignatureBirthTests.test_missing_signature_record_and_reaped_root_still_need_descendant_proof` | Red: returned unchecked without waiting. Green: bounded root wait succeeds, but a nonempty group still retains custody. |
+
+The fix preserves the existing `unchecked` reason and descendant-proof gate.
+No schema, persisted record shape, operation, refusal-code set or count-based
+limit changed; copier/backup/move gates and new lifetime-cap entries are not
+triggered. Six tests were added to the already registered integration/scenario
+module; existing requirement links were extended in `scripts/test-requirements.json`.
+No existing assertion changed or was removed; additions are detailed in
+[assertions.md](assertions.md).
+
+Fix-round checks, using the supplied test venv (named modules/classes only):
+
+- Red: `python -B -m unittest tests.test_s12_account_lanes.S12SettlementLimitTests tests.test_s12_account_lanes.S12SignatureBirthTests tests.test_s12_account_lanes.S12RestartStatusTests`
+  from `packages/codex-agents`, with `PYTHONPATH=../../scripts`: 11 tests,
+  nine failing subcase/assertion reports, 0.019 s. Each requested defect was red.
+- Same command after runtime changes: 11 passed, 0.013 s.
+- `tests.test_account_lane_restart.LaneRestartDecisionTests`,
+  `BillingLaneRestartTests.test_N2_status_names_a_held_probe_process` and
+  `SignatureLaneRestartTests.test_N4_a_retained_root_ended_by_the_proof_has_its_pipes_closed`:
+  eight passed, 1.395 s. Existing kill-hint wording and real retained-pipe cleanup pass.
+- Named runner:
+  `python -B scripts/parallel_tests.py --module codex:tests.test_s12_account_lanes --module codex:tests.test_account_restart --module codex:tests.test_lifetime_cap_guard --module codex:tests.test_runtime_release`:
+  42 tests, 124.4 s elapsed, **`metadata_errors: []`**.
+  Restart: 15 passed (0.029 s); lifetime guard: four passed (1.790 s).
+  All six new tests passed in the runner as well.
+- The named runner was **not green**: S12 ran 20 tests in 123.575 s; four existing
+  signature-dependent collector scenarios timed out (five failure reports,
+  including M8 cleanup), also exceeding its 60 s scenario budget. These are the
+  same four scenarios previously documented as sandbox-limited:
+  `S12CollectorLoopTests.test_M8_signature_tree_clears_once_and_next_claim_succeeds`,
+  `test_M9_billing_tree_clears_once_and_next_probe_succeeds`,
+  `test_M10_probe_tree_clears_once_and_next_probe_succeeds`, and
+  `test_Q3_admitted_never_launched_probe_still_spends_bootstrap`.
+  Rerun all of `codex:tests.test_s12_account_lanes` unsandboxed; do not treat the
+  partial requirement failures as release acceptance. No assertion or timeout was loosened.
+- `test_runtime_release`: two passed, one expected digest-pin failure (0.026 s);
+  release bookkeeping belongs to the primary. No full suite or affected run.
+
+No socket or PTY tests were run in this round. The **Exact primary reruns** section
+below lists every socket test by its full module/class/method and the four complete
+modules to run with a short clean `TMPDIR`. Those tests remain required, along
+with the unsandboxed S12 scenario rerun above and the original named lane-module
+gates below. No S12 test needs a PTY.
+
+Fix-round files: `docs/requirements/s12.md`, this `STATUS.md`, `assertions.md`,
+the runtime's `client_runtime.py`, `account_billing_jobs.py`,
+`signature_execution.py`, `packages/codex-agents/tests/test_s12_account_lanes.py`,
+and `scripts/test-requirements.json`.
+
+## Unsandboxed finish (defect found and fixed)
+
+`test_M9_billing_tree_clears_once_and_next_probe_succeeds` and `test_M10_..._next_probe_succeeds` failed at
+`publication.assert_not_called()` (called once). Cause: product, not test. Q3(b) (plan Q3, P:2031-2032, 2045-2046) and the
+`complete_ended` docstring say a lost probe's records commit without the caller's publication callback. The commit path
+still asked it through `_completion` / the records loop -> `account_billing_admission._execution` -> `_original` ->
+`_authorize(reservation.authorize)`; a refusing (lost) caller made the commit raise, so the records were replaced by a denial.
+Publication was not early: it happened at settlement, after the proof cleared. Fix: `_original`/`_execution` take
+`lost=`; `account_billing_execution._completion` and the records loop pass `lost=kept_workspace`, so a lost probe checks
+its project context only. No test edited. Named S12 + 7 billing/owned/signature modules: 265 tests, no failures,
+`metadata_errors: []`.
+
+Affected run `--jobs 6 --affected ce81bd96` after the fix: 499 units (claude 134, codex 6467, root 1179 tests), only
+`codex:tests.test_runtime_release` failed (runtime digest, primary owns release bookkeeping); `metadata_errors: []`,
+`requirement_failures: []`. The known L15.1 flake did not occur.
+
+## Requirement evidence
+
+Test names below are in `tests.test_s12_account_lanes` unless another module is named.
+
+| Requirement | Test and evidence |
+| --- | --- |
+| M8 | `S12CollectorLoopTests.test_M8_signature_tree_clears_once_and_next_claim_succeeds`: real collector main loop, inconclusive signature proof then clear, idempotent next claim; blocked at the replacement helper by nested sandbox denial. Existing lane decision assertions pass. |
+| M9 | `S12CollectorLoopTests.test_M9_billing_tree_clears_once_and_next_probe_succeeds`: real probe jobs, exactly one settlement and next probe after reopening; blocked before injected model cleanup because signature helpers cannot enter their sandbox. |
+| M10 | `S12RecheckProofTests.test_fresh_proof_requires_group_session_and_marker_empty_and_never_signals`: red (never released) then green. Active/unreturned/container/foreign-birth and unreadable process negative controls pass. Full M10 collector scenario remains blocked by signature confinement. |
+| H1c-1 | `S12RestartStatusTests.test_admitted_probe_wait_names_process_without_clearing_its_hold` passes; off-branch `test_account_lane_restart.BillingLaneRestartTests.test_N2_status_names_a_held_probe_process` red then green. |
+| H1c-3 | `S12CollectorLoopTests.test_H1c_3_every_lane_child_must_clear_before_restart` passes through production collector main and real ledger; signature/probe/observation proofs clear on separate passes. `S12SignatureBirthTests.test_signature_restart_never_signals_a_root_with_unconfirmed_birth` red for all three adverse identities then green. Ported N4 pipe closure red then green. |
+| B0-6 account rows (`S12-B0-6` registry scope) | All-lane collector wait passes. M8/M9/M10 collector scenarios assert no early settlement, exactly one eventual settlement, no repeated settlement on later passes and working replacement. Full lane scenarios require primary rerun. |
+| E1b-1 | SQL trace of opening, collector checks, close and reopening stays on the opening thread. All-lane collector trace passes. Four named owner-wiring tests pass (below); per-lane end-to-end traces are blocked with their helpers. |
+| S12-N1 | `test_account_lane_restart.ObservationGroupTests.test_N1_a_child_the_probe_reaped_itself_never_has_its_group_killed`: red (unrelated process killed), then green. |
+| S12-N3 | `S12SettlementLimitTests.test_record_retry_limit_denies_once_and_later_passes_do_not_retry_records`: red (10 record calls), then green (3 record attempts, transient denial retried, one successful settlement). Busy record reads succeed on attempt 6. Oversized record reads: red (10), green (3, one denial). Ten owner passes exceed the new bound. |
+| Q3 preserved | M9/M10 collector scenarios check that the lost caller callback is not called, valid records settle, and replay returns its kept answer. `S12CollectorLoopTests.test_Q3_admitted_never_launched_probe_still_spends_bootstrap` adds the explicit bootstrap negative control. Existing M10/M5 replay and cooldown assertions remain unchanged. Signature-dependent checks require primary rerun. |
+
+## Completed local checks
+
+- First named lane-module run against unchanged runtime: 32 tests, expected N1–N4
+  failures plus environment timeouts; metadata validation was clean, 246 s elapsed.
+- Focused N1/N4/status/proof/retry checks: 8 tests passed, 1.886 s.
+- Focused all-lane collector/birth/proof/retry plus existing lane decisions:
+  16 tests passed, 2.283 s.
+- Expanded retry/status/proof/birth/all-lane collector checks: 9 tests passed, 0.492 s.
+- `test_ledger_owner_wiring.LedgerOwnerWiringTests` methods
+  `test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close`,
+  `test_transaction_rechecks_are_one_request_and_revocation_rolls_back`,
+  `test_handler_refusal_preserves_answer_and_next_request_runs`,
+  `test_exit_is_recorded_after_final_handled_request`: 4 passed, 0.257 s.
+- `test_collector_exit.CollectorMainTests`, `ExitRecordTests`, and the two socket-free
+  `EmptyReplyTests`: 26 passed, 0.087 s. The existing M8 collector test initially
+  exposed a missing optional status callback; compatibility was fixed without changing its assertions.
+- Three `test_account_observation_jobs.AccountObservationJobTests` methods:
+  `test_held_project_probe_cannot_block_second_project_probe_or_account_read`,
+  `test_active_cancel_keeps_quota_until_actual_return_and_reply_retirement`,
+  `test_H1a_a_worker_fault_is_published_by_the_worker_while_the_owner_does_not_drive`:
+  3 passed, 0.808 s.
+- `test_account_restart` and `test_lifetime_cap_guard`: all 19 tests pass in the named runner.
+- Named `test_owned_execution` + `test_billing_probe_worker`: 109 tests, 58 failures,
+  3 errors, 28.997 s. An isolated archive of unchanged `ce81bd96` produced the same
+  totals (109 / 58 / 3, 36.574 s). These are environment-limited, not a green gate.
+- `test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version`
+  fails as expected because runtime changed and the primary owns release bookkeeping.
+- Final named run of S12, restart, lifetime guard and release pin: 123.7 s,
+  `metadata_errors: []`. S12's four signature-dependent scenarios timed out;
+  the release pin failed as expected. Restart and lifetime guard passed.
+- Final normal-proof guard refinement: 10 focused tests passed, 0.493 s,
+  including the new red-to-green negative control for known live descendants
+  and irrecoverable tracking loss. Fresh rechecks call the normal cleanup proof.
+- Final metadata follow-up via the named restart and lifetime modules: both pass,
+  1.594 s, `metadata_errors: []` after registering the final negative-control test.
+- Final bounded-wait N1/N4 rerun: 2 passed, 0.917 s.
+- No socket or PTY test was attempted. No full suite or `--affected` run was attempted.
+
+The nested macOS confinement probe reports `sandbox_apply: Operation not permitted`.
+Real model/tag scanning is also restricted here. Existing assertion changes and fixture
+adaptations are listed in [assertions.md](assertions.md). No durable schema, refusal-code
+set or record format changed; copier/backup/move enumeration gates are not triggered.
+
+## Exact primary reruns
+
+Use the test venv as `$PY`, a short clean `TMPDIR`, and the named module runner.
+Run these modules separately (or in bounded named batches), unsandboxed:
+
+```sh
+$PY -B scripts/parallel_tests.py --module codex:tests.test_s12_account_lanes
+$PY -B scripts/parallel_tests.py --module codex:tests.test_account_lane_restart
+$PY -B scripts/parallel_tests.py --module codex:tests.test_account_billing_jobs
+$PY -B scripts/parallel_tests.py --module codex:tests.test_account_billing_execution
+$PY -B scripts/parallel_tests.py --module codex:tests.test_account_billing_admission
+$PY -B scripts/parallel_tests.py --module codex:tests.test_owned_execution
+$PY -B scripts/parallel_tests.py --module codex:tests.test_billing_probe_worker
+$PY -B scripts/parallel_tests.py --module codex:tests.test_signature_execution
+```
+
+Socket-dependent tests that must run unsandboxed (not run here):
+
+- Every test in `tests.test_account_host.AccountHostTests`:
+  `test_status_reads_owner_key_through_the_enrolled_account_host`,
+  `test_the_owners_terminal_reads_status_and_nothing_that_spends`,
+  `test_a_key_added_after_the_collector_opened_the_ledger_is_recorded`,
+  `test_a_key_reader_without_write_access_and_a_stopped_collector_get_nothing`,
+  `test_the_collector_releases_the_ledger_promptly_after_a_shutdown_request`.
+- `tests.test_account_observation_jobs.AccountObservationJobTests.test_actual_account_client_round_trip_through_original_account_ingress`.
+- `tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_all_sql_from_open_through_close_has_one_owner`.
+- `tests.test_ledger_owner_wiring.LedgerOwnerHostProcessTests.test_review_production_connection_refuses_every_use_from_another_thread`.
+- `tests.test_ledger_owner_wiring.LedgerOwnerHostProcessTests.test_review_host_loop_drains_ready_requests_each_pass`.
+- `tests.test_collector_exit.EmptyReplyTests.test_C11_an_account_that_closes_the_connection_is_reported_as_such`.
+- `tests.test_collector_exit.CollectorExitProcessTests` methods (including inherited methods):
+  `test_S1_U9a_status_reports_how_long_each_start_up_phase_took`,
+  `test_C10_a_signal_is_recorded`,
+  `test_C10_a_shutdown_request_is_recorded`,
+  `test_C10_an_error_in_the_account_loop_is_recorded_without_its_message`,
+  `test_H1c_3_a_stuck_account_with_nothing_running_stops_itself_and_records_why`,
+  `test_E1_the_last_self_restart_is_shown_from_start_up`,
+  `test_C10a_an_error_in_the_collector_thread_is_recorded`,
+  `test_C10c_an_exception_that_is_false_is_still_recorded_and_the_ledger_released`,
+  `test_C10a_a_removed_socket_is_recorded`,
+  `test_SD3_1_a_signal_while_a_health_note_is_published_still_stops_the_collector`,
+  `test_SD3_2_a_signal_whose_exception_is_swallowed_still_stops_the_collector`,
+  `test_SD3_3_a_lost_signal_in_a_step_that_never_returns_is_ended_within_the_bound`,
+  `test_status_reads_owner_key_through_the_enrolled_account_host`,
+  `test_the_owners_terminal_reads_status_and_nothing_that_spends`,
+  `test_a_key_added_after_the_collector_opened_the_ledger_is_recorded`,
+  `test_a_key_reader_without_write_access_and_a_stopped_collector_get_nothing`,
+  `test_the_collector_releases_the_ledger_promptly_after_a_shutdown_request`.
+
+The primary should run the complete named modules `test_account_host`,
+`test_account_observation_jobs`, `test_ledger_owner_wiring`, and `test_collector_exit`
+to include those socket cases. No S12 test needs a PTY. The plan also requires local
+macOS/Linux lifecycle evidence, other-provider review and batch gates; none is claimed here.
+
+## Files changed
+
+Runtime files under the orchestration package: `account_billing_jobs.py`,
+`account_host.py`, `account_observation_jobs.py`, `account_restart.py`,
+`client_runtime.py`, `owned_execution.py`, `process_tree.py`,
+`signature_execution.py`, and `collector_host.py`.
+Tests: `test_account_lane_restart.py`, new `test_s12_account_lanes.py`,
+`lifetime_caps.json`. Metadata: `scripts/test-layers.json`,
+`test-stages.json`, `test-timings.json`, `test-requirements.json`, and
+`tests/requirements/s12.json`. Documentation: `docs/requirements/s12.md`,
+this status, and `assertions.md`.

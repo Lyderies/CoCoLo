@@ -113,6 +113,11 @@ def unended_children(pool, workers, observations=None):
     return sorted(unended_processes(pool, workers, observations))
 
 
+def held_processes(workers):
+    """Retained probe models behind admitted rows, for a waiting restart's status."""
+    return [{'lane': name, **item} for name, items in unended_processes(None, workers).items() for item in items]
+
+
 def account_endpoint(state):
     return account_endpoint_path(state)
 
@@ -304,6 +309,10 @@ class AccountServiceHost:
         """O0c M8-M10: see `unended_processes`; the self-restart asks this on the owner thread."""
         self._owner()
         return unended_processes(self._claims and self._claims._pool, self._workers, self._observations)
+
+    def held_processes(self):
+        self._owner()
+        return held_processes(self._workers)
 
     def serve_once(self):
         self._owner()

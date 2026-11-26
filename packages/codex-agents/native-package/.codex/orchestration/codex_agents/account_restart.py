@@ -75,7 +75,7 @@ def decide(notes, idle, previous, *, now_ms, mono_ns=None):
     return {'action': 'restart', 'lane': lane, 'cause': cause, 'held': held}
 
 
-def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None, read_children=None):
+def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None, read_children=None, read_held=None):
     """The decision from callables that may fail: notes that cannot be read never restart; a ledger
     that cannot say means wait (H1c-6). Never raises.
 
@@ -97,6 +97,22 @@ def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None, read_childre
     except Exception:
         return {'action': 'ok', 'lane': None, 'cause': None, 'held': None}
     if decision['action'] != 'restart':
+        # An admitted probe vetoes before the final child gate, but status must
+        # still name its retained model and the owner's next recovery step.
+        if decision['action'] == 'wait' and read_held is not None:
+            try:
+                items = read_held()
+                if type(items) is not list:
+                    raise ValueError()
+                grouped = {}
+                for item in items:
+                    if type(item) is not dict or set(item) != {'lane', 'pid', 'why'}:
+                        raise ValueError()
+                    grouped.setdefault(item['lane'], []).append({'pid': item['pid'], 'why': item['why']})
+                _, processes = _children(grouped)
+                decision = {**decision, 'held': {**decision['held'], 'processes': processes}}
+            except Exception:
+                pass  # Missing display evidence never clears a wait.
         return decision
     try:
         pending, processes = _children(read_children())

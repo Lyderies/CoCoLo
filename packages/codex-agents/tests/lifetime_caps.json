@@ -2140,6 +2140,11 @@
    "checks": 1,
    "ends": "HM-2a: MAX_MARKER_BYTES is a size check on the owner marker read once more just before it is removed (to put it back if the folder's rmdir fails); not a count, nothing is kept",
    "test": "test_HM2A_6_a_folder_rmdir_failing_after_its_marker_went_is_still_resumed"
+  },
+  "account_billing_jobs.py::_settle_ended": {
+   "checks": 2,
+   "ends": "S12 N3: three non-transient record failures per unknown job, then denial; busy SQL never consumes the budget. Failed denial retries without repeating exhausted record attempts. Settled jobs never retry. The counter ends with the job at account replacement.",
+   "test": "test_record_retry_limit_denies_once_and_later_passes_do_not_retry_records"
   }
  }
 }

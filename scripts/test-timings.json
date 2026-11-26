@@ -3166,5 +3166,6 @@
  "root:test_setup_wizard_terminal": 0.06,
  "root:test_test_stages": 2.03,
  "root:test_wizard_clock": 0.27,
- "codex:tests.test_health_holds": 1.1
+ "codex:tests.test_health_holds": 1.1,
+ "codex:tests.test_s12_account_lanes": 15.0
 }

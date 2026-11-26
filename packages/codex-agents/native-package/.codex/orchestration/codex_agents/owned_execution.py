@@ -850,6 +850,16 @@ class OwnedExecutionRegistry:
         process = entry.process
         if process is None:
             return {"pid": None, "why": "no_handle"}
+        # Only the returned worker's original local execution can be rechecked.
+        # Container custody requires its separate container-gone proof. Never
+        # poll, wait or signal a PID that was reaped on an earlier pass.
+        tree = entry.tree
+        if (entry.state == "unknown" and entry.worker_returned and entry.cleanup_started
+                and entry.container is None and type(tree) is ProcessTree
+                and entry.birth is not None and tree.root_birth == entry.birth
+                and tree.ended_after_reap(process)):
+            entry.state = "cleaned"
+            return None
         pid = getattr(process, "pid", None)
         pid = pid if type(pid) is int else None
         return {"pid": pid, "why": "not_reaped" if getattr(process, "returncode", None) is None

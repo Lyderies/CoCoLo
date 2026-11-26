@@ -794,6 +794,24 @@ class ProcessTree:
             stopped or identity == root for identity, stopped in self._cleanup_seen.items()
         ) and self._no_tagged_process()
 
+    def ended_after_reap(self, process) -> bool:
+        """Fresh, read-only proof for an owned root reaped on an earlier pass.
+
+        Earlier snapshots can be inconclusive. Reuse normal tracked-tree cleanup
+        proof and additionally prove its group and session empty now. No signal
+        is sent: the reaped PID may already identify someone else's process.
+        An untagged or unidentified tree cannot recover lost tracking this way.
+        The registry must still check its original Popen/tree custody and birth.
+        """
+        if (not self.identified or type(self.root_birth) is not str
+                or type(self.run_tag) is not str or RUN_TAG.fullmatch(self.run_tag) is None
+                or process.pid != self.root or type(process.returncode) is not int
+                or not group_empty(self.root)):
+            return False
+        from .launch_journal import _session_members
+        members = _session_members({self.root}, {self.root: self.root_birth})
+        return members is not None and not members and self.cleanup_after_owned_wait(process)
+
     def _no_tagged_process(self) -> bool:
         """No process outside the tracked tree still carries this run's marker.
 

@@ -173,7 +173,7 @@ class AccountBillingExecutions:
         return self._workers.supervisor(job.worker)
 
     def _completion(self, job, kept_workspace=False):
-        inputs, row = self._owner._execution(job.permit)
+        inputs, row = self._owner._execution(job.permit, lost=kept_workspace)
         if inputs is not job.inputs or job.state != 'offered' or job.ticket is None:
             raise ProbeAdmissionError('probe_conflict')
         packet = self._workers.packet(job.worker)
@@ -247,7 +247,7 @@ class AccountBillingExecutions:
             for record in records:
                 ledger._append_checked_locked(row['project_id'], record, producer='provider',
                                                timestamp=record['observed_at_ms'])
-                owner._execution(job.permit)
+                owner._execution(job.permit, lost=kept_workspace)
                 references.append({'project_id': row['project_id'], 'record_id': record['record_id'],
                                    'content_digest': content_digest(record)})
             if self._completion(job, kept_workspace) != (row, packet, identity, records, digest):

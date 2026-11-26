@@ -411,5 +411,6 @@
  "root:test_e2e_owner_load": "unit",
  "codex:tests.test_health_holds": "scenario",
  "codex:tests.test_project_host_start_cost": "scenario",
- "codex:tests.test_health_workspaces": "scenario"
+ "codex:tests.test_health_workspaces": "scenario",
+ "codex:tests.test_s12_account_lanes": "scenario"
 }

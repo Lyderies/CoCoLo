@@ -411,5 +411,6 @@
  "root:test_e2e_owner_load": "unit",
  "codex:tests.test_health_holds": "integration",
  "codex:tests.test_project_host_start_cost": "integration",
- "codex:tests.test_health_workspaces": "integration"
+ "codex:tests.test_health_workspaces": "integration",
+ "codex:tests.test_s12_account_lanes": "integration"
 }

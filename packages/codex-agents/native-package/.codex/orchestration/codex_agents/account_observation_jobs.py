@@ -109,14 +109,16 @@ def _worker(slot):
 
 
 def _end_this_probe(slot, started):
-    """O0c review M4: right after its probe, end what it started: each child's group is killed when it
-    was not reaped, and what is left in a reaped child's group (its id cannot have been reused yet) is
-    killed too; each is then reaped and its group checked empty. Unproven ones stay for the restart's
+    """O0c review M4: right after its probe, end what it started: each child's group is killed only
+    while the root is unreaped by this process; it is then reaped and its group checked empty.
+    An earlier-reaped child is checked without signalling. Unproven ones stay for the restart's
     check. Never raises; the probe is no longer running afterwards."""
     try:
         with slot.custody:
             children = slot.children[started:]
-        _end_children(slot, children, wait_s=5, right_after=True)
+        # The provider may already have waited for this child. Only end_child's
+        # own wait can authorize its immediate post-reap group cleanup.
+        _end_children(slot, children, wait_s=5, right_after=False)
     except Exception:  # noqa: BLE001 - what is not proven stays listed
         pass
     finally:
