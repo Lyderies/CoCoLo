@@ -57,8 +57,15 @@ class FenceRegressionTests(unittest.TestCase):
                     "SELECT 1 FROM sqlite_master WHERE name='runtime_takeover'").fetchone())
         finally:
             os.close(descriptor)
-        for epoch in (1, 2):
-            ledger = learning_store.LearningLedger(self.state)
+        # Decision 352 (S14b-6): the epoch-only 16 -> 17 step needs no record consent (RSF-S2); the 17 -> 18 step
+        # (with its retention indexes) does, so an unconsented open stops at 17 with epoch 1, records intact.
+        with self.assertRaisesRegex(learning_store.LedgerError, 'owner authorization'):
+            learning_store.LearningLedger(self.state)
+        with closing(sqlite3.connect(self.state.database)) as connection:
+            self.assertEqual((17, 1), (connection.execute('PRAGMA user_version').fetchone()[0],
+                                       connection.execute('SELECT epoch FROM runtime_takeover').fetchone()[0]))
+        for epoch in (2,):
+            ledger = learning_store.LearningLedger(self.state, allow_schema_upgrade=True)
             try:
                 self.assertEqual(18, ledger._connection.execute('PRAGMA user_version').fetchone()[0])
                 self.assertEqual(epoch, ledger._connection.execute('SELECT epoch FROM runtime_takeover').fetchone()[0])

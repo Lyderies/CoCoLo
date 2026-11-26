@@ -3368,6 +3368,12 @@ class LearningLedger:
                     and check_billing_probe_coverage(self._connection)
                     and check_admission_evidence_coverage(self._connection)):
                 raise LedgerError('run hold migration validation is unavailable or incompatible')
+            if target_version == 18:
+                # Decision 352 (S14b-6): the five retention indexes are part of the schema-18 layout and are
+                # created before the progress table is dropped, in the transaction that clears the pending
+                # marker, so "18 and not pending" always implies the five (idempotent on a resumed pass).
+                from .run_retention import create_index_statements
+                create_index_statements(self._connection)
             migration.finish()
         finally:
             self._connection._hold_migration = None
@@ -3535,7 +3541,7 @@ class LearningLedger:
             _resume_predecessor_migration(self)
             current = self._connection.execute('PRAGMA user_version').fetchone()[0]
         if current == 17:
-            if not self._allow_schema_upgrade and initial not in (0, 16):
+            if not self._allow_schema_upgrade and initial != 0:
                 raise LedgerError('ledger schema upgrade requires owner authorization')
             with self._account_transaction():
                 if not retained_authority:
@@ -3545,11 +3551,9 @@ class LearningLedger:
                 self._adopt_runtime_lineage_locked()
                 self._initialize_run_holds_locked(target_version=18)
                 self._validate_current_ledger()
-                # Decision 352 (S14b-6): the five retention indexes are part of the schema-18 layout. A fresh create
-                # and the consented 17 -> 18 step (any start version) add them in this same transaction, so a
-                # failure rolls back with the version; a plain open of an existing 18 ledger creates nothing.
-                from .run_retention import create_index_statements
-                create_index_statements(self._connection)
+                # Decision 352 (S14b-6): the five retention indexes are created inside the hold step above (in
+                # the transaction that clears its pending marker), so a fresh create and the consented 17 -> 18
+                # step end with them and a plain open of an existing 18 ledger creates nothing.
                 self._connection.execute('PRAGMA user_version=18')
         elif current == 18:
             if not pending(self._connection):

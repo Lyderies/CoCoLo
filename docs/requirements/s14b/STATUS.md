@@ -258,3 +258,6 @@ the explicit `--upgrade-ledger` `create_retention_indexes()` (idempotent, consen
   `test_a_schema_16_ledger_migrated_through_17_gets_the_indexes`,
   `test_a_failure_on_the_third_index_leaves_17_with_no_index_and_a_retry_gets_all_five`,
   `test_learning_migrate_status_on_an_offline_schema_17_ledger_changes_nothing`; the migrate and plain-open tests stay.
+
+## Part 2e (decision 352, r2c fixes)
+Indexes are created in the hold step's final transaction (before the progress table drops) so chunked migrations cannot leave 18/not pending without five; 17 -> 18 needs consent for every start version except a fresh create. Done and committed; see docs/batch-0868-merge.md part 2e and assertions.md.

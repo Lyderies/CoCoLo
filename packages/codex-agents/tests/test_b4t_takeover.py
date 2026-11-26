@@ -3070,7 +3070,7 @@ class AmendmentA1Tests(unittest.TestCase):
             code='import sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from codex_agents.learning_store import LearningLedger,LearningState;owner=LearningLedger(LearningState(Path(sys.argv[2])));owner.register_project(Path(sys.argv[3]));owner.close()'
             made=subprocess.run([sys.executable,'-B','-c',code,str(runtime),str(state),str(project)],capture_output=True,text=True,timeout=20)
             self.assertEqual(0,made.returncode,made.stderr)
-            with closing(LearningLedger(LearningState(state))) as owner:
+            with closing(LearningLedger(LearningState(state), allow_schema_upgrade=True)) as owner:  # 352: 17 -> 18 is consented
                 self.assertEqual(18,owner._connection.execute('PRAGMA user_version').fetchone()[0])
                 self.assertEqual({'project_wake','project_wake_instances','project_starts'},set(LOCAL_TABLE_COLUMNS))
                 for table in LOCAL_TABLE_COLUMNS:

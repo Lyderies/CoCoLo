@@ -1554,7 +1554,7 @@ class ReleasedLedgerUpgradeTests(upgrade_tests.Fixture, unittest.TestCase):
         self.assertFalse({'project_wake', 'project_starts'} & tables)  # the released schema, before E2a and E2c
         state = LearningState(self.state, create=False)
         for _ in range(2):  # opened twice: the migration is idempotent
-            with contextlib.closing(LearningLedger(state)) as ledger:
+            with contextlib.closing(LearningLedger(state, allow_schema_upgrade=True)) as ledger:  # 352: 17 -> 18 is consented
                 for table, columns in self.EXPECTED.items():
                     have = {row[1] for row in ledger._connection.execute(f'PRAGMA table_info({table})')}
                     self.assertLessEqual(columns, have, table)

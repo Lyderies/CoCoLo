@@ -4907,6 +4907,7 @@
  "S14b-6": {
   "checks": [
    "codex:tests.test_b4t_takeover.AccountLineageTests.test_S14b_6_takeover_adoption_keeps_the_retention_indexes_of_the_consented_step",
+   "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_a_chunked_hold_migration_never_leaves_18_not_pending_without_the_five_indexes",
    "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_a_failure_on_the_third_index_leaves_17_with_no_index_and_a_retry_gets_all_five",
    "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_a_fresh_ledger_is_created_with_the_five_indexes_and_retention_is_ready",
    "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_a_schema_16_ledger_migrated_through_17_gets_the_indexes",
@@ -4914,7 +4915,8 @@
    "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_learning_migrate_status_on_an_offline_schema_17_ledger_changes_nothing",
    "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_learning_migrate_that_performs_the_schema_step_creates_the_indexes",
    "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_offline_register_upgrade_ledger_performs_17_to_18_with_the_indexes",
-   "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_registration_with_a_running_collector_keeps_the_indexes_of_the_consented_step"
+   "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_registration_with_a_running_collector_keeps_the_indexes_of_the_consented_step",
+   "codex:tests.test_s14b_upgrade_indexes.UpgradeCreatesRetentionIndexesTests.test_schema_16_without_consent_goes_no_further_than_17_and_creates_no_index"
   ],
   "source": "tests/requirements/s14b.json#S14b-6",
   "statement": "Retention indexes are created inside the consented records-upgrade step (the ledger 17->18 open of --upgrade-ledger, and the B4t takeover adoption) on every path that performs it; a plain or unconsented open creates none; registration with a running collector leaves them in place (decision 349)."

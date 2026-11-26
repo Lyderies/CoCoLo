@@ -176,3 +176,22 @@ the 17 -> 18 step does. The takeover test's "5 before adoption" is unchanged (st
   creates none, an idle pass issues no statement, and `create_retention_indexes` enables retention. Reason: decision
   352 refined; the old fresh-has-none premise is exactly the "fresh install never retains" gap.
 - `test_s14b_upgrade_indexes` setUp: now drops the five indexes of its fresh fixture ledger before each test (was: asserted a plain open made none).
+
+## S14b-6 part 2e (decision 352, Codex merge review r2c)
+
+- `test_run_retention...test_plain_open_makes_no_index_and_the_consented_step_enables_retention_with_a_silent_idle`
+  (S14b-3, LOW): old "drop the five indexes, refresh `probe`, assert 0" -> new "drop them, CLOSE and ordinarily REOPEN
+  the ledger, refresh `probe` on the reopened ledger, assert 0": an existing-18 plain open that recreated indexes now fails it.
+- `test_rsf_s2_regressions...test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent`
+  (RSF-S2): old "two default opens of a schema-16 ledger each reach 18 (epochs 1, 2)" -> new "a default open takes 16 -> 17
+  (epoch 1, records intact) and refuses 'owner authorization'; a consented open reaches 18 (epoch 2)". Reason: the RSF-S2
+  basis (STATUS.md fix-round 1/2) exempts only the epoch-only 16 -> 17 step from record consent; 17 -> 18 carries the
+  retention indexes and needs consent (352).
+- `test_upgrade_handover` Earlier0855/Earlier0858 `test_registering_stops_a_running_earlier_collector_and_completes`: old
+  "learning-register of a schema-16 ledger completes" -> new "with `--upgrade-ledger`" (run_cli takes extra args).
+- `test_b4t_takeover...test_released_0859_owner_upgrade_preserves_project_local_enumeration` and
+  `test_project_start...test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build`: old default open of a
+  schema-16 ledger -> new `allow_schema_upgrade=True` (same assertions after the open).
+- Added: `test_s14b_upgrade_indexes` `test_a_chunked_hold_migration_never_leaves_18_not_pending_without_the_five_indexes`
+  (65 probe requests, third-index failure; red on 79341664: retry ended 18, not pending, 0 indexes) and
+  `test_schema_16_without_consent_goes_no_further_than_17_and_creates_no_index` (red: reached 18).

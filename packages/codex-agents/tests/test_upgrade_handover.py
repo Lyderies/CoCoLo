@@ -45,10 +45,10 @@ class Fixture:
                     "TMPDIR": str(self.base), "PYTHONDONTWRITEBYTECODE": "1"}
         self.addCleanup(self.stop_collector)
 
-    def run_cli(self, cli):
+    def run_cli(self, cli, *extra):
         return subprocess.run(
             [sys.executable, "-B", str(cli), "learning-register",
-             "--state-root", str(self.state), "--project-root", str(self.project)],
+             "--state-root", str(self.state), "--project-root", str(self.project), *extra],
             env=self.env, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
 
     def frame(self, request):
@@ -132,7 +132,8 @@ class EarlierCollectorMixin(Fixture):
 
     def test_registering_stops_a_running_earlier_collector_and_completes(self):
         self.assertEqual(self.OLD_VERSION, self.reported_version())
-        done = self.run_cli(ORCHESTRATION / "cli.py")
+        # Decision 352 (S14b-6): the schema-16 ledger's 17 -> 18 step (with its retention indexes) needs the owner's consent.
+        done = self.run_cli(ORCHESTRATION / "cli.py", "--upgrade-ledger")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         report = json.loads(done.stdout)
         self.assertTrue(report["ready"], report)

@@ -410,6 +410,12 @@ class RunRetentionTests(unittest.TestCase):
         self.assertEqual(5, db.execute(f"SELECT count(*) FROM sqlite_master WHERE name IN ({names})").fetchone()[0])
         for name in run_retention.RETENTION_INDEX_NAMES:
             db.execute(f'DROP INDEX {name}')
+        # An ordinary open of the existing schema-18 ledger must not recreate them (S14b-3, decision 352).
+        ledger.close()
+        reopened = learning_store.LearningLedger(plain.state, client_capabilities=plain.clients)
+        plain.ledger = reopened
+        self.addCleanup(reopened.close)
+        ledger, db = reopened, reopened._connection
         run_retention.probe(ledger)
         self.assertEqual(0, db.execute(f"SELECT count(*) FROM sqlite_master WHERE name IN ({names})").fetchone()[0])
         store_product_row(ledger, plain.project_a_id, identity('old'))

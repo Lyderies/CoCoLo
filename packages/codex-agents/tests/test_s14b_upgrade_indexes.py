@@ -97,6 +97,54 @@ class UpgradeCreatesRetentionIndexesTests(unittest.TestCase):
         LearningLedger(state, allow_schema_upgrade=True).close()
         self.assertEqual((18, 5), (self.user_version(), index_count(self.database)))
 
+    def committed_probes(self, count):
+        """`count` finished probe requests: more than one hold-migration batch (64) of hold-source rows."""
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            for number in range(count):
+                key = f'committed-{number:04d}'.ljust(64, '0')
+                db.execute('INSERT INTO account_billing_probe_origins VALUES(?,?,?,?,?)',
+                           (self.cli.project_id, key, 'p' * 64, 1, 's' * 64))
+                db.execute('INSERT INTO account_billing_probe_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (self.cli.project_id, key, 'p' * 64, 'r' * 64, 'c' * 64, 1, 2, 'committed', None, None, None,
+                     '[]', 's' * 64))
+            db.commit()
+
+    def state_of(self):
+        with closing(sqlite3.connect(f'file:{self.database}?mode=ro', uri=True)) as db:
+            pending = db.execute("SELECT 1 FROM sqlite_master WHERE name='hold_migration_progress'").fetchone()
+            return db.execute('PRAGMA user_version').fetchone()[0], pending is not None, index_count(self.database)
+
+    @requirements('S14b-6')
+    def test_a_chunked_hold_migration_never_leaves_18_not_pending_without_the_five_indexes(self):
+        from unittest import mock
+        self.committed_probes(65)
+        self.set_version(17)
+        state = LearningState(self.state_root, create=False)
+        broken = (run_retention.PROTECTION_INDEXES[0], 'CREATE INDEX no_such_index ON no_such_table(x)',
+                  *run_retention.PROTECTION_INDEXES[1:])
+        with mock.patch.object(run_retention, 'PROTECTION_INDEXES', broken):
+            with self.assertRaises(Exception):
+                LearningLedger(state, allow_schema_upgrade=True)
+        version, pending, count = self.state_of()
+        self.assertFalse(version == 18 and not pending and count != 5, (version, pending, count))
+        LearningLedger(state, allow_schema_upgrade=True).close()
+        self.assertEqual((18, False, 5), self.state_of())
+
+    @requirements('S14b-6')
+    def test_schema_16_without_consent_goes_no_further_than_17_and_creates_no_index(self):
+        self.set_version(16)
+        state = LearningState(self.state_root, create=False)
+        try:
+            LearningLedger(state, allow_schema_upgrade=False).close()
+        except Exception:
+            pass  # a refusal is as good as stopping at 17: what matters is the state left behind
+        version, _, count = self.state_of()
+        self.assertLessEqual(version, 17)
+        self.assertEqual(0, count)
+        LearningLedger(state, allow_schema_upgrade=True).close()
+        self.assertEqual((18, False, 5), self.state_of())
+
     @requirements('S14b-6')
     def test_learning_migrate_status_on_an_offline_schema_17_ledger_changes_nothing(self):
         import subprocess, sys
