@@ -440,5 +440,7 @@
  "codex:tests.test_s15_reservation_recovery": "integration",
  "codex:tests.test_s15_settlement_matrix": "integration",
  "codex:tests.test_s15_release_paths": "integration",
- "codex:tests.test_s15_session_caps": "integration"
+ "codex:tests.test_s15_session_caps": "integration",
+ "codex:tests.test_s15_contract_caps": "integration",
+ "codex:tests.test_s15_probe_caps": "integration"
 }

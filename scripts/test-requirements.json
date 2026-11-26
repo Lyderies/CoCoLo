@@ -5220,6 +5220,13 @@
  },
  "S15-O0C-BINDINGS": {
   "checks": [
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_clean_depth_crosses_limit_and_later_shallow_values_still_work",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_escalation_ladder_crosses_reduced_limit_before_any_selection",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_exit_locations_cross_reduced_limit_without_losing_valid_records",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_proof_pruning_bounds_each_pass_and_drains_past_the_limit",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_provider_model_and_helper_arrays_cross_reduced_limits",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_request_codecs_accept_exact_frame_and_refuse_one_byte_past",
+   "codex:tests.test_s15_contract_caps.ContractCapTests.test_signature_writer_refuses_actual_bytes_past_each_independent_budget",
    "codex:tests.test_s15_session_caps.SessionCapTests.test_day_scan_stops_at_two_of_three_real_days_and_can_scan_again",
    "codex:tests.test_s15_session_caps.SessionCapTests.test_folder_entry_scan_stops_with_more_real_entries_than_the_limit",
    "codex:tests.test_s15_session_caps.SessionCapTests.test_recent_session_scan_reads_only_two_of_three_real_rollouts",
@@ -5228,7 +5235,7 @@
    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_native_cursor_tracker_closes_the_first_cursor_past_its_limit"
   ],
   "source": "tests/requirements/s15.json#S15-O0C-BINDINGS",
-  "statement": "O0c: real populations beyond reduced session directory, day, setup-project, rollout-read, fair-queue and SQLite cursor count limits demonstrate bounded work or refusal, with subsequent scanning/admission/read scopes usable."
+  "statement": "O0c / decision 382: real populations and bytes beyond reduced session scans, queues, SQLite cursors, request frames, recursive cleaning, exit locations, usage arrays, escalation ladders and proof-pruning limits demonstrate bounded work or refusal and usable later scopes."
  },
  "S15-RS8-RELEASE-PATHS": {
   "checks": [
@@ -5244,5 +5251,13 @@
   ],
   "source": "tests/requirements/s15.json#S15-O0C-FIRST-RECORD",
   "statement": "O0c / decision 382: the session first-record parser accepts an exact MAX_FIRST_RECORD_BYTES JSON record and refuses one byte beyond the production limit, including when the excess and newline arrive in the next read block."
+ },
+ "S15-O0C-REPEAT-EXPIRY": {
+  "checks": [
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_free_the_count_cap_for_the_same_request",
+   "codex:tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_release_quota_when_a_different_request_retries"
+  ],
+  "source": "tests/requirements/s15.json#S15-O0C-REPEAT-EXPIRY",
+  "statement": "O0c / decision 382 / RS-A F6: real repeat probe generations fill both pending quotas, refuse an extra generation, and after both clocks pass their deadline an unprepared expired generation releases its owner custody so the same committed request can start a fresh judgment."
  }
 }

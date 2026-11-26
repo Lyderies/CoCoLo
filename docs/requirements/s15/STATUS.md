@@ -1,3 +1,96 @@
+# Decision 382 continuation — STOP: expired repeat-probe generation returned again
+
+**INCOMPLETE. Do not merge as finished S15.** No commit, socket, or product
+code change was made. The first-record defect is fixed at HEAD `e2ae020d`;
+this stop is a separate defect, **S15-O0C-REPEAT-EXPIRY**.
+
+## Product defect and reproducer
+
+`account_billing_admission.py::_reserve_repeat` checks its existing same-key
+reservation before `_forget_closed_contained()`. It returns an expired repeat
+when its history, context and snapshot still match, without checking either
+of that generation's deadlines. The ordinary cleanup path immediately below
+would discard the expired, unprepared generation. `prepare()` then refuses the
+returned generation because its wall deadline has passed.
+
+The registered witness is
+`tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_free_the_count_cap_for_the_same_request`.
+It uses real owner reserve/commit writers for three stored successful-reuse
+fixture rows, real retained provider records and their product-parsed references,
+and no SQL inserts or invented receipts. The reuse conclusion is a fixture fact:
+this test does **not** prove the signature gate or native enrollment. At reduced
+machine/project pending quotas of two, two real repeat generations fill both
+quotas and a third is refused `probe_full`. Neither generation has a signature
+handle, permit or running job. After **both clocks** pass their deadlines, retrying
+the first request returns its expired reservation. The fresh-deadline assertion
+is RED for both a 2-ms timeout and the actual **60,000-ms default timeout**:
+`10000000102 <= 10000000103`, and `10000060100 <= 10000060101`.
+
+The companion different-request control is GREEN: retrying the third committed
+request after the same expiry reaches ordinary cleanup, drops both expired
+reservations and their retained inputs, takes one fresh generation, and can
+capture its signature inputs. This bounds the finding: it is a same-request
+expiry/retry gap, **not** a claim that every new request remains blocked forever.
+Authority: decision 382's real past-limit evidence, RS-A F6's expired-probe owner
+memory lifetime, and the product's `_forget_closed` comment that a repeat
+"ends at its deadline". STOP per the user's instruction; no product fix attempted.
+
+## Registry and binding progress
+
+- All **547 retained entries** now have `kind` (546 new labels plus the existing
+  first-record label): 190 count, 230 bytes, 34 time, 65 validation, 21 read_only,
+  7 precondition. All retain nonempty `ends`; no exemption kind exists.
+- Exactly the six decision-382 stale cap sites were removed. Their functions
+  still exist; the **cap-check code sites** are gone. The audit records a grep
+  over each complete function body, exit 1/no matches, source span and hash.
+  `_reply` delegates to `_build_reply`; `admit` delegates to `_admit`; those
+  current bounded sites remain separately registered. No other entry removed.
+- **30 formerly missing bindings** were added: reviewed existing tests, seven
+  new contract-boundary tests, and the RED repeat-expiry witness. New tests
+  cover all six request codecs at an exact reduced frame ceiling and one byte
+  beyond, recursive cleaning, exit locations, usage arrays, escalation ladders,
+  real proof-directory pruning and independent wire writer budgets.
+- The guard rule at HEAD is preserved: every kind requires `ends`;
+  count/bytes/time additionally require a real named past-limit test. The old
+  -> new rule and decision 382 are recorded in assertions.md. Name existence
+  alone is not execution proof. The registry guard still correctly stays RED.
+- **197 bounded entries remain unbound**: 34 count, 147 bytes, 16 time.
+  Of the original 58 pending-count audit rows, 9 now have bindings (including
+  this RED witness); 34 count and 15 byte rows remain unbound. Existing historic
+  bindings still marked `bound-review-required` in the audit have not received
+  a new blanket certification. `kind`, `current_matches`, `binding_status` and
+  binding evidence describe the continuation; original dispositions remain
+  historical so the source of every migration is reviewable.
+- No existing test assertion changed or was removed. No runtime source changed.
+  Both new modules and the new requirement ID are registered in layers, stages,
+  timings, requirement source and catalogue. The two modules forbid sockets
+  before fixture setup.
+
+## Matrix and verification at STOP
+
+Matrix work did not resume before this cap defect. The earlier 34 positive
+store cells / 24 release mutation controls remain the last completed partial
+matrix, with their limitations and every unfinished row retained below.
+**S27a/S27b/S27c/S27d** remain explicit container carry-ins below; none was
+converted to a pass or executable skip. Decisions 132/377 and B0-2's skip remain.
+
+Final named-module runner: **metadata_errors: [], budget_failures: []**;
+15 tests in 1.9 s elapsed / 1.851 worker-s, discovery 2.325 s and preflight
+7.429 s. New probe module 0.8 s, contract module 0.3 s, guard 0.7 s; both
+new modules are below 60 s. Contract caps and the different-request control
+are GREEN; only the registry guard and same-request defect witness are RED.
+Evidence: `decision-382-repeat-stop-results.json`. No run remains in flight.
+Only the three named modules were run; no full/affected suite was selected.
+
+Initial probe draft tried real signature-process preparation and timed out in
+this workspace (20.6 s); that is **not** product-defect evidence. Its replacement
+uses the real owner commit writer with parsed stored references solely to seed
+reuse fixtures, and reaches the cap/expiry branch without native execution.
+The final RED is the unchanged fresh-deadline oracle after real cap saturation,
+not the earlier fixture timeout or an assertion changed to match product code.
+
+---
+
 # Decision 382 finish attempt — STOP: production first-record byte-cap defect
 
 Current work is **INCOMPLETE; do not merge as finished S15**. No commit was

@@ -118,3 +118,30 @@
   8,388,609-byte JSON followed by newline must raise SessionRefused. The latter
   assertion fails with the actual parser and real file. Product code untouched;
   STOP per the user brief. Six stale entries remain present and unmodified.
+
+
+## Decision 382 continuation at e2ae020d
+
+- Existing assertions/code in `test_lifetime_cap_guard.py`: unchanged from HEAD.
+  The decision-382 rule remains old **all entries need ends+test** -> new **all
+  entries need kind+ends; count/bytes/time also need a real past-limit test;
+  validation/read_only/precondition need ends only**. No exemption was added.
+- Registry: 546 absent kind fields -> explicit kinds on all 547 retained rows.
+  Six stale cap entries -> removed, only with full-function grep evidence in
+  cap-binding-audit.json (decision **382**). The functions remain; their cap
+  expressions are gone. Original `ends` remain except for concretely bound
+  entries; 30 absent test bindings -> existing or newly registered real tests,
+  including one failing product witness, which is expressly not a green claim.
+- **No existing test assertion changed or was removed.** Added contract tests
+  and repeat-probe witness/control add assertions only. The existing first-record
+  tests and all matrix tests remain unchanged.
+- New probe draft fixture: real fixed signature execution timed out before the
+  count stimulus -> product owner commit writer plus genuinely parsed retained
+  provider references seeds the reuse conclusion as a fixture fact. This makes
+  no signature/native-authority claim. The fresh-deadline oracle is unchanged
+  and is RED at both 2 ms and the 60,000-ms production timeout. Its final capture
+  check is scoped to accepting a fresh signature-input capture; it does not
+  claim a completed signature worker or a new probe admission.
+- New wire draft referenced nonexistent `SignatureInputError` -> the product's
+  actual `SignatureWireError`; the exact-limit/one-more-byte expectations are
+  unchanged. No product behavior or baseline assertion was adjusted.

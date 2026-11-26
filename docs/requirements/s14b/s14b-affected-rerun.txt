@@ -665,10 +665,10 @@ FAILED codex:tests.test_lost_run_settlement#0 (exit 1) -> /private/tmp/ptszu_yfw
 FAIL: test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next (tests.test_lost_run_settlement.LostRunAfterStopTests.test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/Users/timwhatley/Code/temp/cocolo-s14b/packages/codex-agents/tests/test_lost_run_settlement.py", line 364, in test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next
+  File "~/Code/temp/cocolo-s14b/packages/codex-agents/tests/test_lost_run_settlement.py", line 364, in test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next
     closed = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
                       '--reason', 'recovery_unavailable')
-  File "/Users/timwhatley/Code/temp/cocolo-s14b/packages/codex-agents/tests/test_bridge.py", line 344, in cli
+  File "~/Code/temp/cocolo-s14b/packages/codex-agents/tests/test_bridge.py", line 344, in cli
     self.assertEqual(expected, code, stdout.getvalue())
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 0 != 2 : {
@@ -691,7 +691,7 @@ FAIL: test_L15_1_deleting_a_project_stops_its_service_and_leaves_the_other_runni
 T7 S2 finding 3: learning-delete-project removes the project's records AND its service (bounded wait);
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/Users/timwhatley/Code/temp/cocolo-s14b/packages/codex-agents/tests/test_project_service_startup.py", line 319, in test_L15_1_deleting_a_project_stops_its_service_and_leaves_the_other_running
+  File "~/Code/temp/cocolo-s14b/packages/codex-agents/tests/test_project_service_startup.py", line 319, in test_L15_1_deleting_a_project_stops_its_service_and_leaves_the_other_running
     self.assertEqual(0, code, deleted)
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
 AssertionError: 0 != 1 : {'cleanup_pending': True, 'deletion_id': 'del_e89252dac2a208b42afdb1077ad5c206', 'project_history_removed': False, 'project_id': 'prj_2f720eb20fb71eadf7561413074457d6', 'project_service': 'stopped', 'ready': False, 'reason': "the deleted project's history store could not be removed yet (its service or a writer still holds it, or its folder is not safe to remove): the cleanup is pending; run learning-delete-project again to finish it"}
@@ -716,7 +716,7 @@ F..
 FAIL: test_current_runtime_is_recorded_for_the_current_version (tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/Users/timwhatley/Code/temp/cocolo-s14b/packages/codex-agents/tests/test_runtime_release.py", line 35, in test_current_runtime_is_recorded_for_the_current_version
+  File "~/Code/temp/cocolo-s14b/packages/codex-agents/tests/test_runtime_release.py", line 35, in test_current_runtime_is_recorded_for_the_current_version
     self.assertEqual(
     ~~~~~~~~~~~~~~~~^
         releases[version], COLLECTOR_RUNTIME_DIGEST,
