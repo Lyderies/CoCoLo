@@ -1,0 +1,24 @@
+# S13g status (feat/s13g-budgets)
+
+Done: run_retention_scale fixture (two sizes + growth check), project_start shared bytecode cache and shorter test intervals.
+See assertions.md for every change old -> new.
+
+Numbers (summed fragment seconds from scripts/parallel_tests.py --jobs 16):
+- test_run_retention_scale: 37.4 alone (12 units) -> 9.9; 56.8 under the 8-module load run -> 17.6 (budget 60).
+- test_project_start: 168.1 alone -> 144.3; 193.8 under load -> 191.8 (debt ceiling 183.4). NOT yet inside the ceiling under load:
+  one fragment varies 22-40 s between runs of identical code; the module is wait-bound (probation, backoff, product-interval drain of
+  ~7.7 s at production intervals, 15 collector + host launches) so more cuts need clock-controlled rewrites (S13d `clock` option) of
+  the probation tests or fewer real launches. Next candidates: ProbationTests (12.8 s serial), BackoffTests (17 s serial), ProductionIntervalTests (12 s serial).
+- Load run: modules test_run_retention_scale, test_project_start, test_billing_gate, test_container_stop, test_host_commands,
+  test_b2_service_outcome_paths, test_write_merge, test_lost_run_settlement, --jobs 16. metadata_errors [] (no module or fragment added).
+
+## Decision 390 rewrite (done)
+ProbationTests restart, ProbationDeadlineTests and ProductionIntervalTests rewritten (see assertions.md).
+test_project_start: 130.1 alone, 174.4 under the 8-module --jobs 16 load run (ceiling 183.4; one load run only, run-to-run noise ~+-15 s,
+so not yet shown in two runs). test_run_retention_scale 18.1 under load. failed_units [], metadata_errors [].
+Next if more is needed: BackoffTests early-exit (real 4 s own-child probation), crash-loop (5 real host spawns), negative-wait sleeps (1.0-3.0 s).
+
+## Second round (decision 390 follow-up)
+Under the 8-module --jobs 16 load run, twice: test_project_start 147.0 s and 149.6 s (ceiling 183.4); test_run_retention_scale 17.6 / 18.2 s.
+failed_units [], metadata_errors [] both runs. Changes in assertions.md ("second round"). One unexplained 28 s early-exit run was seen once in
+a serial class run (8.6-8.8 s in 5 other runs); watch for it.

@@ -10,6 +10,7 @@ ledger, the starter's decisions and the processes are the product's.
 """
 from __future__ import annotations
 
+import atexit
 import contextlib
 from dataclasses import asdict
 import hashlib
@@ -154,20 +155,32 @@ def wait_for(test, predicate, seconds=20.0, message='condition never held'):
     test.fail(message() if callable(message) else message)
 
 
+_PYCACHE = []
+
+
+def shared_pycache():
+    """S13G-1: one bytecode cache per test process, compiled once. It was compiled again by each of the module's
+    15 classes (0.5 s alone, several seconds under full-run load, ~15 times per full run)."""
+    if not _PYCACHE:
+        path = tempfile.mkdtemp(prefix='start-pyc-', dir=SHORT_TMP)
+        atexit.register(shutil.rmtree, path, ignore_errors=True)
+        # S13C-1: the runtime is compiled into the cache before any test's clock starts, so the
+        # first collector does not compile inside a measured window.
+        subprocess.run([sys.executable, '-I', '-X', 'pycache_prefix=' + path, '-m', 'compileall', '-q',
+                        str(ORCHESTRATION_ROOT)], stdout=subprocess.DEVNULL, check=True)
+        _PYCACHE.append(path)
+    return _PYCACHE[0]
+
+
 class StarterBase(unittest.TestCase):
-    CONSTANTS = {'STARTER_CHECK_SECONDS': 0.2, 'START_RECHECK_SECONDS': 1.0}
+    CONSTANTS = {'STARTER_CHECK_SECONDS': 0.1, 'START_RECHECK_SECONDS': 0.5}
     STORE = {}
-    pycache = None  # the class's shared bytecode cache for its test-only interpreters (S13C-1)
+    pycache = None  # the process's shared bytecode cache for its test-only interpreters (S13C-1, S13G-1)
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.pycache = tempfile.mkdtemp(prefix='start-pyc-', dir=SHORT_TMP)
-        cls.addClassCleanup(shutil.rmtree, cls.pycache, ignore_errors=True)
-        # S13C-1: the runtime is compiled into the class cache before any test's clock starts, so the
-        # first collector of the class does not compile inside a measured window.
-        subprocess.run([sys.executable, '-I', '-X', 'pycache_prefix=' + cls.pycache, '-m', 'compileall', '-q',
-                        str(ORCHESTRATION_ROOT)], stdout=subprocess.DEVNULL, check=True)
+        cls.pycache = shared_pycache()
 
     @classmethod
     def python_flags(cls, *flags):
@@ -382,6 +395,25 @@ class StarterBase(unittest.TestCase):
     def now_ms(self):
         return time.time_ns() // 1_000_000
 
+    # S13G-3: a policy clock the test drives (the launcher's `clock` option: only the starter's own clock moves).
+    def start_clock(self):
+        self.clock_path = self.base / 'starter-clock'
+        self.advance(self.now_ms())
+        return str(self.clock_path)
+
+    def advance(self, now):
+        staged = self.clock_path.with_suffix('.new')
+        staged.write_text(str(now))
+        staged.replace(self.clock_path)  # child threads never read a partial clock
+
+    def clock_ms(self):
+        return int(self.clock_path.read_text())
+
+    def sync_clock_to_due(self, name):
+        """The collector marks a stopped project due on its own real clock once it is up; the policy clock moves there."""
+        due = wait_for(self, lambda: (self.wake(name) or {}).get('due_at_ms'), 30, f'{name} was never marked due')
+        self.advance(max(self.clock_ms(), due))
+
     def command(self, name):
         return f'run learning-start-project-service --project-root {self.root(name)}'
 
@@ -458,7 +490,7 @@ class StartTests(StarterBase):
                 time.sleep(0.05)
         self.assertIsNotNone(served, 'the due projects were not serving within one interval')
         self.assertLessEqual(served, deadline)
-        time.sleep(1.0)
+        time.sleep(0.6)
         self.assertFalse(self.serving('idle'))
         self.assertEqual([], self.events('begin', 'idle'))
         self.assertLessEqual(project_start.STARTER_CHECK_SECONDS, learning_store.WORKER_RESULT_SWEEP_SECONDS)
@@ -572,7 +604,7 @@ class StartTests(StarterBase):
                     f'cd {root} && ./setup.sh {root}\n'
                     'Then choose Configure, then "Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
-        time.sleep(1.5)  # rechecked, still not replaced
+        time.sleep(0.75)  # rechecked, still not replaced
         self.assertEqual([], self.events('spawned'))
         self.assertIsNone(self.collector.poll())
         self.assertEqual(started, CollectorClient(self.state.socket, timeout=2).health()['started_at_ms'])
@@ -613,7 +645,7 @@ class BackoffTests(StarterBase):
             staged.replace(clock)  # child threads never read a partial clock
         advance(self.now_ms())
         self.launch(constants={'START_BACKOFF_FIRST_SECONDS': 0.3, 'START_BACKOFF_MAX_SECONDS': 0.6,
-                               'START_PARK_AFTER_SECONDS': 2.0}, clock=str(clock))
+                               'START_PARK_AFTER_SECONDS': 1.5}, clock=str(clock))
         # The collector marks the stopped project due on its own real clock once it is up; the policy clock
         # starts there (no earlier frozen time can ever reach that due mark).
         due = wait_for(self, lambda: (self.wake('broken') or {}).get('due_at_ms'), 30, 'never marked due')
@@ -646,7 +678,7 @@ class BackoffTests(StarterBase):
         self.assertGreaterEqual(row['failures'], 3)
         waits = [row['next_start_at_ms'] - row['outcome_at_ms'] for row in rows[:-1]]
         self.assertGreater(waits[1], waits[0])  # the backoff grows (exact waits: LedgerStartTests)
-        self.assertEqual([300, 600, 600, 600], waits)
+        self.assertEqual([300, 600, 600], waits)
         attempts = len(self.events('begin', 'broken'))
         # The project reports again: still parked.
         accepted = self.publish('broken', {'epoch': None, 'seq': 1, 'state': 'pending', 'next_due_at_ms': None})
@@ -732,9 +764,9 @@ class StrandedTests(StarterBase):
                                    survivor.pid)
         kept = self.starts('live_child')['attempt']
         self.launch(constants={'START_TIMEOUT_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 0.2},
-                    store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})
+                    store={'WORKER_RESULT_SWEEP_SECONDS': 0.2})
         wait_for(self, lambda: self.serving('dead_child'), 30, 'the dead child\'s claim was never released')
-        time.sleep(1.5)
+        time.sleep(0.75)
         self.assertEqual(kept, self.starts('live_child')['attempt'])  # its surviving child keeps it
         self.assertEqual('recovery: starting', self.status('live_child'))
         survivor.kill()
@@ -1085,7 +1117,7 @@ class OtherVersionTests(StarterBase):
                     f'cd {root} && ./setup.sh {root}\n'
                     'Then choose Configure, then "Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
-        time.sleep(1.5)  # rechecked, still not replaced
+        time.sleep(0.75)  # rechecked, still not replaced
         self.assertIsNone(host.poll())  # the earlier runtime's host still serves
         self.assertIsNotNone(other_version_host(self.state.root, root))
         self.assertEqual([], self.events('spawned'))
@@ -1149,8 +1181,8 @@ class SlotTests(StarterBase):
                 ledger.set_start_child(self.projects[name][1], claims[self.projects[name][1]].attempt,
                                        survivors[name].pid)
         self.launch(constants={'START_TIMEOUT_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 60.0},
-                    store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})
-        time.sleep(3.0)
+                    store={'WORKER_RESULT_SWEEP_SECONDS': 0.2})
+        time.sleep(1.0)
         self.assertEqual([], self.events('begin'))  # both slots are held by the surviving children
         self.assertEqual('recovery: starting', self.status('one'))
         survivors['one'].kill()
@@ -1174,7 +1206,7 @@ class ProbationTests(StarterBase):
         # The project falls due again while its host serves (a hold of its falls due): a serving recheck.
         update_ledger(self, 'UPDATE project_wake SET due_at_ms=? WHERE project_id=?',
                       (self.now_ms() - 1_000, self.projects['alpha'][1]))
-        time.sleep(1.5)
+        time.sleep(0.75)
         self.assertEqual('started', self.starts('alpha')['outcome'])
         self.assertTrue(self.status('alpha').startswith('recovery: started '), self.status('alpha'))
         for pid in self.host_pids('alpha'):
@@ -1187,8 +1219,13 @@ class ProbationTests(StarterBase):
     def test_E2c_4_a_probation_is_kept_across_a_collector_restart(self):
         self.add('lasts')
         root, _project_id, copy = self.add('dies', record=False)
-        constants = {'START_PROBATION_SECONDS': 10.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
-        self.launch(constants=constants)
+        # S13G-3: the policy clock is driven by the test (was: a 10 s probation and real waits of 6 s and 4.5 s).
+        # The same order: 'dies' starts 36 of 60 probation seconds after 'lasts'; the restart comes after the end of
+        # 'lasts' probation (+0.5 s) and more than 2 s before the end of 'dies' probation.
+        constants = {'START_PROBATION_SECONDS': 60.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
+        clock = self.start_clock()
+        self.launch(constants=constants, clock=clock)
+        self.sync_clock_to_due('lasts')
 
         def started(name):
             row = self.starts(name) or {}
@@ -1196,18 +1233,20 @@ class ProbationTests(StarterBase):
 
         lasts = wait_for(self, lambda: started('lasts'), 30, lambda: f'never started: {self.starts("lasts")}')
         self.assertIsNotNone(lasts['probation_pid'])
-        time.sleep(max(0.0, (lasts['started_at_ms'] + 6_000 - self.now_ms()) / 1000))
+        self.advance(max(self.clock_ms(), lasts['started_at_ms'] + 36_000))
         CollectorClient(self.state.socket, timeout=30).record_launch(root, str(copy), copy.name)
+        # A claim of 'dies' before its record was written backs off one RECHECK on the policy clock; step past it.
+        self.advance(self.clock_ms() + 1_000)
         dies = wait_for(self, lambda: started('dies'), 30, lambda: f'never started: {self.starts("dies")}')
         self.stop_collector()  # both hosts are within their probation and keep serving
         for pid in self.host_pids('dies'):
             os.kill(pid, signal.SIGKILL)  # ended while no collector watched it
         # 'lasts' had a failure streak before this start; its probation ends while no collector runs.
         update_ledger(self, 'UPDATE project_starts SET failures=2,streak_first_ms=? WHERE project_id=?',
-                      (self.now_ms() - 60_000, self.projects['lasts'][1]))
-        time.sleep(max(0.0, (lasts['probation_until_ms'] + 500 - self.now_ms()) / 1000))
-        self.assertLess(self.now_ms(), dies['probation_until_ms'] - 2_000)
-        self.launch(constants=constants)
+                      (self.clock_ms() - 60_000, self.projects['lasts'][1]))
+        self.advance(lasts['probation_until_ms'] + 500)
+        self.assertLess(self.clock_ms(), dies['probation_until_ms'] - 2_000)
+        self.launch(constants=constants, clock=clock)
         row = wait_for(self, lambda: self.starts('dies')['failures'] == 1 and self.starts('dies'), 20,
                        lambda: f'the early end was not counted after the restart: {self.starts("dies")}')
         self.assertEqual('service_ended_early', row['reason'])
@@ -1282,7 +1321,7 @@ class ProductionIntervalTests(StarterBase):
         served = [f'real{index}' for index in range(4)]
         for name in served:
             self.add(name)
-        changed = [f'changed{index}' for index in range(16)]
+        changed = [f'changed{index}' for index in range(6)]
         for name in changed:  # full verification, refused at its last step: the project's runtime changed
             root, _id, _copy = self.add(name)
             installed = root / '.codex' / 'orchestration' / 'codex_agents' / '__init__.py'
@@ -1413,7 +1452,7 @@ class RecordRefusedTests(StarterBase):
                     fail={'set_start_child': 10 ** 6}, unserved=str(unserved))
         spawned = wait_for(self, lambda: self.events('spawned'), 20, 'alpha was never spawned')
         wait_for(self, lambda: self.events('refused'), 10, lambda: f'the pid record was not refused: {self.events()[-6:]}')
-        time.sleep(1.0)  # well past the pid record's first tries
+        time.sleep(0.5)  # well past the pid record's first tries
         row = self.starts('alpha')
         self.assertIsNotNone(row['attempt'])
         self.assertIsNone(row['child_pid'])  # refused: the ledger does not know the child
@@ -1496,8 +1535,13 @@ class ProbationDeadlineTests(StarterBase):
     def test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline(self):
         """Review round 2 (decision 243, HIGH 4): survival needs the host alive at or after its probation's end."""
         self.add('dies')
-        constants = {'START_PROBATION_SECONDS': 3.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
-        self.launch(constants=constants)
+        # S13G-3: the probation is measured on the starter's policy clock, which the test moves past the deadline
+        # (was: 3 s probation and a real wait of its remainder plus 1 s). A long probation keeps the first collector's
+        # own monotonic watch from ending it before the test stops that collector.
+        constants = {'START_PROBATION_SECONDS': 60.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
+        clock = self.start_clock()
+        self.launch(constants=constants, clock=clock)
+        self.sync_clock_to_due('dies')
         row = wait_for(self, lambda: (self.starts('dies') or {}).get('outcome') == 'started'
                        and self.starts('dies')['attempt'] is None and self.starts('dies'), 30,
                        lambda: f'never started: {self.starts("dies")}')
@@ -1506,8 +1550,8 @@ class ProbationDeadlineTests(StarterBase):
         for pid in self.host_pids('dies'):
             os.kill(pid, signal.SIGKILL)  # it ends early, while no collector watches it
         wait_for(self, lambda: not self.host_pids('dies'), 10, 'the host did not end')
-        time.sleep(max(0.0, (row['probation_until_ms'] + 1_000 - self.now_ms()) / 1000))
-        self.launch(constants=constants)  # after its probation's deadline
+        self.advance(row['probation_until_ms'] + 1_000)
+        self.launch(constants=constants, clock=clock)  # after its probation's deadline
         after = wait_for(self, lambda: self.starts('dies')['probation_attempt'] is None and self.starts('dies'), 20,
                          lambda: f'the kept probation was never reconciled: {self.starts("dies")}')
         self.assertEqual((1, 'service_ended_early'), (after['failures'], after['reason']))
