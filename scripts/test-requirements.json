@@ -5576,5 +5576,33 @@
   ],
   "source": "tests/requirements/s14f.json#S14F-9",
   "statement": "The completion walk consumes the custody set a budget at a time (no copy of it) and a reset is O(1): the old cycle's containers are handed to a drop list emptied within later passes' budgets, so no pass exceeds CUSTODY_PASS_ROWS units at completion or reset with 2,000 keys."
+ },
+ "S14G-1": {
+  "checks": [
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_custody_classification_read_and_write_use_full_key",
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_source_driven_joins_use_full_key",
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_takeover_adoption_reads_only_the_processed_kinds_via_live_index",
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_takeover_report_reservation_uses_full_key",
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_takeover_retention_correlations_use_full_key",
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_3_takeover_lookup_seeks_both_full_keys_and_preserves_answers"
+  ],
+  "source": "tests/requirements/s14g.json#S14G-1",
+  "statement": "Audit account and project hold reads against the real current schemas; identity lookups with an available complete key must search (project_id,kind,identity), and takeover adoption must select every processed kind through the live index."
+ },
+ "S14G-2": {
+  "checks": [
+   "codex:tests.test_s14g_hold_queries.AuditInventoryTests.test_S14G_2_real_schema_inventory",
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_2_account_identity_queries_search_full_key"
+  ],
+  "source": "tests/requirements/s14g.json#S14G-2",
+  "statement": "Pin account identity lookups, including both handle kinds, to full-key searches and inventory intentional live-register, evidence-validation and maintenance scans with real-schema EXPLAIN plans."
+ },
+ "S14G-3": {
+  "checks": [
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_takeover_adoption_reads_only_the_processed_kinds_via_live_index",
+   "codex:tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_3_takeover_lookup_seeks_both_full_keys_and_preserves_answers"
+  ],
+  "source": "tests/requirements/s14g.json#S14G-3",
+  "statement": "Preserve takeover lookup answers for both lease and reservation identities and across hold states; project-scoped predicates use the store unique history identity."
  }
 }

@@ -160,7 +160,7 @@ _REGISTER_INCONSISTENT = (
     "AND (r.kind IS NULL OR r.state<>'held') LIMIT 1",
     # RS-B draft 3 §6: `completed` only for a reservation past `reserved` whose release ack exists; a settlement
     # release only with its settlement row, of the same kind and claim.
-    "SELECT 1 FROM result_reservations s JOIN project_holds r ON r.project_id=s.project_id "
+    "SELECT 1 FROM result_reservations s CROSS JOIN project_holds r ON r.project_id=s.project_id "
     "AND r.kind='reservation' AND r.identity=s.claim_id WHERE r.state='released' AND ("
     "(r.release_kind='completed' AND (s.state='reserved' OR NOT EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a "
     "WHERE a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt))) "

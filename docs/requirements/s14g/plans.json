@@ -1,0 +1,1897 @@
+{
+ "sqlite": "3.53.4",
+ "fixture": "LearningStoreTests + ResultLeaseTests, two product-written leases",
+ "queries": [
+  {
+   "file": "account_billing_admission.py",
+   "line": 1199,
+   "lines": [
+    1199
+   ],
+   "sql": "UPDATE run_holds SET release_kind='unlaunched' WHERE kind='probe' AND project_id=? AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "account_billing_admission.py",
+   "line": 1234,
+   "lines": [
+    1234
+   ],
+   "sql": "UPDATE run_holds SET release_kind='expired' WHERE kind='probe' AND project_id=? AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "account_cleanup.py",
+   "line": 54,
+   "lines": [
+    54
+   ],
+   "sql": "SELECT COUNT(*) FROM account_cleanup_receipts c WHERE c.project_id=? AND c.released_at_ms IS NULL AND NOT EXISTS(SELECT 1 FROM active_run_capacity a JOIN run_holds r ON r.kind='run_slot' AND r.project_id=a.project_id AND r.identity=a.handle_digest WHERE a.project_id=c.project_id AND a.handle_digest=c.handle_digest AND a.released_at_ms IS NOT NULL AND r.release_kind IN ('lost','crashed') AND r.receipt=a.release_digest)",
+   "plan": [
+    "SEARCH c USING INDEX account_cleanup_receipts_unreleased (project_id=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "SEARCH a USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "account_lost_run.py",
+   "line": 57,
+   "lines": [
+    57
+   ],
+   "sql": "SELECT 1 FROM run_holds WHERE project_id=? AND kind='binding' AND identity=? AND state='released'",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "account_lost_run.py",
+   "line": 77,
+   "lines": [
+    77
+   ],
+   "sql": "SELECT kind,state,release_kind,receipt,evidence FROM run_holds WHERE project_id=? AND identity=? AND kind IN ('run_slot','binding')",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "account_lost_run.py",
+   "line": 156,
+   "lines": [
+    156
+   ],
+   "sql": "UPDATE run_holds SET receipt=?,evidence=? WHERE project_id=? AND kind='binding' AND identity=? AND state='released' AND release_kind=?",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "account_original_open.py",
+   "line": 45,
+   "lines": [
+    45,
+    46
+   ],
+   "sql": "SELECT q.project_id,q.request_key,q.handle_digest FROM account_open_requests q WHERE q.state='committed' AND q.opened_at_ms<:opened AND +q.observation_deadline_at_ms<:deadline AND EXISTS(SELECT 1 FROM account_open_receipts c WHERE c.project_id=q.project_id AND c.handle_digest=q.handle_digest AND c.request_key=q.request_key AND c.run_id IS NOT NULL) AND EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.kind='binding' AND r.identity=q.handle_digest AND r.state='released') AND NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.kind='run_slot' AND r.identity=q.handle_digest AND r.state<>'released') AND NOT EXISTS(SELECT 1 FROM active_run_capacity a WHERE a.project_id=q.project_id AND a.handle_digest=q.handle_digest AND a.released_at_ms IS NULL) AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=q.project_id AND h.handle_digest=q.handle_digest AND (h.history_owner<>'project' OR (h.binding_state='pending' AND h.expires_at_ms>:now))) LIMIT :limit",
+   "plan": [
+    "SEARCH q USING INDEX account_open_requests_finished (opened_at_ms<?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 4",
+    "SEARCH a USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 5",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "SEARCH r EXISTS USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "SEARCH c EXISTS USING INDEX sqlite_autoindex_account_open_receipts_3 (project_id=? AND request_key=?)"
+   ]
+  },
+  {
+   "file": "account_original_open.py",
+   "line": 64,
+   "lines": [
+    64,
+    65
+   ],
+   "sql": "SELECT q.project_id,q.request_key,q.handle_digest FROM account_open_requests q WHERE q.state='committed' AND q.observation_deadline_at_ms<:deadline AND EXISTS(SELECT 1 FROM account_open_receipts c WHERE c.project_id=q.project_id AND c.handle_digest=q.handle_digest AND c.request_key=q.request_key AND c.run_id IS NULL) AND NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.identity=q.handle_digest AND r.kind IN ('binding','run_slot')) AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=q.project_id AND h.handle_digest=q.handle_digest) LIMIT :limit",
+   "plan": [
+    "SEARCH q USING INDEX account_open_requests_committed_expiry (observation_deadline_at_ms<?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH r USING COVERING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH h USING COVERING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "SEARCH c EXISTS USING INDEX sqlite_autoindex_account_open_receipts_3 (project_id=? AND request_key=?)"
+   ]
+  },
+  {
+   "file": "account_original_open.py",
+   "line": 74,
+   "lines": [
+    74,
+    75
+   ],
+   "sql": "SELECT q.project_id,q.request_key,q.handle_digest FROM account_open_requests q INDEXED BY account_open_requests_unfinished WHERE q.state='pending' AND q.observation_deadline_at_ms<:deadline AND NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.identity=q.handle_digest AND r.kind IN ('binding','run_slot')) AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=q.project_id AND h.handle_digest=q.handle_digest) LIMIT :limit",
+   "plan": [
+    "SEARCH q USING INDEX account_open_requests_unfinished (observation_deadline_at_ms<?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING COVERING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH h USING COVERING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "account_original_open.py",
+   "line": 399,
+   "lines": [
+    399
+   ],
+   "sql": "SELECT 1 FROM run_holds WHERE project_id=? AND kind='binding' AND identity=? AND state='released'",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "health_holds.py",
+   "line": 228,
+   "lines": [
+    228
+   ],
+   "sql": "SELECT 1 FROM project_holds h INDEXED BY project_holds_due WHERE h.state<>'released' AND h.state IN ('held','releasing') AND h.project_id=? AND h.due_at_ms IS NOT NULL AND h.due_at_ms<? AND h.next_check_ms<? AND NOT (h.state='releasing' AND h.kind IN ('lease','reservation') AND EXISTS (SELECT 1 FROM takeover_obligations o WHERE o.kind=h.kind AND o.identity=h.identity AND o.original_request_digest='unverified')) ORDER BY h.state,h.next_check_ms LIMIT 1",
+   "plan": [
+    "SEARCH h USING INDEX project_holds_due (state=? AND next_check_ms<?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH o USING INDEX sqlite_autoindex_takeover_obligations_1 (kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "health_holds.py",
+   "line": 239,
+   "lines": [
+    239
+   ],
+   "sql": "SELECT 1 FROM project_holds h INDEXED BY project_holds_kind_due WHERE h.state<>'released' AND h.kind IN ('lease','reservation') AND h.project_id=? AND h.state='releasing' AND h.kind IN ('lease','reservation') AND EXISTS (SELECT 1 FROM takeover_obligations o WHERE o.kind=h.kind AND o.identity=h.identity AND o.original_request_digest='unverified') LIMIT 1",
+   "plan": [
+    "SEARCH h USING INDEX project_holds_kind_due (kind=? AND state=?)",
+    "SEARCH o EXISTS USING INDEX sqlite_autoindex_takeover_obligations_1 (kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 3604,
+   "lines": [
+    3604
+   ],
+   "sql": "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) AND NOT (EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest AND r.state='released' AND r.release_kind IN ('crashed','lost','unsent','process_gone','owner_confirmed') AND a.release_digest IS NOT NULL AND r.receipt=a.release_digest AND r.released_at_ms=a.released_at_ms) AND (c.terminal_record_id IS NULL OR e.owner_digest IS NOT NULL)) LIMIT 1",
+   "plan": [
+    "SCAN a",
+    "SEARCH c USING INDEX sqlite_autoindex_capacity_completions_1 (project_id=? AND handle_digest=?) LEFT-JOIN",
+    "SEARCH e USING INDEX sqlite_autoindex_capacity_executions_1 (project_id=? AND handle_digest=?) LEFT-JOIN",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 6404,
+   "lines": [
+    6404,
+    12856
+   ],
+   "sql": "SELECT COUNT(*) FROM run_holds r INDEXED BY run_holds_due CROSS JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.state<>'released' AND r.kind='binding' AND r.project_id=? AND h.binding_state='pending' AND h.expires_at_ms>?",
+   "plan": [
+    "SCAN r USING INDEX run_holds_due",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 8428,
+   "lines": [
+    8428
+   ],
+   "sql": "SELECT release_kind FROM run_holds WHERE project_id=? AND kind='run_slot' AND identity=? AND release_kind IN ('lost','crashed','unsent','process_gone','owner_confirmed') AND receipt=?",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 12775,
+   "lines": [
+    12775
+   ],
+   "sql": "SELECT DISTINCT a.project_id FROM active_run_capacity a WHERE (a.released_at_ms IS NULL OR EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest AND r.release_kind IN ('lost','crashed'))) AND (a.kind='legacy_unknown' OR claimed_at_ms>=:legacy OR (deadline_at_ms IS NOT NULL AND NOT (deadline_at_ms+:grace<:now AND (execution_deadline_ns+:grace_ns<=:mono OR clock_reference_ns>:mono)))) ORDER BY a.project_id",
+   "plan": [
+    "SCAN a USING INDEX sqlite_autoindex_active_run_capacity_1",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 12889,
+   "lines": [
+    12889
+   ],
+   "sql": "UPDATE run_holds SET release_kind=?,receipt=?,evidence=? WHERE kind='run_slot' AND project_id=? AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 12913,
+   "lines": [
+    12913
+   ],
+   "sql": "SELECT a.kind,a.run_id,a.handle_digest,a.claimed_at_ms,CASE WHEN a.kind='legacy_unknown' THEN (SELECT CASE WHEN COUNT(*)=1 THEN MAX(legacy_dispatch_deadline(d.content,d.content_digest,a.run_id,a.bridge_run_id)) END FROM records d WHERE d.project_id=a.project_id AND d.record_type='dispatch_intent' AND d.source='lifecycle' AND legacy_dispatch_run_id(d.content)=a.run_id) ELSE a.deadline_at_ms END AS deadline_at_ms,a.execution_deadline_ns,a.clock_reference_ns,(SELECT h.client_version FROM host_run_bindings h WHERE h.project_id=a.project_id AND h.handle_digest=a.handle_digest) AS client_version,CASE WHEN ((a.deadline_at_ms IS NOT NULL AND a.deadline_at_ms<? AND a.execution_deadline_ns IS NOT NULL AND (a.execution_deadline_ns<=? OR a.clock_reference_ns>?)) OR (a.kind='legacy_unknown' AND COALESCE((SELECT CASE WHEN COUNT(*)=1 THEN MAX(legacy_dispatch_deadline(d.content,d.content_digest,a.run_id,a.bridge_run_id)) END FROM records d WHERE d.project_id=a.project_id AND d.record_type='dispatch_intent' AND d.source='lifecycle' AND legacy_dispatch_run_id(d.content)=a.run_id)<?,0)) OR EXISTS(SELECT 1 FROM host_run_bindings lost WHERE lost.project_id=a.project_id AND lost.handle_digest=a.handle_digest AND lost.binding_state='abandoned' AND lost.abandoned_reason='service_lost')) THEN 1 ELSE 0 END AS due FROM run_holds r INDEXED BY run_holds_due CROSS JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='run_slot' AND r.project_id=?",
+   "plan": [
+    "SEARCH r USING INDEX run_holds_due (state=?)",
+    "SEARCH a USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH d USING INDEX records_type_project (record_type=? AND project_id=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH d USING INDEX records_type_project (record_type=? AND project_id=?)",
+    "CORRELATED SCALAR SUBQUERY 4",
+    "SEARCH lost USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 12924,
+   "lines": [
+    12924
+   ],
+   "sql": "SELECT COUNT(*),COALESCE(SUM(CASE WHEN h.expires_at_ms<=? THEN 1 ELSE 0 END),0),MIN(h.expires_at_ms),MIN(h.expires_at_ms) FROM run_holds r INDEXED BY run_holds_due CROSS JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='binding' AND r.project_id=?",
+   "plan": [
+    "SEARCH r USING INDEX run_holds_due (state=?)",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 12930,
+   "lines": [
+    12930
+   ],
+   "sql": "SELECT p.request_key,p.state,p.deadline_at_ms FROM run_holds r INDEXED BY run_holds_due CROSS JOIN account_billing_probe_requests p ON p.project_id=r.project_id AND p.request_key=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='probe' AND r.project_id=?",
+   "plan": [
+    "SEARCH r USING INDEX run_holds_due (state=?)",
+    "SEARCH p USING INDEX sqlite_autoindex_account_billing_probe_requests_1 (project_id=? AND request_key=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13053,
+   "lines": [
+    13053
+   ],
+   "sql": "SELECT state,release_kind,generation,receipt,evidence FROM run_holds WHERE project_id=? AND kind='binding' AND identity=?",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13096,
+   "lines": [
+    13096
+   ],
+   "sql": "SELECT released_at_ms FROM run_holds WHERE project_id=? AND kind='binding' AND identity=?",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13113,
+   "lines": [
+    13113
+   ],
+   "sql": "UPDATE run_holds SET receipt=?,evidence=? WHERE project_id=? AND kind='binding' AND identity=? AND state='released' AND release_kind='withdrawn'",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13138,
+   "lines": [
+    13138
+   ],
+   "sql": "SELECT EXISTS(SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='run_slot' AND a.released_at_ms IS NULL AND ((a.deadline_at_ms IS NOT NULL AND a.deadline_at_ms<? AND a.execution_deadline_ns IS NOT NULL AND (a.execution_deadline_ns<=? OR a.clock_reference_ns>?)) OR (a.kind='legacy_unknown' AND COALESCE((SELECT CASE WHEN COUNT(*)=1 THEN MAX(legacy_dispatch_deadline(d.content,d.content_digest,a.run_id,a.bridge_run_id)) END FROM records d WHERE d.project_id=a.project_id AND d.record_type='dispatch_intent' AND d.source='lifecycle' AND legacy_dispatch_run_id(d.content)=a.run_id)<?,0)) OR EXISTS(SELECT 1 FROM host_run_bindings lost WHERE lost.project_id=a.project_id AND lost.handle_digest=a.handle_digest AND lost.binding_state='abandoned' AND lost.abandoned_reason='service_lost'))) OR EXISTS(SELECT 1 FROM run_holds r JOIN account_billing_probe_requests p ON p.project_id=r.project_id AND p.request_key=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='probe' AND p.state='reserved' AND p.deadline_at_ms<?) OR EXISTS(SELECT 1 FROM run_holds r JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='binding' AND h.binding_state='pending' AND h.expires_at_ms<=?)",
+   "plan": [
+    "SCAN CONSTANT ROW",
+    "SCALAR SUBQUERY 3",
+    "SEARCH r USING INDEX run_holds_due (state=?)",
+    "SEARCH a USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH d USING INDEX records_type_project (record_type=? AND project_id=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH lost USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "SCALAR SUBQUERY 4",
+    "SEARCH r USING INDEX run_holds_due (state=?)",
+    "SEARCH p USING INDEX sqlite_autoindex_account_billing_probe_requests_1 (project_id=? AND request_key=?)",
+    "SCALAR SUBQUERY 5",
+    "SEARCH r USING INDEX run_holds_due (state=?)",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13240,
+   "lines": [
+    13240
+   ],
+   "sql": "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='expired' WHERE rowid IN (SELECT h.rowid FROM run_holds r INDEXED BY run_holds_due CROSS JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.state<>'released' AND r.kind='binding' AND h.binding_state='pending' AND h.expires_at_ms<=? AND NOT EXISTS(SELECT 1 FROM launch_claims c WHERE c.project_id=h.project_id AND c.handle_digest=h.handle_digest) AND NOT EXISTS(SELECT 1 FROM active_run_capacity a WHERE a.project_id=h.project_id AND a.handle_digest=h.handle_digest) LIMIT ?)",
+   "plan": [
+    "SEARCH host_run_bindings USING INTEGER PRIMARY KEY (rowid=?)",
+    "LIST SUBQUERY 3",
+    "SCAN r USING INDEX run_holds_due",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH c USING COVERING INDEX sqlite_autoindex_launch_claims_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH a USING COVERING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13253,
+   "lines": [
+    13253
+   ],
+   "sql": "UPDATE run_holds SET state='released',generation=generation+1,released_at_ms=?,release_kind='expired' WHERE rowid IN (SELECT r.rowid FROM run_holds r INDEXED BY run_holds_due CROSS JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.state<>'released' AND r.kind='binding' AND r.state='held' AND h.binding_state='pending' AND h.expires_at_ms<=? LIMIT ?)",
+   "plan": [
+    "SEARCH run_holds USING INTEGER PRIMARY KEY (rowid=?)",
+    "LIST SUBQUERY 1",
+    "SEARCH r USING INDEX run_holds_due (state=?)",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13294,
+   "lines": [
+    13294
+   ],
+   "sql": "SELECT COUNT(*) AS opened,SUM(h.consumed_at_ms IS NOT NULL OR (c.released_at_ms IS NOT NULL AND NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=c.project_id AND r.kind='run_slot' AND r.identity=c.handle_digest AND r.release_kind IN ('lost','crashed','unsent','process_gone','owner_confirmed') AND r.receipt IS c.release_digest)) OR EXISTS(SELECT 1 FROM capacity_completions cc WHERE cc.project_id=h.project_id AND cc.handle_digest=h.handle_digest AND cc.released_at_ms IS NOT NULL)) AS terminal,SUM(h.binding_state='pending' AND c.released_at_ms IS NULL) AS pending,SUM(h.native_assignment_id IS NOT NULL) AS native_bound,SUM(h.usage_complete=1) AS usage_complete,SUM(h.usage_complete=0) AS usage_unknown,SUM(h.binding_state='abandoned') AS abandoned FROM host_run_bindings AS h LEFT JOIN active_run_capacity AS c ON c.project_id=h.project_id AND c.handle_digest=h.handle_digest WHERE h.project_id=?",
+   "plan": [
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_2 (project_id=?)",
+    "SEARCH c USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?) LEFT-JOIN",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH cc USING INDEX sqlite_autoindex_capacity_completions_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13591,
+   "lines": [
+    13591
+   ],
+   "sql": "SELECT 1 FROM active_run_capacity a WHERE a.project_id=? AND (a.released_at_ms IS NULL OR (a.claimed_at_ms>=? AND EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest AND r.release_kind IN ('lost','crashed')))) LIMIT 1",
+   "plan": [
+    "SEARCH a USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 13623,
+   "lines": [
+    13623
+   ],
+   "sql": "DELETE FROM run_holds WHERE project_id=?",
+   "plan": [
+    "SEARCH run_holds USING COVERING INDEX sqlite_autoindex_run_holds_1 (project_id=?)"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 43,
+   "lines": [
+    43
+   ],
+   "sql": "SELECT * FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 169,
+   "lines": [
+    169,
+    197,
+    243
+   ],
+   "sql": "UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 177,
+   "lines": [
+    177
+   ],
+   "sql": "SELECT identity,evidence FROM project_holds WHERE project_id=? AND kind='preparation' AND instance<>? AND evidence LIKE '%\"removal\":\"pending\"%' ORDER BY taken_at_ms,identity LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=?)",
+    "USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 190,
+   "lines": [
+    190
+   ],
+   "sql": "SELECT evidence FROM project_holds WHERE project_id=? AND kind='preparation' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 218,
+   "lines": [
+    218
+   ],
+   "sql": "UPDATE project_holds SET evidence=?,next_check_ms=0 WHERE project_id=? AND kind=? AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 220,
+   "lines": [
+    220
+   ],
+   "sql": "UPDATE project_holds SET state='releasing',release_kind='handed_over' WHERE project_id=? AND kind='driver_entry' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 228,
+   "lines": [
+    228
+   ],
+   "sql": "SELECT * FROM project_holds INDEXED BY project_holds_due WHERE project_id=? AND state<>'released' AND kind IN ('driver_entry','preparation') AND instance<>?",
+   "plan": [
+    "SCAN project_holds USING INDEX project_holds_due"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 246,
+   "lines": [
+    246
+   ],
+   "sql": "SELECT DISTINCT instance FROM project_holds INDEXED BY project_holds_due WHERE project_id=? AND state<>'released' AND kind IN ('driver_entry','preparation')",
+   "plan": [
+    "SCAN project_holds USING INDEX project_holds_due",
+    "USE TEMP B-TREE FOR DISTINCT"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 395,
+   "lines": [
+    395
+   ],
+   "sql": "SELECT kind,identity,evidence FROM project_holds INDEXED BY project_holds_due WHERE project_id=? AND state<>'released' AND instance=? AND kind IN ('driver_entry','preparation') ORDER BY kind DESC",
+   "plan": [
+    "SCAN project_holds USING INDEX project_holds_due",
+    "USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 412,
+   "lines": [
+    412
+   ],
+   "sql": "SELECT evidence FROM project_holds WHERE project_id=? AND kind='preparation' AND evidence LIKE '%\"removal\":\"pending\"%'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=?)"
+   ]
+  },
+  {
+   "file": "memory_holds.py",
+   "line": 444,
+   "lines": [
+    444
+   ],
+   "sql": "SELECT evidence FROM project_holds WHERE kind='preparation' AND evidence LIKE '%\"removal\":\"pending\"%'",
+   "plan": [
+    "SCAN project_holds"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 45,
+   "lines": [
+    45,
+    46
+   ],
+   "sql": "SELECT identity FROM project_holds INDEXED BY project_holds_kind_due WHERE kind='lease' AND state<>'released' AND project_id=? LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_kind_due (kind=?)"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 50,
+   "lines": [
+    50,
+    51
+   ],
+   "sql": "SELECT identity FROM project_holds INDEXED BY project_holds_kind_due WHERE kind='reservation' AND state<>'released' AND project_id=? LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_kind_due (kind=?)"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 214,
+   "lines": [
+    214
+   ],
+   "sql": "SELECT identity FROM project_holds INDEXED BY project_holds_orchestration_check WHERE project_id=? AND kind='orchestration' AND state='held' AND next_check_ms<=? AND due_at_ms<=? ORDER BY next_check_ms LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_orchestration_check (project_id=? AND next_check_ms<?)"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 229,
+   "lines": [
+    229
+   ],
+   "sql": "SELECT evidence FROM project_holds WHERE project_id=? AND kind='orchestration' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 242,
+   "lines": [
+    242
+   ],
+   "sql": "UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? AND kind='orchestration' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 510,
+   "lines": [
+    510
+   ],
+   "sql": "SELECT due_at_ms FROM project_holds WHERE project_id=? AND kind='orchestration' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 514,
+   "lines": [
+    514
+   ],
+   "sql": "SELECT 1 FROM project_holds INDEXED BY project_holds_due WHERE project_id=? AND state<>'released' AND kind IN ('driver_entry','preparation') AND json_extract(evidence,'$.orchestration_handle')=? LIMIT 1",
+   "plan": [
+    "SCAN project_holds USING INDEX project_holds_due"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 520,
+   "lines": [
+    520
+   ],
+   "sql": "SELECT 1 FROM result_reservations s INDEXED BY result_reservations_orchestration JOIN project_holds r ON r.project_id=s.project_id AND r.kind='reservation' AND r.identity=s.claim_id WHERE s.project_id=? AND s.orchestration_handle=? AND r.state<>'released' LIMIT 1",
+   "plan": [
+    "SEARCH s USING INDEX result_reservations_orchestration (project_id=? AND orchestration_handle=?)",
+    "SEARCH r USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "orchestration_store.py",
+   "line": 652,
+   "lines": [
+    652
+   ],
+   "sql": "UPDATE project_holds SET due_at_ms=?,next_check_ms=0,evidence=NULL WHERE project_id=? AND kind='orchestration' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 315,
+   "lines": [
+    315,
+    316
+   ],
+   "sql": "SELECT MAX(t) FROM (SELECT MAX(created_at_ms) AS t FROM result_reservations WHERE project_id=:project AND orchestration_handle=:handle UNION ALL SELECT MAX(h.taken_at_ms) FROM result_reservations s CROSS JOIN project_holds h ON h.project_id=s.project_id AND h.kind='reservation' AND h.identity=s.claim_id WHERE s.project_id=:project AND s.orchestration_handle=:handle UNION ALL SELECT MAX(created_at_ms) FROM result_leases WHERE project_id=:project AND json_extract(CAST(binding AS TEXT),'$.orchestration_handle')=:handle UNION ALL SELECT MAX(h.taken_at_ms) FROM result_leases CROSS JOIN project_holds h ON h.project_id=result_leases.project_id AND h.kind='lease' AND h.identity=result_leases.run_handle||':'||result_leases.attempt WHERE result_leases.project_id=:project AND json_extract(CAST(binding AS TEXT),'$.orchestration_handle')=:handle)",
+   "plan": [
+    "CO-ROUTINE (subquery-4)",
+    "COMPOUND QUERY",
+    "LEFT-MOST SUBQUERY",
+    "SEARCH result_reservations USING INDEX result_reservations_orchestration (project_id=? AND orchestration_handle=?)",
+    "UNION ALL",
+    "SEARCH s USING INDEX result_reservations_orchestration (project_id=? AND orchestration_handle=?)",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "UNION ALL",
+    "SEARCH result_leases USING INDEX result_leases_orchestration (project_id=? AND <expr>=?)",
+    "UNION ALL",
+    "SEARCH result_leases USING INDEX result_leases_orchestration (project_id=? AND <expr>=?)",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "SEARCH (subquery-4)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 794,
+   "lines": [
+    794
+   ],
+   "sql": "SELECT evidence FROM project_holds WHERE project_id=? AND kind='result_custody' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 799,
+   "lines": [
+    799
+   ],
+   "sql": "UPDATE project_holds SET evidence=? WHERE project_id=? AND kind='result_custody' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 804,
+   "lines": [
+    804
+   ],
+   "sql": "SELECT state,evidence FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 869,
+   "lines": [
+    869
+   ],
+   "sql": "SELECT state,release_kind,receipt FROM project_holds WHERE project_id=? AND kind='lease' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 1503,
+   "lines": [
+    1503,
+    3165,
+    3856
+   ],
+   "sql": "SELECT state FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 1523,
+   "lines": [
+    1523
+   ],
+   "sql": "SELECT release_kind FROM project_holds WHERE project_id=? AND kind='orchestration' AND identity=? AND state='released'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 1622,
+   "lines": [
+    1622
+   ],
+   "sql": "UPDATE project_holds SET next_check_ms=0,evidence=CASE WHEN evidence IS NOT NULL THEN json_remove(evidence,'$.start_pass_failures') END WHERE project_id=? AND kind='lease' AND identity=? AND next_check_ms<>0",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 1682,
+   "lines": [
+    1682
+   ],
+   "sql": "SELECT identity FROM project_holds INDEXED BY project_holds_kind_due WHERE kind='lease' AND state<>'released' AND project_id=? LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_kind_due (kind=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 1784,
+   "lines": [
+    1784
+   ],
+   "sql": "UPDATE project_holds SET next_check_ms=? WHERE project_id=? AND kind='lease' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2263,
+   "lines": [
+    2263
+   ],
+   "sql": "SELECT 1 FROM project_holds INDEXED BY project_holds_open_run WHERE project_id=? AND kind='open_binding' AND state<>'released' AND json_extract(evidence,'$.run_id')=? LIMIT 1",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_open_run (project_id=? AND <expr>=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2271,
+   "lines": [
+    2271
+   ],
+   "sql": "SELECT * FROM project_holds WHERE project_id=? AND kind='open_binding' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2285,
+   "lines": [
+    2285
+   ],
+   "sql": "SELECT state,release_kind FROM project_holds WHERE project_id=? AND kind='lease' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2301,
+   "lines": [
+    2301
+   ],
+   "sql": "UPDATE project_holds SET state='releasing',request_id=?,request_digest=?,evidence=? WHERE project_id=? AND kind='open_binding' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2310,
+   "lines": [
+    2310
+   ],
+   "sql": "SELECT * FROM project_holds WHERE project_id=? AND kind='open_binding' AND state='releasing' AND next_check_ms<=? ORDER BY next_check_ms,identity LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=?)",
+    "USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2334,
+   "lines": [
+    2334
+   ],
+   "sql": "UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? AND kind='open_binding' AND identity=? AND state='releasing'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2609,
+   "lines": [
+    2609
+   ],
+   "sql": "SELECT evidence FROM project_holds WHERE project_id=? AND kind='lease' AND identity=? AND state='held' AND lease_case='unarmed'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2622,
+   "lines": [
+    2622
+   ],
+   "sql": "UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? AND kind='lease' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2653,
+   "lines": [
+    2653
+   ],
+   "sql": "SELECT h.identity,l.run_handle,l.attempt FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_leases l ON l.project_id=h.project_id AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) WHERE h.project_id=? AND h.state<>'released' AND h.state='held' AND h.kind='lease' AND h.lease_case='unarmed' AND l.state='reserved' AND h.next_check_ms<=? ORDER BY h.next_check_ms LIMIT ?",
+   "plan": [
+    "SEARCH h USING INDEX project_holds_due (state=? AND next_check_ms<?)",
+    "SEARCH l USING INDEX sqlite_autoindex_result_leases_1 (project_id=? AND run_handle=? AND attempt=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2978,
+   "lines": [
+    2978
+   ],
+   "sql": "SELECT 1 FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3187,
+   "lines": [
+    3187
+   ],
+   "sql": "UPDATE project_holds SET state='releasing',request_id=? WHERE project_id=? AND kind='reservation' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3190,
+   "lines": [
+    3190
+   ],
+   "sql": "SELECT 1 FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? AND state IN ('releasing','released') UNION ALL SELECT 1 FROM project_account_settlements WHERE project_id=? AND run_handle=? AND attempt=?",
+   "plan": [
+    "COMPOUND QUERY",
+    "LEFT-MOST SUBQUERY",
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "UNION ALL",
+    "SEARCH project_account_settlements USING COVERING INDEX sqlite_autoindex_project_account_settlements_1 (project_id=? AND run_handle=? AND attempt=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3209,
+   "lines": [
+    3209,
+    3902
+   ],
+   "sql": "SELECT * FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3280,
+   "lines": [
+    3280
+   ],
+   "sql": "SELECT * FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? AND state='released'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3331,
+   "lines": [
+    3331
+   ],
+   "sql": "UPDATE project_holds SET state='releasing',request_id=?,request_digest=? WHERE project_id=? AND kind=? AND identity=? AND state<>'released'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3339,
+   "lines": [
+    3339
+   ],
+   "sql": "UPDATE project_holds SET lease_case='admitted_unbound' WHERE project_id=? AND kind='lease' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3488,
+   "lines": [
+    3488
+   ],
+   "sql": "SELECT state,release_kind,receipt FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3577,
+   "lines": [
+    3577
+   ],
+   "sql": "SELECT release_kind FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? AND state='released'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3622,
+   "lines": [
+    3622
+   ],
+   "sql": "SELECT COUNT(*) FROM project_holds WHERE project_id=? AND kind='orchestration' AND state='released' AND release_kind='closed' AND evidence=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3654,
+   "lines": [
+    3654
+   ],
+   "sql": "SELECT rowid FROM result_reservations INDEXED BY result_reservations_live WHERE project_id=? AND state!='expired' AND CASE WHEN state='reserved' AND EXISTS(SELECT 1 FROM result_leases AS born WHERE born.project_id=result_reservations.project_id AND born.claim_id=result_reservations.claim_id) THEN EXISTS(SELECT 1 FROM project_holds AS obligation WHERE obligation.project_id=result_reservations.project_id AND obligation.kind='reservation' AND obligation.identity=result_reservations.claim_id AND obligation.state='released') ELSE (expires_at_ms<=? OR state='retiring' OR EXISTS(SELECT 1 FROM project_orchestrations AS owned WHERE owned.project_id=result_reservations.project_id AND owned.orchestration_handle=result_reservations.orchestration_handle)) END",
+   "plan": [
+    "SEARCH result_reservations USING INDEX result_reservations_live (project_id=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH born USING COVERING INDEX sqlite_autoindex_result_leases_3 (project_id=? AND claim_id=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH obligation USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH owned USING COVERING INDEX sqlite_autoindex_project_orchestrations_1 (project_id=? AND orchestration_handle=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3745,
+   "lines": [
+    3745
+   ],
+   "sql": "SELECT rowid,released_at_ms FROM project_holds WHERE project_id=? AND state='released' AND kind IN ('reservation','lease') AND release_kind IN (?,?,?,?) AND evidence IS NOT NULL",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3770,
+   "lines": [
+    3770
+   ],
+   "sql": "DELETE FROM takeover_obligations WHERE (kind,identity) IN (SELECT kind,identity FROM project_holds WHERE rowid=?)",
+   "plan": [
+    "SEARCH takeover_obligations USING COVERING INDEX sqlite_autoindex_takeover_obligations_1 (kind=? AND identity=?)",
+    "LIST SUBQUERY 2",
+    "SEARCH project_holds USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3773,
+   "lines": [
+    3773
+   ],
+   "sql": "UPDATE project_holds SET evidence=NULL WHERE project_id=? AND rowid=?",
+   "plan": [
+    "SEARCH project_holds USING INTEGER PRIMARY KEY (rowid=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3864,
+   "lines": [
+    3864
+   ],
+   "sql": "SELECT 1 FROM project_holds WHERE project_id=? AND kind IN ('driver_entry','preparation') AND identity=? AND state<>'released' LIMIT 1",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 3906,
+   "lines": [
+    3906
+   ],
+   "sql": "UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=? AND state='released' AND (evidence IS NULL OR evidence=?)",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_report.py",
+   "line": 19,
+   "lines": [
+    19
+   ],
+   "sql": "SELECT kind,state,COUNT(*),MIN(taken_at_ms) FROM project_holds INDEXED BY project_holds_due WHERE project_id=? AND state<>'released' GROUP BY kind,state",
+   "plan": [
+    "SCAN project_holds USING INDEX project_holds_due",
+    "USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  {
+   "file": "project_holds_report.py",
+   "line": 30,
+   "lines": [
+    30
+   ],
+   "sql": "SELECT MIN(h.due_at_ms),COALESCE(SUM(h.due_at_ms<=?),0) FROM project_holds h INDEXED BY project_holds_due JOIN project_result_contexts c ON c.project_id=h.project_id AND c.run_handle=substr(h.identity,1,instr(h.identity,':')-1) AND c.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) WHERE h.project_id=? AND h.state<>'released' AND h.state='held' AND h.kind='result_custody' AND h.due_at_ms IS NOT NULL AND (c.state IN ('committed','recorded') OR (c.state='legacy_no_context' AND EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt AND s.state='committed')))",
+   "plan": [
+    "SEARCH h USING INDEX project_holds_due (state=?)",
+    "SEARCH c USING INDEX sqlite_autoindex_project_result_contexts_1 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)"
+   ]
+  },
+  {
+   "file": "project_holds_report.py",
+   "line": 50,
+   "lines": [
+    50
+   ],
+   "sql": "SELECT o.orchestration_handle,o.sequence,o.checkpoint_digest,COUNT(*) AS ended FROM project_result_contexts c JOIN project_holds h ON h.project_id=c.project_id AND h.kind='result_custody' AND h.identity=c.run_handle||':'||c.attempt JOIN result_reservations s ON s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt JOIN project_orchestrations o ON o.project_id=s.project_id AND o.orchestration_handle=s.orchestration_handle WHERE c.project_id=? AND c.outcome_digest IS NULL AND h.state='released' AND h.release_kind='orchestration_closed' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.project_id=c.project_id AND r.record_type='host_result_admission' AND json_extract(CAST(r.content AS TEXT),'$.dispatch_result.bridge_run_id')=s.claim_id) GROUP BY o.orchestration_handle",
+   "plan": [
+    "SEARCH c USING INDEX sqlite_autoindex_project_result_contexts_1 (project_id=?)",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX records_observed (project_id=?)",
+    "SEARCH o USING INDEX sqlite_autoindex_project_orchestrations_1 (project_id=? AND orchestration_handle=?)",
+    "USE TEMP B-TREE FOR GROUP BY"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    137
+   ],
+   "sql": "SELECT 1 FROM project_holds r INDEXED BY project_holds_due WHERE r.state<>'released' AND ((r.kind='lease' AND NOT EXISTS(SELECT 1 FROM result_leases l WHERE l.project_id=r.project_id AND l.run_handle=substr(r.identity,1,instr(r.identity,':')-1) AND l.attempt=CAST(substr(r.identity,instr(r.identity,':')+1) AS INTEGER) AND l.run_handle||':'||l.attempt=r.identity AND l.state IN ('reserved','claim_pending'))) OR (r.kind='reservation' AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=r.project_id AND s.claim_id=r.identity)) OR (r.kind='orchestration' AND NOT EXISTS(SELECT 1 FROM project_orchestrations o WHERE o.project_id=r.project_id AND o.orchestration_handle=r.identity AND o.state='open'))) LIMIT 1",
+   "plan": [
+    "SCAN r USING INDEX project_holds_due",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH l USING INDEX sqlite_autoindex_result_leases_1 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH s USING COVERING INDEX sqlite_autoindex_result_reservations_1 (project_id=? AND claim_id=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH o USING INDEX sqlite_autoindex_project_orchestrations_1 (project_id=? AND orchestration_handle=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    146
+   ],
+   "sql": "SELECT 1 FROM project_holds r INDEXED BY project_holds_due WHERE r.state<>'released' AND r.kind IN ('driver_entry','preparation') AND (NOT EXISTS(SELECT 1 FROM project_registered_runs s WHERE s.project_id=r.project_id AND s.run_handle=substr(r.identity,1,instr(r.identity,':')-1) AND s.attempt=CAST(substr(r.identity,instr(r.identity,':')+1) AS INTEGER) AND s.run_handle||':'||s.attempt=r.identity AND s.service_instance=r.instance AND s.orchestration_handle=json_extract(r.evidence,'$.orchestration_handle')) OR (r.kind='preparation' AND NOT EXISTS(SELECT 1 FROM project_holds e WHERE e.project_id=r.project_id AND e.kind='driver_entry' AND e.identity=r.identity AND e.instance=r.instance AND e.state<>'released'))) LIMIT 1",
+   "plan": [
+    "SCAN r USING INDEX project_holds_due",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH s USING INDEX sqlite_autoindex_project_registered_runs_1 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH e USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    153
+   ],
+   "sql": "SELECT 1 FROM project_registered_runs s LEFT JOIN project_holds r ON r.project_id=s.project_id AND r.kind='driver_entry' AND r.identity=s.run_handle||':'||s.attempt WHERE length(s.service_instance)=32 AND s.service_instance NOT GLOB '*[^0-9a-f]*' AND (r.kind IS NULL OR r.instance<>s.service_instance) LIMIT 1",
+   "plan": [
+    "SCAN s",
+    "SEARCH r USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    157
+   ],
+   "sql": "SELECT 1 FROM project_orchestrations o INDEXED BY project_orchestrations_state LEFT JOIN project_holds r ON r.project_id=o.project_id AND r.kind='orchestration' AND r.identity=o.orchestration_handle WHERE o.project_id=(SELECT project_id FROM history_identity) AND o.state='open' AND (r.kind IS NULL OR r.state<>'held') LIMIT 1",
+   "plan": [
+    "SEARCH o USING INDEX project_orchestrations_state (project_id=? AND state=?)",
+    "SCALAR SUBQUERY 1",
+    "SCAN history_identity USING COVERING INDEX sqlite_autoindex_history_identity_1",
+    "SEARCH r USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    163
+   ],
+   "sql": "SELECT 1 FROM result_reservations s CROSS JOIN project_holds r ON r.project_id=s.project_id AND r.kind='reservation' AND r.identity=s.claim_id WHERE r.state='released' AND ((r.release_kind='completed' AND (s.state='reserved' OR NOT EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a WHERE a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt))) OR (r.release_kind IN ('lost','crashed','released_unacknowledged') AND NOT EXISTS(SELECT 1 FROM project_account_settlements t WHERE t.project_id=s.project_id AND t.run_handle=s.run_handle AND t.attempt=s.attempt AND t.release_kind=r.release_kind AND t.claim_id IS s.claim_id))) LIMIT 1",
+   "plan": [
+    "SCAN s",
+    "SEARCH r USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH a USING COVERING INDEX sqlite_autoindex_project_cleanup_acknowledgements_1 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH t USING INDEX sqlite_autoindex_project_account_settlements_1 (project_id=? AND run_handle=? AND attempt=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    171
+   ],
+   "sql": "SELECT 1 FROM result_leases l INDEXED BY lease_expiry LEFT JOIN project_holds r ON r.project_id=l.project_id AND r.kind='lease' AND r.identity=l.run_handle||':'||l.attempt WHERE l.project_id=(SELECT project_id FROM history_identity) AND l.state IN ('reserved','claim_pending') AND (r.kind IS NULL OR r.state='released' OR (l.state='reserved' AND r.lease_case NOT IN ('unarmed')) OR (l.state='claim_pending' AND r.lease_case NOT IN ('armed','closing_denied','admitted_unbound'))) LIMIT 1",
+   "plan": [
+    "SEARCH l USING INDEX lease_expiry (project_id=? AND state=?)",
+    "SCALAR SUBQUERY 1",
+    "SCAN history_identity USING COVERING INDEX sqlite_autoindex_history_identity_1",
+    "SEARCH r USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    177
+   ],
+   "sql": "SELECT 1 FROM result_reservations s LEFT JOIN project_holds r ON r.project_id=s.project_id AND r.kind='reservation' AND r.identity=s.claim_id WHERE r.kind IS NULL LIMIT 1",
+   "plan": [
+    "SCAN s USING COVERING INDEX sqlite_autoindex_result_reservations_1",
+    "SEARCH r USING COVERING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    183
+   ],
+   "sql": "SELECT 1 FROM project_account_settlements t LEFT JOIN project_holds r ON r.project_id=t.project_id AND r.kind='reservation' AND r.identity=t.claim_id WHERE t.claim_id IS NOT NULL AND (r.kind IS NULL OR r.state<>'released' OR r.release_kind<>t.release_kind) LIMIT 1",
+   "plan": [
+    "SCAN t",
+    "SEARCH r USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 136,
+   "lines": [
+    136,
+    187
+   ],
+   "sql": "SELECT 1 FROM project_account_settlements t LEFT JOIN project_holds r ON r.project_id=t.project_id AND r.kind='lease' AND r.identity=t.run_handle||':'||t.attempt WHERE t.claim_id IS NULL AND (r.kind IS NULL OR r.state<>'released' OR r.release_kind<>'lost_unbound') LIMIT 1",
+   "plan": [
+    "SCAN t",
+    "SEARCH r USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 229,
+   "lines": [
+    229,
+    230
+   ],
+   "sql": "SELECT 1 FROM project_orchestrations o WHERE (EXISTS(SELECT 1 FROM project_holds h INDEXED BY project_holds_due WHERE h.project_id=o.project_id AND h.state<>'released' AND h.kind IN ('driver_entry','preparation') AND json_extract(h.evidence,'$.orchestration_handle')=o.orchestration_handle) OR EXISTS(SELECT 1 FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_reservations s ON s.project_id=h.project_id AND s.claim_id=h.identity WHERE h.project_id=o.project_id AND h.kind='reservation' AND h.state<>'released' AND s.orchestration_handle=o.orchestration_handle) OR EXISTS(SELECT 1 FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_leases l ON l.project_id=h.project_id AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) WHERE h.project_id=o.project_id AND h.kind='lease' AND h.state<>'released' AND json_extract(CAST(binding AS TEXT),'$.orchestration_handle')=o.orchestration_handle AND l.state IN ('reserved','claim_pending')))",
+   "plan": [
+    "SCAN o USING COVERING INDEX sqlite_autoindex_project_orchestrations_1",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SCAN h USING INDEX project_holds_due",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SCAN h USING INDEX project_holds_due",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_1 (project_id=? AND claim_id=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SCAN h USING INDEX project_holds_due",
+    "SEARCH l USING INDEX sqlite_autoindex_result_leases_1 (project_id=? AND run_handle=? AND attempt=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 256,
+   "lines": [
+    256
+   ],
+   "sql": "SELECT json_extract(evidence,'$.orchestration_handle') FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 331,
+   "lines": [
+    331
+   ],
+   "sql": "SELECT MIN(MAX(due_at_ms,next_check_ms)) FROM project_holds WHERE kind='orchestration' AND state='held' AND due_at_ms IS NOT NULL",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_orchestration_check"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 337,
+   "lines": [
+    337
+   ],
+   "sql": "SELECT MIN(due_at_ms) FROM project_holds WHERE kind=? AND state=? AND due_at_ms IS NOT NULL",
+   "plan": [
+    "SEARCH project_holds"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 342,
+   "lines": [
+    342
+   ],
+   "sql": "SELECT MIN(next_check_ms) FROM project_holds WHERE state='releasing' AND kind='open_binding'",
+   "plan": [
+    "SEARCH project_holds"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 354,
+   "lines": [
+    354
+   ],
+   "sql": "SELECT 1 FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING COVERING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 363,
+   "lines": [
+    363
+   ],
+   "sql": "UPDATE project_holds SET due_at_ms=MAX(COALESCE(due_at_ms,0),?) WHERE project_id=? AND kind='orchestration' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 371,
+   "lines": [
+    371
+   ],
+   "sql": "UPDATE project_holds SET lease_case='armed' WHERE project_id=? AND kind='lease' AND identity=? AND state='held' AND lease_case='unarmed'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 380,
+   "lines": [
+    380
+   ],
+   "sql": "UPDATE project_holds SET state='released',released_at_ms=?,release_kind=?,receipt=?,evidence=COALESCE(?,evidence) WHERE project_id=? AND kind=? AND identity=? AND state<>'released'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 387,
+   "lines": [
+    387
+   ],
+   "sql": "SELECT due_at_ms FROM project_holds WHERE project_id=? AND kind='orchestration' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 393,
+   "lines": [
+    393
+   ],
+   "sql": "UPDATE project_holds SET next_check_ms=0,evidence=NULL WHERE project_id=? AND kind='orchestration' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 410,
+   "lines": [
+    410
+   ],
+   "sql": "SELECT 1 FROM project_holds WHERE project_id=? AND kind='orchestration' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING COVERING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 419,
+   "lines": [
+    419
+   ],
+   "sql": "UPDATE project_holds SET due_at_ms=? WHERE project_id=? AND kind='orchestration' AND identity=? AND state='held' AND due_at_ms IS NULL",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 435,
+   "lines": [
+    435
+   ],
+   "sql": "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,due_at_ms,released_at_ms,release_kind,evidence) SELECT l.project_id,'lease',l.run_handle||':'||l.attempt,CASE WHEN l.state IN ('reserved','claim_pending') THEN 'held' ELSE 'released' END,CASE WHEN l.state='reserved' OR (l.state='expired' AND NOT EXISTS(SELECT 1 FROM project_host_opens o WHERE o.project_id=l.project_id AND o.run_handle=l.run_handle AND o.attempt=l.attempt)) THEN 'unarmed' ELSE 'armed' END,l.created_at_ms,l.reserved_until_ms,CASE WHEN l.state IN ('reserved','claim_pending') THEN NULL ELSE :now END,CASE WHEN l.state='bound' THEN 'bound' WHEN l.state<>'expired' THEN NULL WHEN EXISTS(SELECT 1 FROM project_host_opens o WHERE o.project_id=l.project_id AND o.run_handle=l.run_handle AND o.attempt=l.attempt) THEN 'denied' ELSE 'withdrawn_unsent' END,:evidence FROM result_leases l WHERE NOT EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=l.project_id AND h.kind='lease' AND h.identity=l.run_handle||':'||l.attempt)",
+   "plan": [
+    "SCAN l",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH h USING COVERING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH o USING COVERING INDEX sqlite_autoindex_project_host_opens_1 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH o USING COVERING INDEX sqlite_autoindex_project_host_opens_1 (project_id=? AND run_handle=? AND attempt=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 446,
+   "lines": [
+    446
+   ],
+   "sql": "INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,due_at_ms,released_at_ms,release_kind,evidence) SELECT s.project_id,'reservation',s.claim_id,CASE WHEN s.state<>'reserved' AND EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a WHERE a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt) THEN 'released' ELSE 'held' END,s.created_at_ms,s.reserved_until_ms,CASE WHEN s.state<>'reserved' AND EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a WHERE a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt) THEN :now END,CASE WHEN s.state<>'reserved' AND EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a WHERE a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt) THEN 'completed' END,:evidence FROM result_reservations s WHERE NOT EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=s.project_id AND h.kind='reservation' AND h.identity=s.claim_id)",
+   "plan": [
+    "SCAN s",
+    "CORRELATED SCALAR SUBQUERY 4",
+    "SEARCH h USING COVERING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH a USING COVERING INDEX sqlite_autoindex_project_cleanup_acknowledgements_1 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH a USING COVERING INDEX sqlite_autoindex_project_cleanup_acknowledgements_1 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH a USING COVERING INDEX sqlite_autoindex_project_cleanup_acknowledgements_1 (project_id=? AND run_handle=? AND attempt=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 466,
+   "lines": [
+    466
+   ],
+   "sql": "INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,due_at_ms,evidence) SELECT s.project_id,'result_custody',s.run_handle||':'||s.attempt,'held',s.created_at_ms,s.expires_at_ms,:evidence FROM result_reservations s JOIN project_result_contexts c ON c.project_id=s.project_id AND c.run_handle=s.run_handle AND c.attempt=s.attempt AND c.state='legacy_no_context' WHERE NOT EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=s.project_id AND h.kind='result_custody' AND h.identity=s.run_handle||':'||s.attempt)",
+   "plan": [
+    "SCAN c",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH h USING COVERING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 505,
+   "lines": [
+    505,
+    509
+   ],
+   "sql": "SELECT 1 FROM project_result_contexts c INDEXED BY project_result_contexts_live LEFT JOIN project_holds r ON r.project_id=c.project_id AND r.kind='result_custody' AND r.identity=c.run_handle||':'||c.attempt WHERE c.state NOT IN ('ended','expired') AND (r.kind IS NULL OR (r.state<>'released' AND c.state IN ('leased','opened','bound') AND NOT EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='lease' AND h.identity=c.run_handle||':'||c.attempt AND h.state<>'released') AND NOT EXISTS(SELECT 1 FROM result_reservations s JOIN project_holds h ON h.project_id=s.project_id AND h.kind='reservation' AND h.identity=s.claim_id AND h.state<>'released' WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt)) OR (r.state<>'released' AND c.state IN ('committed','recorded') AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt AND s.state IN ('committed','retiring'))) OR (r.state='released' AND r.release_kind='lost_with_reservation' AND (r.evidence IS NULL OR (NOT EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='lease' AND h.identity=r.identity AND h.state='released' AND h.release_kind IN ('withdrawn_unsent','denied','fenced','lost_unbound')) AND NOT EXISTS(SELECT 1 FROM result_reservations s JOIN project_holds h ON h.project_id=s.project_id AND h.kind='reservation' AND h.identity=s.claim_id WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt AND h.state='released' AND h.release_kind IN ('lost','crashed','released_unacknowledged')))))) LIMIT 1",
+   "plan": [
+    "SCAN c USING INDEX project_result_contexts_live",
+    "SEARCH r USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 4",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 5",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_holds_schema.py",
+   "line": 505,
+   "lines": [
+    505,
+    528
+   ],
+   "sql": "SELECT 1 FROM project_holds r INDEXED BY project_holds_due WHERE r.state<>'released' AND r.kind='result_custody' AND NOT EXISTS(SELECT 1 FROM project_result_contexts c WHERE c.project_id=r.project_id AND c.run_handle=substr(r.identity,1,instr(r.identity,':')-1) AND c.attempt=CAST(substr(r.identity,instr(r.identity,':')+1) AS INTEGER) AND c.run_handle||':'||c.attempt=r.identity AND c.state NOT IN ('ended','expired')) LIMIT 1",
+   "plan": [
+    "SCAN r USING INDEX project_holds_due",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH c USING INDEX sqlite_autoindex_project_result_contexts_1 (project_id=? AND run_handle=? AND attempt=?)"
+   ]
+  },
+  {
+   "file": "project_release_ack.py",
+   "line": 76,
+   "lines": [
+    76
+   ],
+   "sql": "SELECT s.state,h.state AS held FROM result_reservations s JOIN project_holds h ON h.project_id=s.project_id AND h.kind='reservation' AND h.identity=s.claim_id WHERE s.project_id=? AND s.claim_id=?",
+   "plan": [
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_1 (project_id=? AND claim_id=?)"
+   ]
+  },
+  {
+   "file": "project_result_contexts.py",
+   "line": 277,
+   "lines": [
+    277
+   ],
+   "sql": "UPDATE project_holds SET due_at_ms=? WHERE project_id=? AND kind='result_custody' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_result_contexts.py",
+   "line": 307,
+   "lines": [
+    307
+   ],
+   "sql": "SELECT 1 FROM project_holds WHERE project_id=? AND kind='result_custody' AND identity=? AND state<>'released'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_result_contexts.py",
+   "line": 474,
+   "lines": [
+    474
+   ],
+   "sql": "SELECT c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live WHERE c.state NOT IN ('ended','expired') AND c.state IN ('retiring','repair_required') AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt) AND NOT EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='result_custody' AND h.identity=c.run_handle||':'||c.attempt AND h.state<>'released')",
+   "plan": [
+    "SEARCH c USING INDEX project_result_contexts_live (state=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH s USING COVERING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_result_contexts.py",
+   "line": 493,
+   "lines": [
+    493
+   ],
+   "sql": "SELECT c.rowid,c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live WHERE c.project_id=? AND c.state NOT IN ('ended','expired') AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt) AND EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='result_custody' AND h.identity=c.run_handle||':'||c.attempt AND h.state='released')",
+   "plan": [
+    "SCAN c USING INDEX project_result_contexts_live",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH s USING COVERING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+    "SEARCH h EXISTS USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_takeover.py",
+   "line": 87,
+   "lines": [
+    87
+   ],
+   "sql": "SELECT * FROM project_holds WHERE state='releasing' AND state<>'released' AND kind IN ('lease','reservation')",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_kind_due (kind=? AND state=?)"
+   ]
+  },
+  {
+   "file": "project_takeover.py",
+   "line": 138,
+   "lines": [
+    138
+   ],
+   "sql": "SELECT 1 FROM project_holds h WHERE h.project_id=? AND ((h.kind='reservation' AND h.identity=?) OR (h.kind='lease' AND h.identity=?)) AND h.state='releasing' AND h.kind IN ('lease','reservation') AND EXISTS (SELECT 1 FROM takeover_obligations o WHERE o.kind=h.kind AND o.identity=h.identity AND o.original_request_digest='unverified') LIMIT 1",
+   "plan": [
+    "MULTI-INDEX OR",
+    "INDEX 1",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "INDEX 2",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "SEARCH o EXISTS USING INDEX sqlite_autoindex_takeover_obligations_1 (kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_takeover.py",
+   "line": 225,
+   "lines": [
+    225
+   ],
+   "sql": "SELECT * FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=?",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "project_takeover.py",
+   "line": 239,
+   "lines": [
+    239
+   ],
+   "sql": "SELECT evidence FROM project_holds WHERE kind='result_custody' AND state='held'",
+   "plan": [
+    "SCAN project_holds"
+   ]
+  },
+  {
+   "file": "project_takeover.py",
+   "line": 342,
+   "lines": [
+    342
+   ],
+   "sql": "DELETE FROM takeover_obligations WHERE NOT EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=(SELECT project_id FROM history_identity) AND h.kind=takeover_obligations.kind AND h.identity=takeover_obligations.identity AND (h.state<>'released' OR h.evidence IS NOT NULL))",
+   "plan": [
+    "SCAN takeover_obligations",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "SCALAR SUBQUERY 1",
+    "SCAN history_identity USING COVERING INDEX sqlite_autoindex_history_identity_1"
+   ]
+  },
+  {
+   "file": "project_takeover.py",
+   "line": 353,
+   "lines": [
+    353
+   ],
+   "sql": "SELECT o.original_runtime_digest FROM takeover_obligations o CROSS JOIN project_holds h ON h.project_id=(SELECT project_id FROM history_identity) AND h.kind=o.kind AND h.identity=o.identity WHERE h.state<>'released' AND o.original_request_digest<>?",
+   "plan": [
+    "SCAN o",
+    "SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "SCALAR SUBQUERY 1",
+    "SCAN history_identity USING COVERING INDEX sqlite_autoindex_history_identity_1"
+   ]
+  },
+  {
+   "file": "recovery_report.py",
+   "line": 68,
+   "lines": [
+    68
+   ],
+   "sql": "SELECT s.run_handle FROM project_holds h INDEXED BY project_holds_due JOIN result_reservations s ON s.project_id=h.project_id AND s.claim_id=h.identity WHERE h.project_id=? AND h.state<>'released' AND h.kind='reservation' UNION SELECT l.run_handle FROM project_holds h INDEXED BY project_holds_due JOIN result_leases l ON l.project_id=h.project_id AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) WHERE h.project_id=? AND h.state<>'released' AND h.kind='lease' AND h.lease_case IN ('closing_denied','admitted_unbound')",
+   "plan": [
+    "MERGE (UNION)",
+    "LEFT",
+    "SCAN h USING INDEX project_holds_due",
+    "SEARCH s USING INDEX sqlite_autoindex_result_reservations_1 (project_id=? AND claim_id=?)",
+    "USE TEMP B-TREE FOR ORDER BY",
+    "RIGHT",
+    "SCAN h USING INDEX project_holds_due",
+    "SEARCH l USING COVERING INDEX sqlite_autoindex_result_leases_1 (project_id=? AND run_handle=? AND attempt=?)",
+    "USE TEMP B-TREE FOR ORDER BY"
+   ]
+  },
+  {
+   "file": "run_holds_schema.py",
+   "line": 162,
+   "lines": [
+    162,
+    163
+   ],
+   "sql": "SELECT 1 FROM active_run_capacity a WHERE EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest AND r.state='released' AND r.release_kind IN ('crashed','lost','unsent','process_gone','owner_confirmed') AND a.release_digest IS NOT NULL AND r.receipt=a.release_digest AND r.released_at_ms=a.released_at_ms)",
+   "plan": [
+    "SCAN a",
+    "SEARCH r EXISTS USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "run_holds_schema.py",
+   "line": 202,
+   "lines": [
+    202,
+    203
+   ],
+   "sql": "SELECT 1 FROM active_run_capacity a LEFT JOIN run_holds r ON r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest WHERE r.kind IS NULL OR (r.state='released') <> (a.released_at_ms IS NOT NULL) OR (r.release_kind IN ('crashed','lost','unsent','process_gone','owner_confirmed') AND (r.state<>'released' OR r.receipt IS NULL OR r.receipt IS NOT a.release_digest OR r.released_at_ms IS NOT a.released_at_ms)) OR (r.state='released' AND (r.release_kind NOT IN ('completed','crashed','lost','unsent','process_gone','owner_confirmed') OR (r.release_kind='completed' AND (r.receipt IS NOT a.release_digest OR r.released_at_ms IS NOT a.released_at_ms)))) LIMIT 1",
+   "plan": [
+    "SCAN a",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "run_holds_schema.py",
+   "line": 202,
+   "lines": [
+    202,
+    205
+   ],
+   "sql": "SELECT 1 FROM host_run_bindings h LEFT JOIN run_holds r ON r.project_id=h.project_id AND r.kind='binding' AND r.identity=h.handle_digest WHERE r.kind IS NULL OR (h.binding_state IS NOT 'pending' AND r.state<>'released') OR (h.binding_state IS 'pending' AND r.state='released' AND r.release_kind IS NOT 'expired') OR (r.release_kind='expired' AND r.released_at_ms<h.expires_at_ms) LIMIT 1",
+   "plan": [
+    "SCAN h",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "run_holds_schema.py",
+   "line": 202,
+   "lines": [
+    202,
+    207
+   ],
+   "sql": "SELECT 1 FROM account_billing_probe_requests p LEFT JOIN run_holds r ON r.project_id=p.project_id AND r.kind='probe' AND r.identity=p.request_key WHERE r.kind IS NULL OR (r.state='released') <> (p.state='committed') LIMIT 1",
+   "plan": [
+    "SCAN p",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?) LEFT-JOIN"
+   ]
+  },
+  {
+   "file": "run_holds_schema.py",
+   "line": 202,
+   "lines": [
+    202,
+    210
+   ],
+   "sql": "SELECT 1 FROM run_holds r INDEXED BY run_holds_due WHERE r.state<>'released' AND ((r.kind='run_slot' AND NOT EXISTS(SELECT 1 FROM active_run_capacity a WHERE a.project_id=r.project_id AND a.handle_digest=r.identity)) OR (r.kind='binding' AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=r.project_id AND h.handle_digest=r.identity)) OR (r.kind='probe' AND NOT EXISTS(SELECT 1 FROM account_billing_probe_requests p WHERE p.project_id=r.project_id AND p.request_key=r.identity))) LIMIT 1",
+   "plan": [
+    "SCAN r USING INDEX run_holds_due",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH a USING COVERING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH h USING COVERING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH p USING COVERING INDEX sqlite_autoindex_account_billing_probe_requests_1 (project_id=? AND request_key=?)"
+   ]
+  },
+  {
+   "file": "run_holds_schema.py",
+   "line": 235,
+   "lines": [
+    235
+   ],
+   "sql": "SELECT receipt,evidence FROM run_holds WHERE (evidence IS NOT NULL AND (receipt IS NULL OR receipt IS NOT run_hold_raw_digest(evidence))) OR (kind='run_slot' AND release_kind IN ('crashed','lost','unsent','process_gone','owner_confirmed') AND evidence IS NULL)",
+   "plan": [
+    "SCAN run_holds"
+   ]
+  },
+  {
+   "file": "run_holds_schema.py",
+   "line": 279,
+   "lines": [
+    279
+   ],
+   "sql": "SELECT 1 FROM active_run_capacity a WHERE NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.kind='run_slot' AND r.project_id=a.project_id AND r.identity=a.handle_digest) UNION ALL SELECT 1 FROM host_run_bindings h WHERE NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.kind='binding' AND r.project_id=h.project_id AND r.identity=h.handle_digest) UNION ALL SELECT 1 FROM account_billing_probe_requests p WHERE NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.kind='probe' AND r.project_id=p.project_id AND r.identity=p.request_key) LIMIT 1",
+   "plan": [
+    "COMPOUND QUERY",
+    "LEFT-MOST SUBQUERY",
+    "SCAN a USING COVERING INDEX sqlite_autoindex_active_run_capacity_1",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING COVERING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "UNION ALL",
+    "SCAN h USING COVERING INDEX sqlite_autoindex_host_run_bindings_1",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH r USING COVERING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "UNION ALL",
+    "SCAN p USING COVERING INDEX sqlite_autoindex_account_billing_probe_requests_1",
+    "CORRELATED SCALAR SUBQUERY 5",
+    "SEARCH r USING COVERING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "runtime_lineage.py",
+   "line": 151,
+   "lines": [
+    151
+   ],
+   "sql": "SELECT i.runtime_digest FROM launch_inputs i JOIN host_run_bindings h ON h.project_id=i.project_id AND h.handle_digest=i.handle_digest WHERE h.expires_at_ms>=? OR EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=i.project_id AND r.kind IN ('run_slot','binding') AND r.identity=i.handle_digest AND r.state<>'released')",
+   "plan": [
+    "SCAN i",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "runtime_lineage.py",
+   "line": 291,
+   "lines": [
+    291
+   ],
+   "sql": "SELECT i.runtime_digest FROM launch_inputs i LEFT JOIN host_run_bindings h ON h.project_id=i.project_id AND h.handle_digest=i.handle_digest WHERE i.rowid>=? AND i.rowid<=? AND (h.expires_at_ms>=? OR EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=i.project_id AND r.kind IN ('run_slot','binding') AND r.identity=i.handle_digest AND r.state<>'released'))",
+   "plan": [
+    "SEARCH i USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?) LEFT-JOIN",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "service_record.py",
+   "line": 174,
+   "lines": [
+    174
+   ],
+   "sql": "SELECT evidence FROM project_holds WHERE project_id=? AND kind='result_custody' AND identity=? AND state='held'",
+   "plan": [
+    "SEARCH project_holds USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  {
+   "file": "health_holds.py",
+   "line": 297,
+   "lines": [
+    297
+   ],
+   "sql": "SELECT 1 FROM run_holds r INDEXED BY run_holds_due WHERE r.state<>'released' AND r.state='held' AND r.project_id=? AND r.next_check_ms<? AND ((r.kind='binding' AND EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=r.project_id AND h.handle_digest=r.identity AND h.binding_state='pending' AND h.expires_at_ms<?)) OR (r.kind='probe' AND EXISTS(SELECT 1 FROM account_billing_probe_requests p WHERE p.project_id=r.project_id AND p.request_key=r.identity AND p.state='reserved' AND p.deadline_at_ms<?)) OR (r.kind='run_slot' AND EXISTS(SELECT 1 FROM active_run_capacity a WHERE a.project_id=r.project_id AND a.handle_digest=r.identity AND a.released_at_ms IS NULL AND ((a.deadline_at_ms IS NOT NULL AND a.deadline_at_ms<? AND a.execution_deadline_ns IS NOT NULL AND (a.execution_deadline_ns<=? OR a.clock_reference_ns>?)) OR (a.kind='legacy_unknown' AND COALESCE((SELECT CASE WHEN COUNT(*)=1 THEN MAX(legacy_dispatch_deadline(d.content,d.content_digest,a.run_id,a.bridge_run_id)) END FROM (SELECT * FROM records INDEXED BY records_run WHERE project_id=a.project_id AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=a.run_id AND record_type='dispatch_intent' AND source='lifecycle' LIMIT 2) d WHERE d.project_id=a.project_id AND d.record_type='dispatch_intent' AND d.source='lifecycle' AND legacy_dispatch_run_id(d.content)=a.run_id)<?,0)) OR EXISTS(SELECT 1 FROM host_run_bindings lost WHERE lost.project_id=a.project_id AND lost.handle_digest=a.handle_digest AND lost.binding_state='abandoned' AND lost.abandoned_reason='service_lost'))))) ORDER BY r.next_check_ms LIMIT 1",
+   "plan": [
+    "SEARCH r USING INDEX run_holds_due (state=? AND next_check_ms<?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH p USING INDEX sqlite_autoindex_account_billing_probe_requests_1 (project_id=? AND request_key=?)",
+    "CORRELATED SCALAR SUBQUERY 6",
+    "SEARCH a USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 4",
+    "CO-ROUTINE d",
+    "SEARCH records USING INDEX records_run (project_id=?)",
+    "SCAN d",
+    "CORRELATED SCALAR SUBQUERY 5",
+    "SEARCH lost USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+   ]
+  },
+  {
+   "file": "project_backup.py",
+   "line": 122,
+   "lines": [
+    122
+   ],
+   "sql": "SELECT COUNT(*),IFNULL(SUM(2*IFNULL(length(CAST(project_id AS BLOB)),0)+2*IFNULL(length(CAST(kind AS BLOB)),0)+2*IFNULL(length(CAST(identity AS BLOB)),0)+2*IFNULL(length(CAST(state AS BLOB)),0)+1*IFNULL(length(CAST(generation AS BLOB)),0)+1*IFNULL(length(CAST(taken_at_ms AS BLOB)),0)+1*IFNULL(length(CAST(released_at_ms AS BLOB)),0)+1*IFNULL(length(CAST(release_kind AS BLOB)),0)+1*IFNULL(length(CAST(receipt AS BLOB)),0)+1*IFNULL(length(CAST(evidence AS BLOB)),0)+2*IFNULL(length(CAST(next_check_ms AS BLOB)),0)),0) FROM run_holds WHERE project_id=?",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=?)"
+   ]
+  },
+  {
+   "file": "learning_store.py",
+   "line": 778,
+   "lines": [
+    778
+   ],
+   "sql": "SELECT kind,identity,state,generation,taken_at_ms,released_at_ms,release_kind,receipt,evidence,next_check_ms FROM run_holds WHERE project_id=? ORDER BY kind,identity",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=?)"
+   ]
+  },
+  {
+   "file": "learning_source_image.py",
+   "line": 274,
+   "lines": [
+    274
+   ],
+   "sql": "SELECT kind,identity,state,generation,taken_at_ms,released_at_ms,release_kind,receipt,evidence,next_check_ms FROM run_holds WHERE project_id=? ORDER BY kind,identity LIMIT 32",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=?)"
+   ]
+  },
+  {
+   "file": "learning_source_image.py",
+   "line": 274,
+   "lines": [
+    274
+   ],
+   "sql": "SELECT kind,identity,state,generation,taken_at_ms,released_at_ms,release_kind,receipt,evidence,next_check_ms FROM run_holds WHERE project_id=? AND (kind,identity)>(?,?) ORDER BY kind,identity LIMIT 32",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND (kind,identity)>(?,?))"
+   ]
+  },
+  {
+   "file": "project_backup.py",
+   "line": 394,
+   "lines": [
+    394
+   ],
+   "sql": "SELECT kind,identity,state,generation,taken_at_ms,released_at_ms,release_kind,receipt,evidence,next_check_ms FROM run_holds WHERE project_id=? ORDER BY kind,identity",
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2377,
+   "lines": [
+    2377
+   ],
+   "sql": "SELECT identity,evidence,json_extract(evidence,'$.instance') AS owner FROM project_holds INDEXED BY project_holds_open_held WHERE project_id=? AND kind='open_binding' AND state='held' AND json_extract(evidence,'$.instance') = ? AND identity > ? ORDER BY identity LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_open_held (project_id=? AND <expr>=? AND identity>?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2377,
+   "lines": [
+    2377
+   ],
+   "sql": "SELECT identity,evidence,json_extract(evidence,'$.instance') AS owner FROM project_holds INDEXED BY project_holds_open_held WHERE project_id=? AND kind='open_binding' AND state='held' AND json_extract(evidence,'$.instance') > ? AND json_extract(evidence,'$.instance') < ? ORDER BY json_extract(evidence,'$.instance'),identity LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_open_held (project_id=? AND <expr>>? AND <expr><?)"
+   ]
+  },
+  {
+   "file": "project_history.py",
+   "line": 2377,
+   "lines": [
+    2377
+   ],
+   "sql": "SELECT identity,evidence,json_extract(evidence,'$.instance') AS owner FROM project_holds INDEXED BY project_holds_open_held WHERE project_id=? AND kind='open_binding' AND state='held' AND json_extract(evidence,'$.instance') > ? ORDER BY json_extract(evidence,'$.instance'),identity LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING INDEX project_holds_open_held (project_id=? AND <expr>>?)"
+   ]
+  },
+  {
+   "file": "health_holds.py",
+   "line": 103,
+   "lines": [
+    103
+   ],
+   "sql": "SELECT rowid,state,next_check_ms FROM run_holds INDEXED BY run_holds_due WHERE state<>'released' AND (state,next_check_ms,rowid)>(?,?,?) ORDER BY state,next_check_ms,rowid LIMIT ?",
+   "plan": [
+    "SEARCH run_holds USING COVERING INDEX run_holds_due ((state,next_check_ms)>(?,?))"
+   ]
+  },
+  {
+   "file": "health_holds.py",
+   "line": 103,
+   "lines": [
+    103
+   ],
+   "sql": "SELECT rowid,state,next_check_ms FROM project_holds INDEXED BY project_holds_due WHERE state<>'released' AND (state,next_check_ms,rowid)>(?,?,?) ORDER BY state,next_check_ms,rowid LIMIT ?",
+   "plan": [
+    "SEARCH project_holds USING COVERING INDEX project_holds_due ((state,next_check_ms)>(?,?))"
+   ]
+  }
+ ],
+ "unresolved": []
+}

@@ -1,0 +1,91 @@
+{
+ "runs": [
+  {
+   "run": "green",
+   "command": "$PY -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_s14g_hold_queries --module codex:tests.test_b4t_takeover --module codex:tests.test_project_holds_schema --module codex:tests.test_b6_unattended_close",
+   "elapsed_seconds": 15.148798124981113,
+   "metadata_errors": [],
+   "budget_failures": [],
+   "requirements": {
+    "S14G-1": "passed",
+    "S14G-2": "passed",
+    "S14G-3": "passed"
+   },
+   "modules": {
+    "codex:tests.test_b4t_takeover": 27.406982373911887,
+    "codex:tests.test_b6_unattended_close": 7.488181666936725,
+    "codex:tests.test_project_holds_schema": 1.5217084579635412,
+    "codex:tests.test_s14g_hold_queries": 1.6808215420460328
+   },
+   "workers": [
+    {
+     "unit": "tests.test_b6_unattended_close",
+     "returncode": 0,
+     "seconds": 7.488181666936725,
+     "timed_out": false,
+     "violations": [],
+     "log_tail": ".........................................\n----------------------------------------------------------------------\nRan 41 tests in 6.915s\n\nOK"
+    },
+    {
+     "unit": "tests.test_s14g_hold_queries",
+     "returncode": 0,
+     "seconds": 1.6808215420460328,
+     "timed_out": false,
+     "violations": [],
+     "log_tail": "........\n----------------------------------------------------------------------\nRan 8 tests in 1.073s\n\nOK"
+    },
+    {
+     "unit": "tests.test_project_holds_schema",
+     "returncode": 0,
+     "seconds": 1.5217084579635412,
+     "timed_out": false,
+     "violations": [],
+     "log_tail": "........................................\n----------------------------------------------------------------------\nRan 40 tests in 0.950s\n\nOK"
+    },
+    {
+     "unit": "tests.test_b4t_takeover#0",
+     "returncode": 0,
+     "seconds": 12.263078457908705,
+     "timed_out": false,
+     "violations": [],
+     "log_tail": ".......................................................................\n----------------------------------------------------------------------\nRan 71 tests in 12.101s\n\nOK"
+    },
+    {
+     "unit": "tests.test_b4t_takeover#1",
+     "returncode": 0,
+     "seconds": 15.143903916003183,
+     "timed_out": false,
+     "violations": [],
+     "log_tail": "......................................................................\n----------------------------------------------------------------------\nRan 70 tests in 14.996s\n\nOK"
+    }
+   ]
+  },
+  {
+   "run": "final",
+   "command": "$PY -B scripts/parallel_tests.py --jobs 1 --module codex:tests.test_s14g_hold_queries",
+   "elapsed_seconds": 1.5571724170586094,
+   "metadata_errors": [],
+   "budget_failures": [],
+   "requirements": {
+    "S14G-1": "passed",
+    "S14G-2": "passed",
+    "S14G-3": "passed"
+   },
+   "modules": {
+    "codex:tests.test_s14g_hold_queries": 1.5539099170127884
+   },
+   "workers": [
+    {
+     "unit": "tests.test_s14g_hold_queries",
+     "returncode": 0,
+     "seconds": 1.5539099170127884,
+     "timed_out": false,
+     "violations": [],
+     "log_tail": "........\n----------------------------------------------------------------------\nRan 8 tests in 1.014s\n\nOK"
+    }
+   ]
+  }
+ ],
+ "assertions_changed": [],
+ "fixture_adjustment": "RetentionA1Tests.project adds history_identity and project_id/key to project_holds; original inserted kind,identity,state,evidence values unchanged. No assertion edited."
+}

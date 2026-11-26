@@ -315,10 +315,10 @@ def _operation(function, *, read_only=False):
 _LAST_ATTEMPT_ACTIVITY = (
     "SELECT MAX(t) FROM ("
     "SELECT MAX(created_at_ms) AS t FROM result_reservations WHERE project_id=:project AND orchestration_handle=:handle "
-    "UNION ALL SELECT MAX(h.taken_at_ms) FROM result_reservations s JOIN project_holds h ON h.project_id=s.project_id "
+    "UNION ALL SELECT MAX(h.taken_at_ms) FROM result_reservations s CROSS JOIN project_holds h ON h.project_id=s.project_id "
     "AND h.kind='reservation' AND h.identity=s.claim_id WHERE s.project_id=:project AND s.orchestration_handle=:handle "
     f"UNION ALL SELECT MAX(created_at_ms) FROM result_leases WHERE project_id=:project AND {LEASE_ORCHESTRATION}=:handle "
-    "UNION ALL SELECT MAX(h.taken_at_ms) FROM result_leases JOIN project_holds h "
+    "UNION ALL SELECT MAX(h.taken_at_ms) FROM result_leases CROSS JOIN project_holds h "
     "ON h.project_id=result_leases.project_id AND h.kind='lease' "
     "AND h.identity=result_leases.run_handle||':'||result_leases.attempt "
     f"WHERE result_leases.project_id=:project AND {LEASE_ORCHESTRATION}=:handle)")
@@ -791,13 +791,13 @@ class ProjectHistory:
                 continue
             self._classify_legacy_custody([row['rowid']])
             identity = attempt_identity(value.binding.run_handle, value.binding.attempt)
-            held = self._connection.execute("SELECT evidence FROM project_holds WHERE kind='result_custody' AND identity=?",
-                                             (identity,)).fetchone()
+            held = self._connection.execute("SELECT evidence FROM project_holds WHERE project_id=? AND kind='result_custody' AND identity=?",
+                                             (self.project_id, identity)).fetchone()
             if held is not None and held['evidence'] is not None:
                 evidence = json.loads(held['evidence'])
                 evidence['takeover_id'] = intent['takeover_id']
-                self._connection.execute("UPDATE project_holds SET evidence=? WHERE kind='result_custody' AND identity=?",
-                                        (project_holds_schema.evidence_json(**evidence), identity))
+                self._connection.execute("UPDATE project_holds SET evidence=? WHERE project_id=? AND kind='result_custody' AND identity=?",
+                                        (project_holds_schema.evidence_json(**evidence), self.project_id, identity))
 
     def _legacy_evidence(self, kind, identity, reason, next_step, **facts):
         """Classify a held obligation without changing its state or authenticated outbox/reply evidence."""

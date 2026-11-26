@@ -84,7 +84,8 @@ def adopt_project(history, intent, *, migration=None):
                [(None, None, None)])
     for _, _, rowids in batches:
         where = '' if rowids is None else ' AND rowid IN (' + ','.join('?' for _ in rowids) + ')'
-        rows = db.execute("SELECT * FROM project_holds WHERE state='releasing'" + where, rowids or ()).fetchall()
+        rows = db.execute("SELECT * FROM project_holds WHERE state='releasing' AND state<>'released' "
+                          "AND kind IN ('lease','reservation')" + where, rowids or ()).fetchall()
         for hold in rows:
             if hold['kind'] not in ('lease', 'reservation'):
                 continue
@@ -221,8 +222,8 @@ def takeover_report(history, *, run_handle=None):
         if run['bridge_run_id'] in counted:
             continue
         counted.add(run['bridge_run_id'])
-        hold = history._connection.execute("SELECT * FROM project_holds WHERE kind='reservation' "
-                                            'AND identity=?', (run['bridge_run_id'],)).fetchone()
+        hold = history._connection.execute("SELECT * FROM project_holds WHERE project_id=? AND kind='reservation' "
+                                            'AND identity=?', (history.project_id, run['bridge_run_id'])).fetchone()
         if hold is not None:
             report['lost'] += int(hold['state'] == 'released' and hold['release_kind'] == 'lost')
             report['lost_held'] += int(hold['state'] == 'releasing')
@@ -339,7 +340,8 @@ def purge_takeover(db, now, *, transaction=None, checkpoint=None):
                    'AND takeover_id IN (SELECT takeover_id FROM takeover_record WHERE recorded_at_ms<?)',
                    (now - SETTLEMENT_REPLAY_WINDOW_MS,))
         db.execute('DELETE FROM takeover_obligations WHERE NOT EXISTS(SELECT 1 FROM project_holds h '
-                   'WHERE h.kind=takeover_obligations.kind AND h.identity=takeover_obligations.identity '
+                   'WHERE h.project_id=(SELECT project_id FROM history_identity) '
+                   'AND h.kind=takeover_obligations.kind AND h.identity=takeover_obligations.identity '
                    "AND (h.state<>'released' OR h.evidence IS NOT NULL))")
         records = db.execute('SELECT takeover_id,predecessor_digest,successor_digest,state '
                              'FROM takeover_record ORDER BY rowid DESC').fetchall()
@@ -349,7 +351,8 @@ def purge_takeover(db, now, *, transaction=None, checkpoint=None):
         edges = {r[1]: (r[0], r[2]) for r in records}
         # Every retained obligation keeps its own parent, even when refused.
         for row in db.execute('SELECT o.original_runtime_digest FROM takeover_obligations o '
-                              'JOIN project_holds h ON h.kind=o.kind AND h.identity=o.identity '
+                              'CROSS JOIN project_holds h ON h.project_id=(SELECT project_id FROM history_identity) '
+                              'AND h.kind=o.kind AND h.identity=o.identity '
                               "WHERE h.state<>'released' AND o.original_request_digest<>?", (UNVERIFIED,)):
             digest, seen = row[0], set()
             path = []

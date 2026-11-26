@@ -3333,7 +3333,10 @@ class RetentionA1Tests(unittest.TestCase):
         db = sqlite3.connect(':memory:')
         self.addCleanup(db.close)
         db.row_factory = sqlite3.Row
-        db.executescript(PROJECT_SCHEMA + "CREATE TABLE project_holds(kind,identity,state,evidence);"
+        db.executescript(PROJECT_SCHEMA + "CREATE TABLE history_identity(project_id TEXT PRIMARY KEY);"
+                        "INSERT INTO history_identity VALUES('project');"
+                        "CREATE TABLE project_holds(project_id TEXT DEFAULT 'project',kind,identity,state,evidence,"
+                        "PRIMARY KEY(project_id,kind,identity));"
                         "CREATE TABLE result_leases(run_handle,attempt);")
         return db
 
@@ -3369,7 +3372,8 @@ class RetentionA1Tests(unittest.TestCase):
         from codex_agents.project_history import SETTLEMENT_REPLAY_WINDOW_MS
         db = self.project()
         self.records(db, 50, runs=True)
-        db.execute("INSERT INTO project_holds VALUES('reservation','held','releasing','refused_unverifiable')")
+        db.execute("INSERT INTO project_holds(kind,identity,state,evidence) "
+                   "VALUES('reservation','held','releasing','refused_unverifiable')")
         db.execute('INSERT INTO takeover_obligations VALUES(?,?,?,?,?,?)',
                    ('reservation','held',format(1,'032x'),'original','a'*64,'b'*64))
         db.commit()
