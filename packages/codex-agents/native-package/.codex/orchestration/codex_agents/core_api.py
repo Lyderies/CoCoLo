@@ -171,6 +171,9 @@ READ_MAX_BYTES = 16 << 20  # no file read loads more than this (a jsonl file rea
 TOKENS_FILE_MAX_BYTES = 1 << 20
 LOCK_SECONDS = 5.0  # the file lock on tokens.json
 AUDIT_MAX_BYTES = 4 << 20
+# What the kernel may hold for a peer that does not read. The OS default differs by a factor of 25 (about 8 KiB on
+# macOS, about 208 KiB on Linux), and the slow-consumer bound (write_seconds) only starts once it is full.
+CONNECTION_SEND_BUFFER_BYTES = 8192
 MAX_SUBSCRIPTIONS_PER_TOKEN = 8
 
 PUSH_MAX_BYTES = 2048
@@ -971,6 +974,10 @@ class Connection:
         self.alive = True
         self.over_cap = False
         self.write_seconds = write_seconds
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, CONNECTION_SEND_BUFFER_BYTES)
+        except (OSError, AttributeError):
+            pass  # the bound then rests on the OS default
         self.subscribed = 0  # active subscriptions on this connection (a stream is not idle)
 
     def send(self, obj):
