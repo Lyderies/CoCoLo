@@ -12,6 +12,45 @@ skipped here. The exact reruns and the two failed native fixture attempts are
 listed in [fix-round-rerun.md](fix-round-rerun.md). A skipped native check is not
 a passing requirement or evidence that its fixture is correct.
 
+## Regression-only fix (S5, gate exception) — read first
+
+Head before: `84890ba5`, a WIP that was interrupted. Every hunk was reviewed and all were kept: a pin hunk adds
+only a design op, and the product hunks are listed below. It fixes the 22 regressions in 13 modules listed in
+[evidence/final-fix/affected.txt](evidence/final-fix/affected.txt). Pairs are in
+[assertions.md](assertions.md), "S5 regression-only fix".
+
+- **Op-set pins** (test_b2_service_outcome, test_account_host, test_holds_report_socket/test_b7b_terminal,
+  test_admission_inputs, test_signature_inputs, test_signature_job_intake): the pins gain only
+  `history.takeover_report`, `account.takeover_report` and `service.stop_for_update` (D2.8, D2.9, H4b,
+  A1.5 row 7).
+- **Downgraded-schema fixtures** (test_cleanup_receipt_lifetime P1_4 x3, test_rsf_s7_account x3): this was a
+  product defect, and the product is fixed. `_migrate` refused any pre-18 ledger that carried
+  `runtime_floor`/`runtime_lineage` ("predecessor ledger schema is incompatible"). Now such a ledger upgrades
+  as on 0.8.67 (owner 129.3) when both tables have the exact B4t layout. They are kept, not re-created, and the
+  floor still binds through `raise_floor` (`check_floor`). A wrong layout is still refused.
+- **test_cli_status_client_boundary** (4 cases): learning-status always made an `account.takeover_report`
+  exchange, even when no project report existed for it to complete (`takeover_lines` uses the account pages only
+  with a project report). It now reads them only then, so the status account exchange is the same as on ce81bd96.
+- **test_updfix UPDFIX_2** (4 cases): the product's behaviour is the design's. SW-3/B4t-0 removed the
+  `child_run_active` refusal, so the pin of `refused` follows that. Under A1.5 row 10, the fixture's own open
+  ledger is a held `collector.lock` that does not answer, so the "no collector runs here" case now closes it.
+  Red with the unchanged test: [evidence/regression-fix/updfix-red-unchanged-test.txt](evidence/regression-fix/updfix-red-unchanged-test.txt).
+- **test_host_slots M1** (product defect, red in isolation: [m1-red-before-fix.txt](evidence/regression-fix/m1-red-before-fix.txt)).
+  The new `account_takeover_report_client` is learning-status's last call, and it left the process-wide
+  `client` enrollment for the account endpoint installed. `service_transport._preamble` takes the first matching
+  owner. So the in-process host's lost-run settlement then went out as role `account` with the terminal's
+  label, the account refused it (`account_not_authorized`), and the slot was never freed. On ce81bd96,
+  learning-status's last enrollment was history-only. Fix: that read ends its enrollment (`finally:
+  install_enrollment(None)`). M1 is green.
+- **Open, for the primary: test_candidate_evidence_lookup AP3.** It opens the current ledger with released 0.8.61
+  (schema 17). H1d and T-5 require every pre-B4t binary to refuse schema 18, so this cannot pass until a
+  schema-18 release exists. The test is not changed.
+
+Named run, unsandboxed, short TMPDIR, tfvenv python, `--jobs 4`: the 13 modules + the 4 native modules +
+test_b4t_takeover. 85 s, `metadata_errors: []`, no budget failures, only AP3 failing:
+[evidence/regression-fix/named-run.txt](evidence/regression-fix/named-run.txt). No --affected or full run was
+made here (the primary runs it).
+
 ## Final fix (S5, last round) — read first
 
 Head before this round: `094f73d1` (fix round `ff35ecdd` plus the primary's native-run evidence). Scope: exactly

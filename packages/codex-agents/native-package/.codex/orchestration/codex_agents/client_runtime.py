@@ -1111,6 +1111,11 @@ def account_takeover_report_client(state_root, project_root, *, host_client, pre
         return None
     except (DispatchError, StateError, OSError, AccountError):
         return None
+    finally:
+        # learning-status makes this read last. Its enrollment for the account endpoint ends with it, so no
+        # process-wide client enrollment for that endpoint outlives the read and comes ahead of a host's own
+        # (an in-process project driver's settlement then went out under the terminal label and was refused).
+        install_enrollment(None)
 
 
 def capacity_report_client(state_root, project_root, *, host_client):
