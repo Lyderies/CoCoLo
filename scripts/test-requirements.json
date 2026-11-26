@@ -4939,6 +4939,26 @@
   "source": "tests/requirements/s11.json#HM2A-11",
   "statement": "The collector registers the workspaces check with a read-only pending reader over the project histories (no I/O at registration); a pass removes an orphan folder and keeps a live driver's folder."
  },
+ "HM2A-12": {
+  "checks": [
+   "codex:tests.test_health_workspaces.LiveFindingTests.test_HM2A_12_a_corrupt_store_is_never_read_as_owing_nothing",
+   "codex:tests.test_health_workspaces.LiveFindingTests.test_HM2A_12_a_pass_with_an_older_store_cleans_an_orphan_and_keeps_what_a_driver_owes",
+   "codex:tests.test_health_workspaces.LiveFindingTests.test_HM2A_12_a_store_without_project_holds_owes_nothing_and_does_not_fail_the_read",
+   "codex:tests.test_health_workspaces.LiveFindingTests.test_HM2A_12_an_older_store_beside_a_normal_project_returns_the_normal_projects_removals"
+  ],
+  "source": "tests/requirements/s11.json#HM2A-12",
+  "statement": "A project whose history has no project_holds table (an older but valid store) owes no removals: it counts zero and does not fail the whole pending read; a corrupt or unreadable store still does."
+ },
+ "HM2A-13": {
+  "checks": [
+   "codex:tests.test_health_workspaces.LiveFindingTests.test_HM2A_13_an_unknown_without_a_reason_keeps_the_old_finding",
+   "codex:tests.test_health_workspaces.LiveFindingTests.test_HM2A_13_every_unknown_names_its_reason",
+   "codex:tests.test_health_workspaces.LiveFindingTests.test_HM2A_13_the_collector_wires_the_reason_reader",
+   "codex:tests.test_health_workspaces.LiveFindingTests.test_HM2A_13_the_finding_names_the_reason_in_its_text_and_subject_with_a_plain_next_step"
+  ],
+  "source": "tests/requirements/s11.json#HM2A-13",
+  "statement": "Every remaining unknown pending read names its reason (too_many_projects, projects_unreadable:<Class>, history_unreadable:<Class>:<project id>, too_many_pending:<project id>, deadline); the workspaces finding carries it in its text and subject with a plain next step, within the existing length bounds. No dedupe exists in the health monitor for findings (it shows the last pass's findings), so none was added."
+ },
  "RS-10-DUE": {
   "checks": [
    "codex:tests.test_s13_budgets.S13Budgets.test_1000_due_holds_drain_in_batches_of_64_each_under_50_ms_and_well_inside_60_s"

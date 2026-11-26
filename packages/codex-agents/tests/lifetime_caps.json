@@ -2098,7 +2098,7 @@
    "ends": "HM2A-11: the same pending read as pending_workspaces, per project: it stops reading rows past MAX_PENDING_REMOVALS (64) and the caller answers unknown (None); nothing is stored between passes, each pass reads afresh under one deadline.",
    "test": "test_HM2A_11_the_pending_reader_goes_past_its_bounds_and_says_unknown"
   },
-  "memory_holds.py::pending_workspaces": {
+  "memory_holds.py::pending_workspaces_detail": {
    "checks": 3,
    "ends": "HM-2a wiring (S11): one health pass reads at most MAX_PENDING_READ_PROJECTS (256) project folders and at most MAX_PENDING_REMOVALS (64) pending removal records per project, through the primary-key range of that project's preparation rows (no full-table scan, no temporary sort), under one monotonic deadline (PENDING_DEADLINE_SECONDS, 2 s, checked by a SQLite progress handler cleared in finally and in each Python loop); nothing is kept between passes, and a read that meets a bound or the deadline answers unknown (None), never a partial set, so the workspaces check removes nothing that pass and says so. No state, count or record is stored; each pass reads afresh.",
    "test": "test_HM2A_11_the_pending_reader_goes_past_its_bounds_and_says_unknown"

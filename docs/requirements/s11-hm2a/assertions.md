@@ -63,3 +63,15 @@ No existing test assertion was removed, weakened or changed; six tests were adde
 ## Review r1 of IP-B (HM2A-11 bound)
 
 - No existing assertion changed or removed. Added two tests (index-backed read among 50,000 tombstones; deadline with an injected clock returns None, then the full answer on a fresh clock). `LIMIT 65` plus `ORDER BY` (SCAN + temp sort, no deadline) is replaced by the primary-key range `project_id=? AND kind='preparation'`, no sort, a progress handler and loop checks against one deadline, always cleared in finally. No new index (the primary key already serves it; its range still visits that project's preparation rows, which the deadline bounds). A store without `history_identity` (the bare table of the older bound test) is read by the same filter without the project key, under the same deadline.
+
+## Decision 365 (0.8.69 live fix: workspaces records_unreadable)
+
+No test assertion was removed, weakened or changed; eight tests were added (`LiveFindingTests`, HM2A-12 and HM2A-13),
+all red on `eb1eae9a` where they could be (six failed or errored there; the corrupt-store and no-reason-finding tests
+pin behaviour that must not change and passed). Changed, old -> new:
+
+- `tests/lifetime_caps.json`: key `memory_holds.py::pending_workspaces` -> `memory_holds.py::pending_workspaces_detail`
+  (the counted limits moved into the function that now does the read; `pending_workspaces` is a one-line wrapper);
+  same limits, same witness test.
+- `learning_store.py` wiring: `pending=lambda: memory_holds.pending_workspaces(root)` -> `pending=memory_holds.pending_workspaces_reader(root)`
+  (a callable with the same return value plus a `reason` attribute); `check._pending()` still returns a set or None.

@@ -1130,5 +1130,164 @@ class OwnerThreadTests(unittest.TestCase):
         self.assertIn('pending', hw.WorkspaceCheck.__init__.__code__.co_varnames)
 
 
+class LiveFindingTests(Case):
+    """Decision 365 (live finding on 0.8.68): the pending read returned None for a store without project_holds (an older
+    but valid store) and said nothing about why; every other None names its reason."""
+
+    PRJ = 'prj_' + 'a' * 32
+    OLD = 'prj_' + 'b' * 32
+
+    def projects(self):
+        root = self.base / 'live-state'
+        (root / 'projects').mkdir(parents=True, exist_ok=True)
+        os.chmod(root, 0o700)
+        os.chmod(root / 'projects', 0o700)
+        return root
+
+    def history(self, root, project, *, pending=0, older=False, tombstones=0):
+        """A real project history made through ProjectHistory; `older` drops the holds table, the shape of a store
+        written before project_holds existed (still a valid store)."""
+        import sqlite3
+        from contextlib import closing
+        from codex_agents.project_history import ProjectHistory
+        from codex_agents.project_holds_schema import evidence_json, release_hold, take_hold
+        directory = root / 'projects' / project
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(directory, 0o700)
+        with closing(ProjectHistory(directory, project)) as history:
+            connection = history._connection
+            for number in range(pending + tombstones):
+                kind = evidence_json(removal='pending', workspace=f'/x/prepare-{project[-4:]}{number}') if number < pending \
+                    else evidence_json(removal='done')
+                take_hold(connection, project, 'preparation', f'p{number}', now_ms=1, instance='i', evidence=kind)
+                release_hold(connection, project, 'preparation', f'p{number}', 'retired', now_ms=2)
+            if older:
+                try:
+                    connection.execute('DROP TABLE project_holds')
+                except sqlite3.Error as error:  # a table another object depends on: say so plainly
+                    self.fail(f'cannot make the older store shape: {error}')
+        return directory / 'history.sqlite3'
+
+    @requirements('HM2A-12')
+    def test_HM2A_12_a_store_without_project_holds_owes_nothing_and_does_not_fail_the_read(self):
+        from codex_agents import memory_holds
+        root = self.projects()
+        database = self.history(root, self.OLD, older=True)
+        import sqlite3
+        names = {row[0] for row in sqlite3.connect(database).execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertNotIn('project_holds', names)
+        self.assertEqual(set(), memory_holds.pending_workspaces(root))
+
+    @requirements('HM2A-12')
+    def test_HM2A_12_an_older_store_beside_a_normal_project_returns_the_normal_projects_removals(self):
+        from codex_agents import memory_holds
+        root = self.projects()
+        self.history(root, self.PRJ, pending=3, tombstones=2)
+        self.history(root, self.OLD, older=True)
+        expected = {f'/x/prepare-{self.PRJ[-4:]}{n}' for n in range(3)}
+        self.assertEqual(expected, memory_holds.pending_workspaces(root))
+
+    @requirements('HM2A-12')
+    def test_HM2A_12_a_pass_with_an_older_store_cleans_an_orphan_and_keeps_what_a_driver_owes(self):
+        from codex_agents import memory_holds
+        root = self.projects()
+        self.history(root, self.PRJ, pending=3)
+        self.history(root, self.OLD, older=True)
+        owed = [self.folder(f'prepare-{self.PRJ[-4:]}{n}') for n in range(3)]
+        orphan = self.folder()
+        reader = memory_holds.pending_workspaces_reader(root)
+        # the pending records name /x/..., so point the reader at this container's folders
+        names = {str(path) for path in owed}
+        found = self.run_check(self.check(pending=lambda: names | (reader() or set())))
+        self.assertEqual(['orphan_removed'], self.reasons(found))
+        self.assertFalse(os.path.lexists(orphan))
+        self.assertTrue(all(path.is_dir() for path in owed))
+        self.assertIsNone(reader.reason)
+
+    @requirements('HM2A-12')
+    def test_HM2A_12_a_corrupt_store_is_never_read_as_owing_nothing(self):
+        from codex_agents import memory_holds
+        root = self.projects()
+        directory = root / 'projects' / self.OLD
+        directory.mkdir(mode=0o700)
+        (directory / 'history.sqlite3').write_bytes(b'not a database at all' * 20)
+        self.assertIsNone(memory_holds.pending_workspaces(root))
+
+    @requirements('HM2A-13')
+    def test_HM2A_13_every_unknown_names_its_reason(self):
+        from codex_agents import memory_holds
+        root = self.projects()
+        reader = memory_holds.pending_workspaces_reader(root)
+        self.assertEqual(set(), reader())
+        self.assertIsNone(reader.reason)
+        # too many projects
+        for name in ('prj_' + c * 32 for c in 'cde'):
+            (root / 'projects' / name).mkdir()
+        with mock.patch.object(memory_holds, 'MAX_PENDING_READ_PROJECTS', 2):
+            self.assertIsNone(reader())
+        self.assertEqual('too_many_projects', reader.reason)
+        # an unreadable history names its project and the error class, nothing else
+        bad = root / 'projects' / ('prj_' + 'c' * 32)
+        (bad / 'history.sqlite3').write_bytes(b'not a database at all' * 20)
+        self.assertIsNone(reader())
+        self.assertEqual('history_unreadable:DatabaseError:' + bad.name, reader.reason)
+        shutil.rmtree(bad)
+        # too many pending in one project
+        full = self.history(root, self.PRJ, pending=3)
+        with mock.patch.object(memory_holds, 'MAX_PENDING_REMOVALS', 2):
+            self.assertIsNone(reader())
+        self.assertEqual('too_many_pending:' + self.PRJ, reader.reason)
+        # the deadline
+        ticks = itertools.count()
+        with mock.patch.object(memory_holds, '_monotonic', lambda: next(ticks) * 0.5):
+            self.assertIsNone(reader())
+        self.assertEqual('deadline', reader.reason)
+        # the projects folder itself cannot be listed
+        shutil.rmtree(root / 'projects')
+        (root / 'projects').write_text('a file')
+        self.assertIsNone(reader())
+        self.assertEqual('projects_unreadable:NotADirectoryError', reader.reason)
+        self.assertTrue(full.name)
+
+    @requirements('HM2A-13')
+    def test_HM2A_13_the_finding_names_the_reason_in_its_text_and_subject_with_a_plain_next_step(self):
+        for reason, step in (('too_many_projects', 'No action'), ('too_many_pending:' + self.PRJ, 'report'),
+                             ('history_unreadable:OperationalError:' + self.PRJ, 'report'), ('deadline', 'No action')):
+            reader = lambda: None
+            reader.reason = reason
+            orphan = self.folder()
+            found = self.run_check(self.check(pending=reader))
+            record = [item for item in found if item.reason_code == 'records_unreadable']
+            self.assertEqual(1, len(record), reason)
+            item = record[0]
+            self.assertEqual(reason, item.subject)
+            self.assertIn(reason, item.text)
+            self.assertIn(step, item.text)
+            self.assertLessEqual(len(item.text), 240)
+            self.assertTrue(item.text.endswith('.'))
+            self.assertNotIn('/', item.text)
+            self.assertTrue(orphan.is_dir())  # nothing is removed while the records are unknown
+            shutil.rmtree(orphan)
+
+    @requirements('HM2A-13')
+    def test_HM2A_13_an_unknown_without_a_reason_keeps_the_old_finding(self):
+        orphan = self.folder()
+        found = self.run_check(self.check(pending=lambda: None))
+        self.assertEqual(['records_unreadable'], self.reasons(found))
+        self.assertEqual('records', found[0].subject)
+        self.assertTrue(orphan.is_dir())
+
+    @requirements('HM2A-13')
+    def test_HM2A_13_the_collector_wires_the_reason_reader(self):
+        from tests import test_learning_store as store_tests
+        from codex_agents import learning_store
+        fixture = store_tests.LearningStoreTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        server = learning_store.CollectorServer(fixture.ledger)
+        check = next(c for c in server.health_monitor._checks if c.name == 'workspaces')
+        self.assertTrue(hasattr(check._pending, 'reason'))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -88,3 +88,14 @@ IP-B 0.8.68: wired (HM2A-11), see docs/batch-0868-merge.md "S8/S11 wiring".
 ## IP-B review r1 fix (HM2A-11 bound)
 
 `memory_holds.pending_workspaces` now reads the project's preparation rows through the primary key (no SCAN, no temp sort), under one 2 s monotonic deadline (SQLite progress handler cleared in finally, checks in each Python loop); expiry or any incomplete read returns None. Tests first (red on 5cd6edd8: no deadline/plan hook), green now. No schema change. Runtime digest stays stale for the primary at merge.
+
+## Decision 365 fix (0.8.69, branch fix/0869-workspaces-live, base eb1eae9a)
+
+Live finding: the installed collector reported `records_unreadable` every pass because a project history without
+`project_holds` (older store format) made the whole pending read answer None. Fixed in `memory_holds.py` (a missing
+`project_holds` table counts zero for that project; every other None names its reason via `pending_workspaces_detail`
+and `pending_workspaces_reader`), `health_workspaces.py` (reason in the finding text and subject, plain next step) and
+`learning_store.py` (wiring). Tests `LiveFindingTests`; requirements HM2A-12 and HM2A-13 registered. No finding dedupe
+exists in the health monitor, so none was added. Runtime digest stale by design (primary bumps at merge).
+Run: test_health_workspaces, test_memory_holds, test_memory_holds_lane, test_health_monitor, test_health_containers,
+test_lifetime_cap_guard, test_cli_status_client_boundary.
