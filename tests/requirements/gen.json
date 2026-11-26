@@ -1,0 +1,20 @@
+{
+ "authority": "decision 384",
+ "requirements": [
+  {
+   "id": "GEN-1",
+   "statement": "Regenerating scripts/test-requirements.json with scripts/generate_test_metadata.py --catalogue on the current tree is a no-op: byte-identical output that keeps every hand-registered requirement and check (including L14.1 and L15.1).",
+   "source": "tests/requirements/gen.json#GEN-1"
+  },
+  {
+   "id": "GEN-2",
+   "statement": "The generator output order and formatting are deterministic: requirements sorted by id, checks sorted, fixed indentation, and two runs give identical bytes.",
+   "source": "tests/requirements/gen.json#GEN-2"
+  },
+  {
+   "id": "GEN-3",
+   "statement": "Requirements whose source is tests/requirements/<name>.json (for example ap5-lookup, s14e, s15) are included in the generated catalogue with that source and statement.",
+   "source": "tests/requirements/gen.json#GEN-3"
+  }
+ ]
+}
