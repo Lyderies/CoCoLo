@@ -72,3 +72,16 @@ $PY -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_s13a_lease_p
 $PY -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_record_context --module codex:tests.test_retirement_sweep --module codex:tests.test_recovery_line
 $PY -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_project_hold_register --module codex:tests.test_result_lease_lane --module codex:tests.test_project_driver --module codex:tests.test_deadlines_retention --module codex:tests.test_b7b_budgets
 ```
+
+## Socket-rerun regression fix (RS-B-B7-5 / B5)
+
+Root cause: `release_earlier_unarmed_leases` made one 64-row selection ordered by `next_check_ms`. In B5 the 64 live
+(blocked) rows are the oldest, so pass 1 selected only them, backed them off and released 0; the measure harness stops on
+a pass that released 0, so eligible rows were never reached (released 0, B5 'failed'). Base passed because it skipped live rows
+without consuming the batch.
+Fix (product, `project_history.py`): selections stay at `min(limit,64)`, but a pass that released nothing re-selects
+(at most 4 selections per call). Backed-off rows have left the due set, so the next selection reaches eligible rows.
+Backoff 1 s doubling to 5 min, reset on release, and due ordering are unchanged. test_b7b_budgets unchanged.
+New red->green test: `test_64_blocked_rows_ahead_of_eligible_rows_do_not_starve_them` (S13A-FAIR; red `64 != 0`, registered in
+scripts/test-requirements.json). Rerun (`--jobs 4`, 9 modules, 261 tests): `metadata_errors: []`, `failed_units: []`,
+`requirement_failures: []`, runner 122.6 s (test_project_driver fragments dominate, 310 s summed over 4 jobs).

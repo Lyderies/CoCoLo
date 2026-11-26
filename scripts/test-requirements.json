@@ -5008,6 +5008,7 @@
  },
  "S13A-FAIR": {
   "checks": [
+   "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_64_blocked_rows_ahead_of_eligible_rows_do_not_starve_them",
    "codex:tests.test_s13a_lease_pass.LeaseStartPassTests.test_blocked_row_is_retried_when_due_despite_a_full_batch_of_new_arrivals"
   ],
   "source": "tests/requirements/s13a.json#S13A-FAIR",

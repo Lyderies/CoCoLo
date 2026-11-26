@@ -127,6 +127,24 @@ class LeaseStartPassTests(unittest.TestCase):
                 break
         self.assertEqual('released', self.row()['state'])
 
+    @requirements('S13A-FAIR', why_not_scenario=WHY)
+    def test_64_blocked_rows_ahead_of_eligible_rows_do_not_starve_them(self):
+        for number in range(1, 201):
+            self.base.reserve(number)
+        live = self.live(*range(1, 65))
+        module = measurements()
+        with module.instrumented(self.store) as connection:
+            released = self.store.release_earlier_unarmed_leases(live, limit=64)
+        self.assertLessEqual(max(connection.selections, default=0), 64)
+        self.assertEqual(64, released)  # first pass backs the 64 blocked rows off, then reaches eligible rows
+        self.assertTrue(all(self.row(n)['next_check_ms'] > self.base.fixture.now for n in range(1, 65)))
+        total, passes = released, 1
+        while total < 136 and passes < 6:
+            total += self.store.release_earlier_unarmed_leases(live, limit=64)
+            passes += 1
+        self.assertEqual(136, total)
+        self.assertTrue(all(self.row(n)['state'] == 'held' for n in range(1, 65)))
+
     @requirements('S13A-BOUND', why_not_scenario=WHY)
     def test_armed_rows_do_not_consume_the_unarmed_batch(self):
         for number in range(1, 66):
