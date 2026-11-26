@@ -4659,6 +4659,7 @@
    "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
    "codex:tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_idle_predecessor_with_native_identity_updates_without_a_signal",
    "codex:tests.test_b4t_native_p68.RealP68LaunchCopyTests.test_B4t_0869_idle_service_that_cannot_be_proven_names_a_working_step",
+   "codex:tests.test_b4t_native_p69.RealP69LaunchCopyTests.test_B4t_0871_busy_service_that_cannot_be_proven_refuses_write_free_with_the_busy_wording",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_busy_predecessor_without_identity_refuses_write_free",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_held_store_lock_without_a_service",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
@@ -4690,6 +4691,7 @@
  "RS-B-B4t-1": {
   "checks": [
    "codex:tests.test_b4t_native_p68.RealP68LaunchCopyTests.test_B4t_0869_idle_real_P68_service_from_its_launch_copy_is_stopped_by_its_stop_op",
+   "codex:tests.test_b4t_native_p69.RealP69LaunchCopyTests.test_B4t_0871_idle_real_P69_service_is_taken_over_without_a_signal_and_the_floor_rises",
    "codex:tests.test_b4t_takeover.JournalTests.test_B4t_0_update_with_a_running_child_goes_ahead",
    "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_update_check_replaces_only_the_running_child_refusal",
    "codex:tests.test_b4t_takeover.OwnerIntegrationTests.test_wizard_runs_the_takeover_after_approval_and_before_installer_apply"
@@ -4769,6 +4771,8 @@
    "codex:tests.test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim",
    "codex:tests.test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound",
    "codex:tests.test_b4t_native_p68.RealP68LaunchCopyTests.test_B4t_0869_idle_real_P68_service_from_its_launch_copy_is_stopped_by_its_stop_op",
+   "codex:tests.test_b4t_native_p69.RealP69LaunchCopyTests.test_B4t_0871_after_adoption_released_P69_cannot_reopen_the_store",
+   "codex:tests.test_b4t_native_p69.RealP69LaunchCopyTests.test_B4t_0871_idle_real_P69_service_is_taken_over_without_a_signal_and_the_floor_rises",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_exec_after_last_check_is_recorded",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_held_store_lock_without_a_service",
    "codex:tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_idle_predecessor_updates_without_process_proof",
@@ -4913,6 +4917,7 @@
    "codex:tests.test_b4t_native_audit_v34.ArchivedServiceAuditTests.test_B4t_A1_real_V34_service_does_not_exec_during_a_claim",
    "codex:tests.test_b4t_native_kill.AcceptedResidualKillTests.test_same_user_impostor_ignoring_TERM_is_KILLed_after_bound",
    "codex:tests.test_b4t_native_p68.RealP68LaunchCopyTests.test_B4t_0869_idle_service_that_cannot_be_proven_names_a_working_step",
+   "codex:tests.test_b4t_native_p69.RealP69LaunchCopyTests.test_B4t_0871_busy_service_that_cannot_be_proven_refuses_write_free_with_the_busy_wording",
    "codex:tests.test_b4t_takeover.AccountLineageTests.test_earlier_runtime_is_passed_only_at_the_four_approved_call_sites",
    "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_lost_settlement_and_closure_find_the_original_claim_once",
    "codex:tests.test_b4t_takeover.AccountLineageTests.test_successor_terminal_uses_original_scope_and_capacity_row_and_missing_lineage_writes_nothing",

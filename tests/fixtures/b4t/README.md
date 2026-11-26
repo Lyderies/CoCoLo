@@ -22,3 +22,13 @@ package, runtime digest `28435b17...d9ed0`), compressed with `gzip -n`. SHA-256:
 the package, lets 0.8.68's own collector start its service from the protected
 launch copy (the installed launch line), and runs the update against it
 (decision 372).
+
+`0.8.69-native-package.tar.gz` is an unmodified
+`git archive b63b6f5c packages/codex-agents/native-package` (the FINAL installed
+0.8.69, runtime digest `60569d30...ca7e3`), compressed with `gzip -n`. SHA-256:
+
+`674deabb79f6cce82c01687c51a2655fd6d6a9a9c9143eed737c23fb88982294`
+
+`packages/codex-agents/tests/test_b4t_native_p69.py` checks this digest and runs
+the 0.8.71 update against a real idle 0.8.69 service started by its own collector
+from the launch copy (RS-B-B4t-0/-1/-3/-9).
