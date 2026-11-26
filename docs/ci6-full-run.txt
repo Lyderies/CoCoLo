@@ -1,0 +1,136 @@
+CI6 full run, fix/0874-ci6 @9ec4a88e, base 7523d023
+ruff: All checks passed
+run exit=1; requirement-gate exit=1; budgets-only exit=1
+
+FAILED codex:tests.test_s13_budgets (exit 1) -> /private/tmp/ptpjp8odca/247.log
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-ci6/packages/codex-agents/tests/test_s13_budgets.py", line 125, in test_1000_due_holds_drain_in_batches_of_64_each_under_50_ms_and_well_inside_60_s
+    check_due(self, measurements().measure_due_holds(1000))
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-ci6/packages/codex-agents/tests/test_s13_budgets.py", line 78, in check_due
+    test.assertLess(value['maximum_batch_ms'], value['batch_limit_ms'], value)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 58.879917 not less than 50 : {'due': 1000, 'released': 1000, 'batches': 16, 'batch_released': [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 40], 'batch_ms': [58.879917, 44.799084, 14.888083, 39.005208, 12.557792, 12.699375, 13.843333, 52.51975, 26.8735, 18.482416, 12.527458, 13.60825, 45.162416, 46.625667, 15.497708, 8.530292], 'maximum_batch_ms': 58.879917, 'repeats': 3, 'total_seconds': 0.436500249, 'limit_seconds': 60, 'batch_limit_ms': 50}
+
+======================================================================
+FAIL: test_b1_register_and_memory_writer_work_of_a_normal_run_is_under_5_ms (tests.test_s13_budgets.S13Budgets.test_b1_register_and_memory_writer_work_of_a_normal_run_is_under_5_ms)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-ci6/packages/codex-agents/tests/test_s13_budgets.py", line 98, in test_b1_register_and_memory_writer_work_of_a_normal_run_is_under_5_ms
+    check_b1(self, value)
+    ~~~~~~~~^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-ci6/packages/codex-agents/tests/test_s13_budgets.py", line 50, in check_b1
+    test.assertLess(value['total_ms'], value['limit_ms'], value)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 5.1555 not less than 5 : {'register_samples_ms': [0.225874, 0.203792, 0.284917, 0.234711, 0.210876], 'register_ms': 0.225874, 'run_commit_samples_ms': [3.713083, 5.530542, 5.464874, 4.717043, 2.075249], 'run_commit_ms': 4.717043, 'commit_delta': {'pairs': 9, 'a_commit_ms': [0.082209, 0.069834, 0.065042, 0.054666, 0.055083, 0.048458, 0.072042, 1.678917, 0.04375], 'b_commit_ms': [0.270125, 0.275708, 0.195792, 0.204375, 0.171917, 0.1805, 0.807291, 0.203875, 0.333542], 'delta_samples_ms': [0.187916, 0.205874, 0.13074999999999998, 0.149709, 0.116834, 0.132042, 0.735249, -1.475042, 0.289792], 'commit_delta_ms': 0.149709}, 'commit_ms': 0.149709, 'register_calls': {'take_hold': 3, 'wake_settled': 6, 'arm_hold': 1, 'release_hold': 1, 'wake_before': 1, '_release_obligation': 1}, 'reservations_released_completed': 6, 'warmup_runs': 1, 'runs': 5, 'memory_writer_ms': 4.779917, 'memory_transactions_samples_ms': [[2.020792, 0.651166, 0.649166, 2.979084], [2.146792, 0.650542, 1.373417, 0.609166], [2.076625, 0.721333, 0.577042, 0.429667]], 'total_ms': 5.1555, 'limit_ms': 5}
+
+----------------------------------------------------------------------
+Ran 10 tests in 16.232s
+
+FAILED (failures=2)
+
+BUDGET DEBT: codex:tests.test_b2_service_outcome_paths ceiling=69.160s measured seconds=6.462199165951461
+BUDGET DEBT: codex:tests.test_billing_gate ceiling=78.580s measured seconds=79.14657562505454
+BUDGET DEBT: codex:tests.test_bridge ceiling=368.250s measured seconds=283.9229526257841
+BUDGET DEBT: codex:tests.test_container_stop ceiling=72.230s measured seconds=61.78463441610802
+BUDGET DEBT: codex:tests.test_host_commands ceiling=119.560s measured seconds=122.56013954093214
+BUDGET DEBT: codex:tests.test_lost_run_settlement ceiling=119.750s measured seconds=112.70298383384943
+BUDGET DEBT: codex:tests.test_project_driver ceiling=520.370s measured seconds=456.0707452077186
+BUDGET DEBT: codex:tests.test_project_start ceiling=183.400s measured seconds=196.45591837610118
+BUDGET DEBT: codex:tests.test_session_guard ceiling=7.230s measured seconds=4.097689791000448
+BUDGET DEBT: codex:tests.test_trial_run_driver_bugs ceiling=103.340s measured seconds=73.64277787494939
+BUDGET DEBT: codex:tests.test_write_merge ceiling=247.710s measured seconds=186.88819045794662
+BUDGET DEBT: root:test_install ceiling=113.540s measured seconds=90.26088974997401
+BUDGET DEBT: root:test_install_claude_upgrade ceiling=135.450s measured seconds=108.60564724984579
+BUDGET DEBT: root:test_setup_sh ceiling=203.640s measured seconds=163.04370554198977
+BUDGET DEBT: root:test_setup_straight ceiling=293.120s measured seconds=158.84039091703016
+BUDGET DEBT: root:test_setup_update ceiling=275.000s measured seconds=186.74810558382887
+BUDGET DEBT: root:test_setup_wizard_direct ceiling=282.080s measured seconds=260.698189916322
+RETIRE BUDGET DEBT: codex:tests.test_b2_service_outcome_paths is now within its layer budget
+RETIRE BUDGET DEBT: codex:tests.test_session_guard is now within its layer budget
+OVER BUDGET: codex:tests.test_admission_history_growth integration/scenario 60.148s > 60.000s (1 fragments)
+OVER BUDGET: codex:tests.test_billing_gate integration/scenario 79.147s > 60.000s (1 fragments)
+OVER BUDGET: codex:tests.test_host_commands integration/scenario 122.560s > 60.000s (3 fragments)
+OVER BUDGET: codex:tests.test_project_start integration/scenario 196.456s > 60.000s (11 fragments)
+RUN RECORD: /tmp/claude-501/ci6full/t.json.run.json
+{
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  }
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  }
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  },
+  {
+  }
+ },
+}
+Unchecked requirements (91): API-1, API-10, API-11, API-12, API-13, API-14, API-15, API-16, API-17, API-18, API-19, API-2, API-20, API-21, API-22, API-23, API-24, API-25, API-26, API-27, API-3, API-4, API-5, API-6, API-7, API-8, API-9, G1, G2, G3, G4, G5, G6, G7, G8, G9, L1.1, L1.2, L10.1, L10.2, L10.3, L11.1, L11.2, L12.1, L12.2, L12.3, L12.4, L12.5, L12.6a, L12.6b, L12.7, L13.1, L13.2, L16.1, L16.2, L16.3, L2.1, L2.2, L3.1, L3.2, L3.3, L4.1, L4.2, L5.1, L5.2, L5.3, L6.1, L6.2, L7.1, L7.2, L7.3, L8.1, L8.2, L9.1, L9.2, L9.3, O0C-U4-3, P4-REPORT, RS-B-B6-6, TERM-13, TERM-17, TERM-5, TERM-6, TERM-7, TF-20, TF-21, TF-22, TF-23, TF-25, TF-26, TF-27
+Requirements proved only by skipped checks here (2): LEGACY-HOLD-LIFECYCLE-B0-2, ML-4
+
+failed worker, metadata or budget evidence
