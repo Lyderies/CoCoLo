@@ -1,7 +1,7 @@
 """Core API talk, tokens, scopes, confirm, owner wall, audit (API-15..23; TERM-13)."""
 import json
 
-from tests.core_api_support import CoreCase, read_jsonl
+from tests.core_api_support import CoreCase
 
 class RecordsFirstTests(CoreCase):
 

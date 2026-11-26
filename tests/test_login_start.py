@@ -658,7 +658,7 @@ class WiringTests(TempHome):
 
     @requirements('E1-7', why_not_scenario='Runs the wizard project step and the collector step against a stand-in terminal.')
     def test_E1_7_the_real_set_up_choice_makes_the_first_run_ask_once_and_a_re_run_not_ask(self):
-        from setup_wizard import effects, flow
+        from setup_wizard import effects
         project = self.home / "project"
         (project / ".codex" / "orchestration").mkdir(parents=True)
         wizard = self.wizard([0, 0, 0])  # project step: Set up (recommended); then the question: Yes

@@ -1,17 +1,14 @@
 """First full-suite integration witnesses (TF-23/24)."""
-import copy
 import json
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import parallel_tests as runner
-import test_framework as fw
-from test_framework import requirements
+import parallel_tests as runner  # noqa: E402
+from test_framework import requirements  # noqa: E402
 
 class ReleaseIntegration(unittest.TestCase):
     __why_not_scenario__ = 'Runner integration uses disposable discovery packages and explicit policy controls.'
@@ -19,7 +16,9 @@ class ReleaseIntegration(unittest.TestCase):
     @requirements('TF-24', 'TF-1')
     def test_discovery_imports_framework_and_preserves_package_names(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); (root/'tests').mkdir(); (root/'tests/__init__.py').write_text('')
+            root = Path(folder)
+            (root/'tests').mkdir()
+            (root/'tests/__init__.py').write_text('')
             (root/'tests/test_valid.py').write_text('import unittest\nclass Valid(unittest.TestCase):\n def test_ok(self): pass\n')
             (root/'tests/test_framework_user.py').write_text('from test_framework import requirements\nimport unittest\nclass Valid(unittest.TestCase):\n @requirements("TF-24")\n def test_ok(self): pass\n')
             (root/'tests/test_broken.py').write_text('raise ImportError("deliberate discovery control")')
@@ -45,7 +44,8 @@ class ReleaseIntegration(unittest.TestCase):
         reasons=ROOT/'scripts/test-layer-reasons.json'
         self.assertTrue(reasons.exists(),'resource reclassification lacks why_not reasons')
         reasons=json.loads(reasons.read_text())
-        for name in expected:self.assertTrue(reasons[name]['why_not_scenario'].strip())
+        for name in expected:
+            self.assertTrue(reasons[name]['why_not_scenario'].strip())
 
     @requirements('TF-24','TF-8')
     def test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches(self):
@@ -53,7 +53,8 @@ class ReleaseIntegration(unittest.TestCase):
         self.assertTrue(callable(can),'missing exclusive campaign scheduling')
         campaign='codex:tests.test_merge_library_contract'
         ordinary='root:test_test_stages'
-        self.assertTrue(can(ordinary,[],16));self.assertTrue(can(ordinary,[ordinary],16))
+        self.assertTrue(can(ordinary,[],16))
+        self.assertTrue(can(ordinary,[ordinary],16))
         self.assertTrue(can(campaign,[],16))
         self.assertFalse(can(campaign,[ordinary],16))
         self.assertFalse(can(ordinary,[campaign],16))

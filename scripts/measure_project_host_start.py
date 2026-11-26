@@ -5,15 +5,15 @@ from __future__ import annotations
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 180, "data_mib": 128, "rss_mib": 1024}
 
-import argparse
-import io
-import json
-from pathlib import Path
-import subprocess
-import sys
-import tarfile
-import tempfile
-import time
+import argparse  # noqa: E402
+import io  # noqa: E402
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import tarfile  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
 
 
 PROGRAM = r'''

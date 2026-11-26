@@ -36,7 +36,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import uuid
 
 import test_framework as framework
 import e2e_processes

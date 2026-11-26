@@ -21,14 +21,12 @@ from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
-from tests import test_account_original_open as original_open
 from tests import test_bridge as bridge_tests
 from tests.learning_support import result
 from tests import test_admission_history_growth as growth_tests
 from test_framework import requirements
 
 from codex_agents import account_service
-from codex_agents.admission_inputs import AdmissionCaptureLimits
 from codex_agents.learning_store import LedgerError
 
 DAY_MS = growth_tests.DAY_MS
@@ -160,10 +158,13 @@ class AdmissionQueryEquivalenceTests(unittest.TestCase):
     def test_U3_the_candidate_query_returns_the_rows_and_order_of_the_original_full_scan(self):
         mine = self.open.reference.base.scope.project_id
         other = self.other_project()
-        claude = lambda account: (lambda record, now: record.update(provider="claude", account_fingerprint=account * 64))
-        passing = lambda account: (lambda record, now: record.update(
-            provider="claude", decision="pass", account_fingerprint=account * 64))
-        live = lambda record, now: record.update(windows=[{
+        def claude(account):
+            return lambda record, now: record.update(provider="claude", account_fingerprint=account * 64)
+        def passing(account):
+            return lambda record, now: record.update(
+            provider="claude", decision="pass", account_fingerprint=account * 64)
+        def live(record, now):
+            return record.update(windows=[{
             "resets_at": now + 3_600_000, "scope": None, "used_percent": 100.0, "window_minutes": 10080}])
         for project in (mine, other):
             self.put(project, "provider_identity", "provider", 10 * 60_000)

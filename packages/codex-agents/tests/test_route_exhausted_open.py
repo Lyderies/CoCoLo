@@ -1,12 +1,10 @@
 """RT-RX real ledger evidence, admission and route/open race boundary."""
 from copy import deepcopy
-from pathlib import Path
 import unittest
 from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT
 from tests import test_providers as fixtures
-from tests.test_route_exhausted import head, NOW
 from tests.test_routing_risk import base_task, enable_providers
 from codex_agents import routing, admission_metadata
 from codex_agents.providers import AdmissionDenied, headroom_record

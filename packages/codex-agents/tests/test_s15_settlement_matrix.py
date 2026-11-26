@@ -5,7 +5,6 @@ Bound rows also exercise the lease -> reservation transfer. Transaction cuts
 raise BaseException after the real effect; reopening never invents a release.
 """
 from contextlib import contextmanager
-import unittest
 from unittest import mock
 
 from test_framework import requirements

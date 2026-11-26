@@ -9,14 +9,14 @@ default scale; run it through the runner for the 100,000-tombstone numbers:
 
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # 100,000 tombstones, three repeats
-import argparse
-import contextlib
-import json
-import statistics
-import sqlite3
-import sys
-from unittest import mock
-from pathlib import Path
+import argparse  # noqa: E402
+import contextlib  # noqa: E402
+import json  # noqa: E402
+import statistics  # noqa: E402
+import sqlite3  # noqa: E402
+import sys  # noqa: E402
+from unittest import mock  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import measure_b7b as base  # noqa: E402
@@ -134,7 +134,6 @@ def measure_commit_delta(pairs=9):
     single rewrite of an existing hold row, so one page is dirty) and B (A plus the register writes of one normal run:
     three takes, an arm and two releases), interleaved A,B,A,B...; each commit timed. The figure is the median of
     (B commit - A commit), never below zero."""
-    from tests import test_result_leases as leases
     from codex_agents import project_holds_schema as hs
     from codex_agents.project_holds_schema import attempt_identity
     deltas, a_samples, b_samples = [], [], []

@@ -4,20 +4,16 @@ COCOLO_TEST_B4T_SKIP_SOCKETS=1 is the builder's explicit no-socket gate, never a
 fallback. Every skipped name is listed in the durable fix-round handoff.
 """
 import contextlib
-import hashlib
-import io
 import json
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
-import tarfile
 import time
 import unittest
 from unittest import mock
 
-import tests.support
 from tests.test_project_start import StarterBase, wait_for
 from tests.test_host_commands import install_package
 from test_framework import requirements
@@ -104,7 +100,6 @@ authorize_collector_runtime(state,Path(sys.argv[1])/'cli.py',project_root=Path(s
         from codex_agents.takeover_preflight import read_plan
         from codex_agents.takeover_owner import OwnerOperations,run_owner_takeover
         from tests.support import ORCHESTRATION_ROOT
-        from codex_agents.takeover_process import Kernel
         # Native (a), then injected EPERM (b). 146955fc refuses at read_plan
         # before intent because its census cannot inspect real Mac processes.
         native=read_plan(self.state,self.project)
@@ -131,7 +126,6 @@ authorize_collector_runtime(state,Path(sys.argv[1])/'cli.py',project_root=Path(s
     @requirements('RS-B-B4t-3','RS-B-B4t-9',why_not_scenario='Real 0.8.66 service on the native kernel, with system processes present.')
     def test_B4t_A1_no_other_process_is_inspected(self):
         from codex_agents.takeover_preflight import read_plan
-        from codex_agents import takeover_process
         # Absence of the census is also statically guarded in T-36's component
         # half; this is the real peer/argv pin that the earlier census blocked.
         plan=read_plan(self.state,self.project)
@@ -232,14 +226,16 @@ runpy.run_path(entry,run_name='__main__')
                     work=update.run_a_child(world,'exec-audit')
                 self.assertEqual(0,work.run.code)
                 self.assertEqual('completed',work.run.reply['result']['execution_state'],json.dumps(work.run.reply)[-3000:])
-                host.terminate();host.wait(timeout=35)
+                host.terminate()
+                host.wait(timeout=35)
                 events=[json.loads(line) for line in log.read_text().splitlines()]
                 self.assertTrue(events,'a real claim/child must emit process-start audit events')
                 self.assertTrue(all(row['pid']==host.pid for row in events))
                 self.assertNotIn('os.exec',[row['event'] for row in events])
                 self.assertTrue({'os.posix_spawn','subprocess.Popen'} & {row['event'] for row in events})
             finally:
-                if host.poll() is None:host.kill()
+                if host.poll() is None:
+                    host.kill()
                 host.wait(timeout=5)
 
 
@@ -253,8 +249,7 @@ class ResidualStub:
         import shutil
         import fcntl
         from codex_agents.takeover_process import Kernel,pin_predecessor
-        from codex_agents.takeover_preflight import _peer,read_plan,trusted_package
-        from codex_agents.project_host_client import _hinted_host
+        from codex_agents.takeover_preflight import read_plan,trusted_package
         from codex_agents.client_runtime import runtime_hint_path,runtime_directory
         from codex_agents.takeover_owner import OwnerOperations,run_owner_takeover
         from codex_agents.update_takeover import TakeoverError
@@ -263,13 +258,19 @@ class ResidualStub:
         from codex_agents import takeover_owner
         self.assertEqual(30.0,takeover_owner.SERVICE_SELF_STOP_SECONDS)
         compiler=shutil.which('cc')
-        if compiler is None:self.skipTest('Native accepted-residual fixture needs a C compiler; no substitute process proof is claimed')
-        hint=runtime_hint_path(self.paths,self.project);hint_bytes=hint.read_bytes()
-        entry=self.older/'project_host.py';entry_bytes=entry.read_bytes()
+        if compiler is None:
+            self.skipTest('Native accepted-residual fixture needs a C compiler; no substitute process proof is claimed')
+        hint=runtime_hint_path(self.paths,self.project)
+        hint_bytes=hint.read_bytes()
+        entry=self.older/'project_host.py'
+        entry_bytes=entry.read_bytes()
         pinned=pin_predecessor(self.host.pid,entry=entry,state_root=self.state.root,project_root=self.project)
-        pinned.stop();self.host.wait(timeout=5)
+        pinned.stop()
+        self.host.wait(timeout=5)
         directory=runtime_directory(self.state,self.project)
-        source=self.base/'same-user-stub.c';binary=self.base/'same-user-stub';ready=self.base/'stub-ready'
+        source=self.base/'same-user-stub.c'
+        binary=self.base/'same-user-stub'
+        ready=self.base/'stub-ready'
         source.write_text(r'''#include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/file.h>
@@ -315,13 +316,15 @@ int main(int argc,char **argv){
         expected=[sys.executable,*PYTHON_ISOLATION_FLAGS,str(entry),'--state-root',str(self.state.root),
                   '--project-root',str(self.project)]
         env={'PATH':os.defpath,'B4T_STUB_DIRECTORY':str(directory),'B4T_STUB_READY':str(ready)}
-        if ignore_term:env['B4T_STUB_IGNORE_TERM']='1'
+        if ignore_term:
+            env['B4T_STUB_IGNORE_TERM']='1'
         stub=subprocess.Popen([sys.executable,'-I','-B','-c','import os,sys;os.execv(sys.argv[1],sys.argv[2:])',
                                str(binary),*expected],env=env,stdin=subprocess.DEVNULL,
                               stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         self.held.append(stub)
         wait_for(self,ready.exists,20,lambda:f'stub did not bind: {stub.poll()}')
-        hint.write_bytes(hint_bytes);hint.chmod(0o600)
+        hint.write_bytes(hint_bytes)
+        hint.chmod(0o600)
         self.assertEqual(entry_bytes,entry.read_bytes())
         self.assertEqual('0.8.66',trusted_package(self.project)['version'])
         holder=None
@@ -334,9 +337,13 @@ int main(int argc,char **argv){
             self.assertEqual(stub.pid,plan['intent']['predecessor_service']['pid'])
             ops=OwnerOperations(self.state,ORCHESTRATION_ROOT/'cli.py',self.project,lambda:plan['intent'])
             ops.start_collector=lambda document:self.relaunch()
-            sent=[];times=[];real_send=Kernel.send
+            sent=[]
+            times=[]
+            real_send=Kernel.send
             def send(kernel,pin,pid,number):
-                sent.append((pid,number));times.append(time.monotonic());return real_send(kernel,pin,pid,number)
+                sent.append((pid,number))
+                times.append(time.monotonic())
+                return real_send(kernel,pin,pid,number)
             # S5 final fix: the stub never stops by itself, so the T3 wait for a withdrawn idle
             # service to stop on its own (A1.5 row 3) always runs out before the proven signal. That
             # wait is pinned at its product value above and shortened here; the TERM/KILL bounds
@@ -348,7 +355,8 @@ int main(int argc,char **argv){
                     # I5 refuses at T0 instead (covered by its product witness).
                     if sys.platform.startswith('linux'):
                         self.fail('Linux must exercise its write-free I5 path before run_owner_takeover')
-                    with self.assertRaises(TakeoverError) as caught:run_owner_takeover(ops)
+                    with self.assertRaises(TakeoverError) as caught:
+                        run_owner_takeover(ops)
                     self.assertEqual('predecessor_lock_inherited',caught.exception.code)
                 else:
                     self.assertEqual('account_done',run_owner_takeover(ops)['phase'])
@@ -360,12 +368,14 @@ int main(int argc,char **argv){
             self.assertEqual(entry_bytes,entry.read_bytes())
             stub.wait(timeout=5)
             if holder is not None:
-                os.close(holder);holder=None
+                os.close(holder)
+                holder=None
                 resumed=OwnerOperations(self.state,ORCHESTRATION_ROOT/'cli.py',self.project,lambda:plan['intent'])
                 resumed.start_collector=lambda document:self.relaunch()
                 self.assertEqual('account_done',run_owner_takeover(resumed)['phase'])
         finally:
-            if holder is not None:os.close(holder)
+            if holder is not None:
+                os.close(holder)
 
 @unittest.skipIf(os.environ.get('COCOLO_TEST_B4T_SKIP_SOCKETS') == '1',
                  'Primary must rerun: accepted same-user residual uses real Unix endpoints')

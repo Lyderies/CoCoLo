@@ -11,8 +11,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import parallel_tests
-from test_framework import requirements
+import parallel_tests  # noqa: E402
+from test_framework import requirements  # noqa: E402
 
 
 class WorkerTests(unittest.TestCase):
@@ -228,7 +228,9 @@ class WorkerTests(unittest.TestCase):
     @requirements('TF-1', why_not_scenario='Discovery must preserve inherited, generated and filtered cases before worker sharding.')
     def test_review_C8_discovery_and_shards_have_a_stable_disjoint_union(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); (root / 'tests').mkdir(); (root / 'tests/__init__.py').write_text('')
+            root = Path(folder)
+            (root / 'tests').mkdir()
+            (root / 'tests/__init__.py').write_text('')
             (root / 'tests/test_inventory.py').write_text("import unittest\nclass Parent(unittest.TestCase):\n    def test_inherited(self): pass\nclass Child(Parent): pass\nclass Generated(unittest.TestCase): pass\nsetattr(Generated,'test_generated',lambda self: None)\ndef load_tests(loader, tests, pattern):\n    return unittest.TestSuite([Child('test_inherited'),Generated('test_generated')])\n")
             (root / 'tests/test_broken.py').write_text('raise ImportError("full module witness")')
             code = 'import sys,json; sys.path.insert(0,' + repr(str(ROOT / 'scripts')) + '); from test_framework import inventory_suite; print(json.dumps(inventory_suite("root", {"root:tests.test_inventory":"unit", "root:tests.test_broken":"unit"})))'
@@ -243,7 +245,8 @@ class WorkerTests(unittest.TestCase):
             first = [parallel_tests.shard(queue, index, 2) for index in (1, 2)]
             self.assertEqual(first, [parallel_tests.shard(list(reversed(queue)), index, 2) for index in (1, 2)])
             observed = [item[2] for part in first for item in part]
-            self.assertEqual(names, set(observed)); self.assertEqual(len(names), len(observed))
+            self.assertEqual(names, set(observed))
+            self.assertEqual(len(names), len(observed))
             (root / 'tests/test_inventory.py').write_text("import unittest\nclass Case(unittest.TestCase):\n    def test_duplicate(self): pass\ndef load_tests(loader, tests, pattern):\n    return unittest.TestSuite([Case('test_duplicate'),Case('test_duplicate')])\n")
             duplicate = subprocess.run([sys.executable, '-B', '-c', code], cwd=root, capture_output=True, text=True, timeout=10)
             self.assertNotEqual(0, duplicate.returncode)
@@ -477,8 +480,8 @@ class RunnerIntegrationTests(unittest.TestCase):
 
     @requirements('TF-9', why_not_scenario='Verify review B8 preflight preserves estimates using isolated framework fixtures.')
     def test_review_B8_preflight_preserves_estimates(self):
-        from unittest.mock import patch
-        import contextlib, io
+        import contextlib
+        import io
         with tempfile.TemporaryDirectory() as folder:
             estimates = Path(folder) / 'estimates.json'
             estimates.write_text('{"retained": 2}')
@@ -490,7 +493,8 @@ class RunnerIntegrationTests(unittest.TestCase):
     @requirements('TF-9', why_not_scenario='Verify review B4 preflight retains default run record using isolated framework fixtures.')
     def test_review_B4_preflight_retains_default_run_record(self):
         from unittest.mock import patch
-        import contextlib, io
+        import contextlib
+        import io
         with tempfile.TemporaryDirectory() as folder:
             record = Path(folder) / 'retained.run.json'
             with patch.dict(os.environ, {'COCOLO_TEST_RUN_RECORD': str(record)}), contextlib.redirect_stdout(io.StringIO()):
@@ -533,10 +537,16 @@ class RunnerIntegrationTests(unittest.TestCase):
             root = Path(folder)
             def git(*args):
                 return subprocess.check_output(['git', *args], cwd=root, stderr=subprocess.DEVNULL, text=True).strip()
-            git('init', '-b', 'main'); git('config', 'user.name', 'Review fixture'); git('config', 'user.email', 'review@example.invalid')
-            git('commit', '--allow-empty', '-m', 'base'); common = git('rev-parse', 'HEAD')
-            git('checkout', '-b', 'feature'); git('commit', '--allow-empty', '-m', 'feature')
-            git('checkout', 'main'); git('commit', '--allow-empty', '-m', 'advanced base'); advanced = git('rev-parse', 'HEAD')
+            git('init', '-b', 'main')
+            git('config', 'user.name', 'Review fixture')
+            git('config', 'user.email', 'review@example.invalid')
+            git('commit', '--allow-empty', '-m', 'base')
+            common = git('rev-parse', 'HEAD')
+            git('checkout', '-b', 'feature')
+            git('commit', '--allow-empty', '-m', 'feature')
+            git('checkout', 'main')
+            git('commit', '--allow-empty', '-m', 'advanced base')
+            advanced = git('rev-parse', 'HEAD')
             git('checkout', 'feature')
             env = {**os.environ, 'EVENT_NAME': 'pull_request', 'EVENT_REF': 'refs/pull/1/merge', 'PR_BASE': '', 'PUSH_BASE': '', 'GITHUB_ENV': str(root / 'environment')}
             missing = subprocess.run(['bash', '-e', '-c', shell], cwd=root, env=env, capture_output=True, text=True, timeout=5)
@@ -562,11 +572,13 @@ class RunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(0, code, output)
         bootstrap = 'import threading,time,builtins; real_sleep=time.sleep; builtins.LIVE=threading.Thread(target=lambda: real_sleep(10),daemon=True); builtins.LIVE.start()'
         code, output, result = WorkerTests().probe('import builtins,time\nstarted=time.monotonic()\ntry:\n    builtins.LIVE.join(1)\nexcept Exception:\n    pass\nself.assertLess(time.monotonic()-started,.5)\nfrom pathlib import Path\nPath("elapsed-ok").write_text("passed")', 'unit', bootstrap=bootstrap)
-        self.assertNotEqual(0, code, output); self.assertTrue(result['violations'])
+        self.assertNotEqual(0, code, output)
+        self.assertTrue(result['violations'])
         self.assertTrue(result['markers']['elapsed-ok'], 'N3 join elapsed assertion did not complete')
         if hasattr(__import__('select'), 'poll'):
             code, output, result = WorkerTests().probe('import select,time\nstarted=time.monotonic()\ntry:\n    select.poll().poll(1000)\nexcept Exception:\n    pass\nself.assertLess(time.monotonic()-started,.5)\nfrom pathlib import Path\nPath("elapsed-ok").write_text("passed")', 'unit')
-            self.assertNotEqual(0, code, output); self.assertTrue(result['violations'])
+            self.assertNotEqual(0, code, output)
+            self.assertTrue(result['violations'])
             self.assertTrue(result['markers']['elapsed-ok'], 'N3 poll elapsed assertion did not complete')
         else:
             print('not_run: ' + sys.platform + ' lacks select.poll')
@@ -590,7 +602,8 @@ class RunnerIntegrationTests(unittest.TestCase):
         expected = {'root:test_probe.Child.test_inherited','root:test_probe.Generated.test_generated'}
         runs=[]
         for repeat in range(2):
-            observed=[]; partitions=[]
+            observed=[]
+            partitions=[]
             for part in ('1/2','2/2'):
                 code, output, report = self.run_fixture(fixture_source=source, fixture_checks=sorted(expected), estimates={'root:test_probe':40}, extra_args=('--shard',part))
                 self.assertEqual(0, code, output)
@@ -601,7 +614,8 @@ class RunnerIntegrationTests(unittest.TestCase):
                 outcomes=dict(executions)
                 self.assertTrue(outcomes, 'M7 shard did not execute a worker')
                 self.assertEqual({'passed'}, set(outcomes.values()))
-                observed.extend(outcomes); partitions.append(sorted(outcomes))
+                observed.extend(outcomes)
+                partitions.append(sorted(outcomes))
             self.assertEqual(expected,set(observed), 'M7 shard union differs from discovered checks')
             self.assertEqual(len(expected),len(observed), 'M7 duplicate shard execution')
             runs.append(partitions)

@@ -28,7 +28,6 @@ import textwrap
 import threading
 import time
 import unittest
-from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
@@ -37,7 +36,6 @@ from tests import test_providers as fixtures
 
 from codex_agents import account_billing_admission, account_billing_execution, account_billing_jobs, account_service
 from codex_agents import admission_metadata, learning_store
-from codex_agents.account_api import AccountError
 from codex_agents.account_billing_admission import PROBE_COOLDOWN_MS, PROBE_REUSE_MS, ProbeAdmission, ProbeAdmissionError
 from codex_agents.admission_inputs import AdmissionInputPolicy
 from codex_agents.learning_store import DEFAULT_RETENTION_MS

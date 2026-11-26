@@ -9,7 +9,7 @@ import unittest
 
 import tests.support  # noqa: F401
 from codex_agents.bridge import remove_optional_nulls
-from codex_agents.contracts import ContractError, ResultContractError, validate_result
+from codex_agents.contracts import ResultContractError, validate_result
 from tests import test_bridge
 from tests import test_contracts
 

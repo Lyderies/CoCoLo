@@ -14,7 +14,6 @@ from tests import test_bridge
 from tests.test_bridge import ClaudePrimaryCase, PROBE_INIT, result_frame
 from codex_agents.providers import claude_rate_limit_records
 from codex_agents import account_billing_admission
-from codex_agents.providers import headroom_record
 from test_framework import requirements
 
 MINUTE = 60_000

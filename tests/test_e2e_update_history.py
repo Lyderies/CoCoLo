@@ -4,7 +4,6 @@ The judges are run on a scene made by hand: they must pass on the one honest sce
 history, on a collector that is not this build and on missing data. The test-only faults must name source that
 exists exactly once in the build they are meant to break. Written before the module's scenes were run (red first)."""
 
-import copy
 import json
 import sys
 import unittest

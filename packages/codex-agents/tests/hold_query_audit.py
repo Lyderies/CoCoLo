@@ -9,7 +9,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[3]
 import tests.support  # noqa: E402,F401
 from tests import test_learning_store, test_result_leases  # noqa: E402
-from codex_agents import (active_run_capacity, health_holds, learning_source_image, learning_store,
+from codex_agents import (active_run_capacity, health_holds, learning_source_image, learning_store,  # noqa: E402
                           legacy_slots, project_backup, project_history, project_holds_schema, project_takeover)  # noqa: E402
 
 HOLD = re.compile(r'\b(?:FROM|JOIN|UPDATE)\s+(run_holds|project_holds)\b', re.I)

@@ -11,8 +11,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import parallel_tests as runner
-import test_affected as dependencies
+import parallel_tests as runner  # noqa: E402
+import test_affected as dependencies  # noqa: E402
 
 
 class AffectedTests(unittest.TestCase):

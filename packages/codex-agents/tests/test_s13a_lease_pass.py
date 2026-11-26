@@ -7,7 +7,6 @@ from unittest import mock
 
 import tests.support  # noqa: F401
 from tests import test_result_leases as leases
-from tests.learning_support import assignment
 from tests.test_project_history import binding
 from tests.test_s13_budgets import measurements
 

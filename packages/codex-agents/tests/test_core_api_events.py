@@ -24,7 +24,8 @@ class ResumeTests(CoreCase):
         self.assertEqual([4, 5], [e["seq"] for e in events])
 
     def test_api12_expired_cursor_returns_cursor_expired_with_a_snapshot(self):  # API-12
-        self.service.stop(); self.start(event_buffer=2)
+        self.service.stop()
+        self.start(event_buffer=2)
         client = self.client()
         try:
             client.call("events.subscribe", {"from_seq": 1})

@@ -174,7 +174,6 @@ class ReviewRoundOneDriverTests(SettlementHarness):
         settled, the reservation hold stayed `releasing`) is recovered from the store before it is pruned."""
         def old_settle(driver, entry):  # 8d4a7ce3's _settle_entry: arbitration, then the account only
             from codex_agents.result_contracts import ResultLeaseBinding
-            import hashlib
             lease = ResultLeaseBinding(**entry['lease'])
             driver._arbitrate_publication(lease, entry)
             evidence = bytes.fromhex(entry['storage_evidence'])

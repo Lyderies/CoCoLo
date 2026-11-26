@@ -21,17 +21,17 @@ from __future__ import annotations
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 900, "data_mib": 256, "rss_mib": 3072}  # runs whole suites: cannot fit 300 s; use --suite one at a time
 
-import argparse
-import inspect
-import json
-import os
-import shlex
-import subprocess
-import sys
-import tempfile
-import time
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+import argparse  # noqa: E402
+import inspect  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import shlex  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+from concurrent.futures import ThreadPoolExecutor  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from parallel_tests import EXTRA_ENV, ROOT, SUITES, discover  # noqa: E402

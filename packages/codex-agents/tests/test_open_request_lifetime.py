@@ -361,7 +361,8 @@ class OpenLifetimeJobTests(OriginalAccountOpenJobTests):
                     'INSERT INTO account_open_receipts VALUES(?,?,NULL,?,?,?,x\'7b7d\',?)',
                     (project, handle, key, 's', 'p', 'c'))
         due = captured.observation_deadline_at_ms + OPEN_REQUEST_RETENTION_MS
-        total = lambda: self.ledger._connection.execute('SELECT COUNT(*) FROM account_open_requests').fetchone()[0]
+        def total():
+            return self.ledger._connection.execute('SELECT COUNT(*) FROM account_open_requests').fetchone()[0]
         self.assertEqual(6, total())
         self.ledger.sweep_account_retention(now_ms=due, batch=100)
         self.assertEqual(1, total())  # the denied ones were due long before; the unfinished one is not yet

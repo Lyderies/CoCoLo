@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 
 
-from test_framework import requirements
+from test_framework import requirements  # noqa: E402
 
 
 class MetadataTests(unittest.TestCase):
@@ -441,7 +441,8 @@ class ReviewEvidenceTests(unittest.TestCase):
     def test_C6_overridden_and_generated_cases_keep_optional_requirement_tags(self):
         from hypothesis.stateful import RuleBasedStateMachine, rule
         import test_framework as fw
-        fixture = MetadataTests(); fixture.setUp()
+        fixture = MetadataTests()
+        fixture.setUp()
         class Parent(unittest.TestCase):
             @fw.requirements('TF-3')
             def test_value(self):
@@ -460,12 +461,14 @@ class ReviewEvidenceTests(unittest.TestCase):
             self.assertEqual([], fixture.errors(catalogue={}))
         Machine.TestCase.__requirements__ = ('TF-3',)
         Machine.TestCase.__why_not_scenario__ = 'Generated metadata fixture.'
-        case = Machine.TestCase('runTest'); name = 'root:' + case.id()
+        case = Machine.TestCase('runTest')
+        name = 'root:' + case.id()
         fixture.inventory = {fixture.module: {name: fw.describe_test(case)}}
         self.assertEqual([], fixture.errors(catalogue={'TF-3': {'statement': 'generated requirement', 'source': 'fixture', 'checks': [name]}}))
 
     def test_C13_inactive_and_duplicate_requirements_are_rejected(self):
-        fixture = MetadataTests(); fixture.setUp()
+        fixture = MetadataTests()
+        fixture.setUp()
         fixture.catalogue['TF-2']['active'] = False
         self.assertIn('inactive', ' '.join(fixture.errors()))
         with self.assertRaisesRegex(ValueError, 'duplicate'):
@@ -477,7 +480,8 @@ class ReviewEvidenceTests(unittest.TestCase):
         guard = Guard('component', 'root:fixture')
         result = Result(io.StringIO(), True, 1, guard=guard)
         test = unittest.FunctionTestCase(lambda: None)
-        result.startTest(test); result.stopTest(test)
+        result.startTest(test)
+        result.stopTest(test)
         self.assertIsNone(guard.test)
         with self.assertRaises(RuntimeError):
             guard.deny('teardown operation')
@@ -486,7 +490,8 @@ class ReviewEvidenceTests(unittest.TestCase):
     def test_C13_reason_codes_and_golden_diff_are_exact_and_bounded(self):
         from test_golden import compare
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); (root / 'reason').write_text('owner_changed\n' * 1000)
+            root = Path(folder)
+            (root / 'reason').write_text('owner_changed\n' * 1000)
             with self.assertRaises(AssertionError) as raised:
                 compare(root=root, name='reason', actual='io_error\n' * 1000, requirement='TF-14', declared={'TF-14'}, known={'TF-14'}, environ={})
             self.assertIn('owner_changed', str(raised.exception))
@@ -542,7 +547,8 @@ class ReviewLifecycleTests(unittest.TestCase):
         import generate_test_metadata as generator
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            (root/'scripts').mkdir(); (root/'tests/e2e').mkdir(parents=True)
+            (root/'scripts').mkdir()
+            (root/'tests/e2e').mkdir(parents=True)
             (root/'REQUIREMENTS-test-framework.md').write_text('**TF-1 — Fixture.** exact.\n')
             (root/'tests/e2e/requirements.json').write_text('{"requirements":[]}')
             (root/'scripts/test-checks.json').write_text('{"bad":{"requirements":["TF-999"]}}')

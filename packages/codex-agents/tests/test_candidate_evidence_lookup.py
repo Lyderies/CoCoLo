@@ -18,7 +18,7 @@ from tests.support import REPOSITORY_ROOT
 from tests.test_append_lookup import AppendLookupTests
 from tests.learning_support import candidate, event_record, verification_outcome
 from codex_agents.learning_contracts import canonical_json, content_digest
-from codex_agents.learning_store import LEDGER_SCHEMA_VERSION, LearningLedger, LearningState, LedgerError
+from codex_agents.learning_store import LEDGER_SCHEMA_VERSION, LedgerError
 
 
 OLD_LOOKUP = 'SELECT record_type,content,content_digest FROM records WHERE project_id=?'
@@ -132,7 +132,8 @@ class CandidateEvidenceLookupTests(AppendLookupTests):
             except LedgerError as exc:
                 return str(exc)
             return 'accepted'
-        current = lambda ledger, project, record: ledger._validate_evidence_links_locked(project, record)
+        def current(ledger, project, record):
+            return ledger._validate_evidence_links_locked(project, record)
         missing = 'f' * 64
         cases = [
             ('valid', {}, 'accepted'),
@@ -303,7 +304,7 @@ class CandidateEvidenceLookupTests(AppendLookupTests):
         proposed = self.store._candidate_cohort(self.project, now_ms=100)
         self.ledger.append(self.project, proposed, producer='evaluator', now_ms=200)
         self.append('compat-late', observed_at_ms=1)
-        expected = self.ledger._records_for_project(self.project, None)
+        _expected = self.ledger._records_for_project(self.project, None)
         version = self.ledger._connection.execute('PRAGMA user_version').fetchone()[0]
         self.ledger.close()
         copied = Path(self.store.temporary.name) / 'indexed-copy'

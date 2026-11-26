@@ -294,7 +294,9 @@ class AdmissionCaptureBytesTests(unittest.TestCase):
         # Equal but separately allocated metadata must not get the shared-copy discount.
         from codex_agents.admission_input_decode import AdmissionDecodeError, decode_admission_inputs
         cloned = list(packed.rows)
-        item = list(cloned[-1]); item[1] = item[1].encode().decode(); cloned[-1] = tuple(item)
+        item = list(cloned[-1])
+        item[1] = item[1].encode().decode()
+        cloned[-1] = tuple(item)
         self.assertIsNot(cloned[-1][1], packed.rows[-1][1])
         with self.assertRaisesRegex(AdmissionDecodeError, "^admission_decode_invalid_input$") as caught:
             decode_admission_inputs(replace(packed, rows=tuple(cloned)), case.limits)
@@ -302,7 +304,9 @@ class AdmissionCaptureBytesTests(unittest.TestCase):
         # Recapture equality continues to compare the entire packed row, not a summary.
         self.assertTrue(same_admission_inputs(packed, replace(packed, captured_at_ms=packed.captured_at_ms + 1)))
         changed = list(packed.rows)
-        item = list(changed[-1]); item[5] += b"changed"; changed[-1] = tuple(item)
+        item = list(changed[-1])
+        item[5] += b"changed"
+        changed[-1] = tuple(item)
         self.assertFalse(same_admission_inputs(packed, replace(packed, rows=tuple(changed))))
 
     @requirements("S14A-3", why_not_scenario="Real intake boundary and synthetic limit fixture, no worker execution or socket.")

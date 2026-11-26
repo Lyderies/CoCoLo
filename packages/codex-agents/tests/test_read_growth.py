@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import ast
 import re
-import sqlite3
 import time
 import unittest
 from pathlib import Path
@@ -204,7 +203,8 @@ class ReadGrowthTests(unittest.TestCase):
             self.plans[key] = plan
             # Production owner limits apply independently of VM instrumentation.
             started = time.monotonic()
-            read = lambda: connection.execute(sql, parameters).fetchall()
+            def read():
+                return connection.execute(sql, parameters).fetchall()
             if isinstance(connection, SQLReadConnection):
                 fetched = connection.read_in_current_mode(self.reference.work, read)
             else:

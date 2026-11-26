@@ -9,7 +9,7 @@ import tests.support  # noqa: F401
 from tests.support import TEMP_ROOT
 from test_framework import requirements
 from codex_agents.account_service import AccountOwnerViews
-from codex_agents.learning_store import CollectorServer, LearningLedger, LearningState, LedgerError
+from codex_agents.learning_store import CollectorServer, LearningState, LedgerError
 from codex_agents.ledger_owner_queue import DEFAULT_LEDGER_QUEUE_LIMITS
 
 

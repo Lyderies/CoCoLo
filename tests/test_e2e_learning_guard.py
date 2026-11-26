@@ -5,7 +5,6 @@ a check must fail on missing or null data, on a value read from the command that
 reason, and must pass on the one honest scene. Written before the module (red first)."""
 
 import ast
-import copy
 import json
 import os
 import sys

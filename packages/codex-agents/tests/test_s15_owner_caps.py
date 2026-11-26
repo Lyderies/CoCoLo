@@ -199,7 +199,8 @@ class OwnerCapTests(unittest.TestCase):
         self.assertTrue(rows)
         self.byte_cap(learning_store, 'MAX_RECORD_BYTES', max(len(r[2]) for r in rows),
             lambda: ledger._attestation_rows_locked(case.a, 'codex'), learning_store.LedgerError)
-        operation = lambda: case.intake._validate_inputs(inputs, case.a, 'codex')
+        def operation():
+            return case.intake._validate_inputs(inputs, case.a, 'codex')
         self.byte_cap(signature_job_intake, 'MAX_RECORD_BYTES', max(len(r[2]) for r in inputs.rows),
                       operation, signature_job_intake.SignatureJobError)
 
@@ -372,7 +373,8 @@ class OwnerCapTests(unittest.TestCase):
         from tests import test_codex_preparation as fixtures
         from codex_agents import codex_preparation
         case = self.fixture(fixtures, 'CodexPreparationTests')
-        operation = lambda: codex_preparation.preparation_payload(case.prospective, case.fixture.project,
+        def operation():
+            return codex_preparation.preparation_payload(case.prospective, case.fixture.project,
                                                                   case.fixture.bundle, fixtures.fixtures.CLEAN)
         raw = operation()
         self.byte_cap(codex_preparation, 'MAX_INPUT_BYTES', len(raw), operation, codex_preparation.PreparationError)
@@ -475,7 +477,7 @@ class OwnerCapTests(unittest.TestCase):
     def test_dispatch_metadata_lifetime_refuses_overflow_and_new_service_has_fresh_slots(self):
         from dataclasses import replace
         from tests import test_prepared_dispatch as fixtures
-        from codex_agents import prepared_dispatch, dispatch_api
+        from codex_agents import dispatch_api
         case = self.fixture(fixtures, 'PreparedDispatchTests')
         service = case.service(authorizer=case.authorize)
         first = case.request()
@@ -638,7 +640,6 @@ class OwnerCapTests(unittest.TestCase):
     def test_backup_plan_worker_artifact_and_account_check_receipts_cross_limits(self):
         from tests import test_learning_source_image_legacy as fixtures
         from codex_agents import learning_store
-        from codex_agents.learning_contracts import content_digest
         case = self.fixture(fixtures, 'LearningSourceImageLegacyTests')
         ledger = case.source
         size = learning_store.project_backup_bytes(ledger._connection, case.project, learning_store.LEDGER_SCHEMA_VERSION)
@@ -844,7 +845,8 @@ class OwnerCapTests(unittest.TestCase):
         reservation = case.reserve('first')
         row = case.owner._row(reservation.project, reservation.key)
         value = case.owner._value(row)
-        operation = lambda: case.owner._build_reply(value, known=True, observed_at=case.clock)
+        def operation():
+            return case.owner._build_reply(value, known=True, observed_at=case.clock)
         size = len(canonical_json(operation()))
         self.byte_cap(account_billing_admission, 'MAX_PROBE_REPLY_BYTES', size, operation,
                       account_billing_admission.ProbeAdmissionError)
@@ -886,7 +888,7 @@ class OwnerCapTests(unittest.TestCase):
             case.identity, deadline_ns=workers.time.monotonic_ns()+30_000_000_000,
             created_at_ms=workers.time.time_ns()//1_000_000)
         with mock.patch.object(workers, 'MAX_PROBE_INPUT_BYTES', len(payload)-1):
-            with self.assertRaisesRegex(workers.ProbeWorkerError, '^probe_worker_invalid$') as caught:
+            with self.assertRaisesRegex(workers.ProbeWorkerError, '^probe_worker_invalid$'):
                 case.pool.prepare(payload)
         self.assertEqual({}, case.pool._jobs)
         self.assertEqual(0, case.pool._charged)

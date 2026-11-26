@@ -11,7 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from test_framework import requirements
+from test_framework import requirements  # noqa: E402
 
 # The stand-in builds no product files and uses only the test's writable scratch root.
 FLOW = r'''
@@ -84,7 +84,8 @@ def alive(pid):
 def wait_for(predicate, seconds=8):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
-        if predicate(): return True
+        if predicate():
+            return True
         time.sleep(.02)
     return bool(predicate())
 
@@ -108,7 +109,8 @@ class WorldCleanupTests(unittest.TestCase):
                     self.assertTrue(wait_for(lambda: (root / 'waiting').exists()))
                     process.send_signal(kill)
                 process.wait(timeout=10)
-                if mode == 'discard': self.assertTrue((root / 'discard-cleaned').exists(), (root / 'owner.log').read_text())
+                if mode == 'discard':
+                    self.assertTrue((root / 'discard-cleaned').exists(), (root / 'owner.log').read_text())
                 self.assertTrue(wait_for(lambda: not alive(pid)), 'World collector survived flow end')
                 service_pid = int((root / 'service.pid').read_text())
                 self.assertTrue(wait_for(lambda: not alive(service_pid)), 'detached native project service survived')
@@ -120,22 +122,26 @@ class WorldCleanupTests(unittest.TestCase):
                 for name in ('child.pid', 'service.pid'):
                     if (root / name).exists():
                         candidate = int((root / name).read_text())
-                        if alive(candidate): os.kill(candidate, signal.SIGKILL)
+                        if alive(candidate):
+                            os.kill(candidate, signal.SIGKILL)
 
     @requirements('E2ELEAK-1', 'E2ELEAK-3')
     def test_failure_mid_flow_leaves_no_collector_or_world(self):
         for mode in ('assertion', 'exception', 'partial'):
-            with self.subTest(mode=mode): self.flow(mode)
+            with self.subTest(mode=mode):
+                self.flow(mode)
 
     @requirements('E2ELEAK-1', 'E2ELEAK-3')
     def test_pass_exit_and_timeout_leave_no_survivor(self):
         for mode in ('pass', 'exit', 'timeout'):
-            with self.subTest(mode=mode): self.flow(mode)
+            with self.subTest(mode=mode):
+                self.flow(mode)
 
     @requirements('E2ELEAK-1', 'E2ELEAK-4')
     def test_sigterm_and_hard_owner_death_remove_detached_collector(self):
         for sig in (signal.SIGTERM, signal.SIGKILL):
-            with self.subTest(signal=sig): self.flow('wait', sig)
+            with self.subTest(signal=sig):
+                self.flow('wait', sig)
 
     @requirements('E2ELEAK-2', 'E2ELEAK-4')
     def test_reaper_uses_world_marker_and_start_time_across_sessions(self):
@@ -162,12 +168,14 @@ class WorldCleanupTests(unittest.TestCase):
                 with mock.patch.dict(os.environ, {'HOME': folder}):
                     owned.reap_worlds(registry)
                 self.assertIsNotNone(children[0].poll(), f'recorded detached process survived reaper: record={records[0]}, current={owned.identity(children[0].pid)}')
-                for child in children[1:]: self.assertIsNone(child.poll(), 'reaper killed a nonmatching process')
+                for child in children[1:]:
+                    self.assertIsNone(child.poll(), 'reaper killed a nonmatching process')
                 self.assertFalse(base.exists())
                 self.assertTrue(marker)
             finally:
                 for child in children:
-                    if child.poll() is None: child.kill()
+                    if child.poll() is None:
+                        child.kill()
                     child.wait(timeout=3)
 
     @requirements('E2ELEAK-3')
@@ -194,10 +202,12 @@ class WorldCleanupTests(unittest.TestCase):
                 self.assertIn(signal.SIGTERM, events)
                 self.assertIn(signal.SIGKILL, events)
                 self.assertLess(events.index(signal.SIGTERM), events.index(signal.SIGKILL))
-                with self.assertRaises(RuntimeError): owned.register(base, os.getpid())
+                with self.assertRaises(RuntimeError):
+                    owned.register(base, os.getpid())
                 owned.cleanup(base, remove=False)  # idempotent
             finally:
-                if child.poll() is None: child.kill()
+                if child.poll() is None:
+                    child.kill()
                 child.wait(timeout=3)
 
     @requirements('E2ELEAK-4')
@@ -226,7 +236,8 @@ class WorldCleanupTests(unittest.TestCase):
                     self.assertIsNotNone(report, output)
                     self.assertEqual(0 if mode == 'pass' else 1, int(code != 0), output)
                     self.assertTrue(report['fixture_child_stopped'], output)
-                    if mode in ('pass', 'failure', 'timeout'): self.assertEqual([], report['metadata_errors'])
+                    if mode in ('pass', 'failure', 'timeout'):
+                        self.assertEqual([], report['metadata_errors'])
 
     @requirements('E2ELEAK-1', 'E2ELEAK-4')
     def test_lifecycle_parent_sigterm_stops_workers_and_their_worlds(self):
@@ -256,12 +267,14 @@ class WorldCleanupTests(unittest.TestCase):
                 self.assertFalse((root / '.cache/e2e-fixture').exists())
                 self.assertFalse(alive(int((root / 'service.pid').read_text())))
             finally:
-                if process.poll() is None: process.kill()
+                if process.poll() is None:
+                    process.kill()
                 process.wait(timeout=3)
                 for name in ('child.pid', 'service.pid'):
                     if (root / name).exists():
                         pid = int((root / name).read_text())
-                        if alive(pid): os.kill(pid, signal.SIGKILL)
+                        if alive(pid):
+                            os.kill(pid, signal.SIGKILL)
 
     @requirements('E2ELEAK-1')
     def test_discarded_world_is_still_owned_until_cleanup(self):
@@ -345,7 +358,8 @@ class WorldCleanupTests(unittest.TestCase):
                     yield world
                 finally:
                     owned.cleanup(base, remove=False)
-                    for sig, handler in previous.items(): signal.signal(sig, handler)
+                    for sig, handler in previous.items():
+                        signal.signal(sig, handler)
         return watching()
 
     @requirements('E2ELEAK-2')
@@ -395,7 +409,8 @@ class WorldCleanupTests(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 entered.set()
-                if not release.wait(3): raise RuntimeError('test spawn release timed out')
+                if not release.wait(3):
+                    raise RuntimeError('test spawn release timed out')
         with tempfile.TemporaryDirectory() as folder, \
              mock.patch.object(subprocess, 'Popen', PausedPopen), \
              self.watched_world(Path(folder)) as world:
@@ -443,8 +458,10 @@ class WorldCleanupTests(unittest.TestCase):
                 with self.subTest(reap=reap):
                     child = subprocess.Popen([sys.executable, '-c', 'pass'], env={'HOME': str(world.home)})
                     record = world.base / owned.PROCESSES / f'{child.pid}.json'
-                    if reap == 'wait': child.wait(timeout=3)
-                    else: self.assertTrue(wait_for(lambda: child.poll() is not None))
+                    if reap == 'wait':
+                        child.wait(timeout=3)
+                    else:
+                        self.assertTrue(wait_for(lambda: child.poll() is not None))
                     self.assertFalse(record.exists(), f'{reap} retained the pid record')
             dead = subprocess.Popen([sys.executable, '-c', 'pass'])
             owned.register(world.base, dead.pid)
@@ -539,7 +556,8 @@ class WorldCleanupTests(unittest.TestCase):
                 self.assertTrue(wait_for(lambda: owned.identity(pid) is None), 'confined helper survived teardown')
             finally:
                 for target in (pid, process.pid):
-                    if target and owned.identity(target) is not None: os.kill(target, signal.SIGKILL)
+                    if target and owned.identity(target) is not None:
+                        os.kill(target, signal.SIGKILL)
                 process.wait(timeout=5)
                 process.stdout.close()
 
@@ -675,10 +693,12 @@ class WorldCleanupTests(unittest.TestCase):
             support._watch_world(other)
             with mock.patch.object(world, 'stop_processes'), mock.patch.object(support.shutil, 'rmtree'):
                 world.__exit__(None, None, None)
-                for sig in previous: self.assertIs(support._terminate_worlds, signal.getsignal(sig))
+                for sig in previous:
+                    self.assertIs(support._terminate_worlds, signal.getsignal(sig))
                 other.__exit__(None, None, None)
             self.assertEqual({}, support._PREVIOUS_SIGNALS)
-            for sig, handler in previous.items(): self.assertEqual(handler, signal.getsignal(sig))
+            for sig, handler in previous.items():
+                self.assertEqual(handler, signal.getsignal(sig))
 
     @requirements('E2ELEAK-1')
     def test_guardian_wait_failure_preserves_original_error_and_forgets_world(self):
@@ -693,7 +713,8 @@ class WorldCleanupTests(unittest.TestCase):
                 with mock.patch.object(world, 'stop_processes', side_effect=ValueError('original') if cleanup_error else None), \
                      mock.patch.object(support.shutil, 'rmtree'):
                     with self.assertRaisesRegex(ValueError, 'original'):
-                        try: raise ValueError('original')
+                        try:
+                            raise ValueError('original')
                         except ValueError:
                             world.__exit__(*sys.exc_info())
                             raise

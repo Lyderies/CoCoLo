@@ -8,15 +8,15 @@ when Unix socket binding is permitted; store proxies never establish that budget
 
 # Enforced by scripts/run_measurement.py (S14d, decision 371): run this script only through the runner.
 MEASUREMENT_BUDGET = {"wall_seconds": 300, "data_mib": 256, "rss_mib": 2048}  # 100,000-row store operations
-import contextlib
-import json
-import statistics
-import socket
-import sqlite3
-import tempfile
-from pathlib import Path
-import time
-from unittest import mock
+import contextlib  # noqa: E402
+import json  # noqa: E402
+import statistics  # noqa: E402
+import socket  # noqa: E402
+import sqlite3  # noqa: E402
+import tempfile  # noqa: E402
+from pathlib import Path  # noqa: E402
+import time  # noqa: E402
+from unittest import mock  # noqa: E402
 
 
 def elapsed(call):
@@ -225,7 +225,7 @@ def memory_writer_samples():
 def measure():
     from tests import test_result_leases as leases
     from tests.learning_support import assignment
-    from tests.test_project_history import PROJECT_A, binding
+    from tests.test_project_history import PROJECT_A
     from codex_agents import project_holds_schema as hs, project_result_contexts as contexts
     from codex_agents.project_holds_report import _holds
     from codex_agents.history_contracts import HistoryError
@@ -414,7 +414,8 @@ def measure_lookup():
             test.recorded()
             db = test.store._connection
             tombstones(db, test.store.project_id, count)
-            call = lambda: test.store.stored_worker_context(test.digest, host_class=CODEX_HOST_CLIENT)
+            def call():
+                return test.store.stored_worker_context(test.digest, host_class=CODEX_HOST_CLIENT)
             steps, context = work(db, call)
             median, times = median_elapsed(call)
             values.append({'tombstones': count, 'lookup_ms': median, 'lookup_samples_ms': times, 'warmup_runs': 1,

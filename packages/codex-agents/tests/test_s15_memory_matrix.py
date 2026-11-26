@@ -4,7 +4,6 @@ A held lock is the live control; a retained unlocked inode is stopping proof.
 A rollback or lost answer never serves as stopping evidence by itself.
 """
 from contextlib import contextmanager
-import unittest
 from unittest import mock
 
 from test_framework import requirements

@@ -1,6 +1,5 @@
 """Decision 99 A: scoped round-2 MED rejection witnesses, with positive controls."""
 import copy
-import importlib
 import json
 from pathlib import Path
 import sys
@@ -11,8 +10,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import test_framework as fw
-import parallel_tests as runner
+import test_framework as fw  # noqa: E402
+import parallel_tests as runner  # noqa: E402
 
 
 class RoundTwo(unittest.TestCase):
@@ -24,9 +23,12 @@ class RoundTwo(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def module(self, name, source):
-        path = self.root / (name + '.py'); path.write_text(source)
-        module = types.ModuleType(name); module.__file__ = str(path)
-        sys.modules[name] = module; self.addCleanup(sys.modules.pop, name, None)
+        path = self.root / (name + '.py')
+        path.write_text(source)
+        module = types.ModuleType(name)
+        module.__file__ = str(path)
+        sys.modules[name] = module
+        self.addCleanup(sys.modules.pop, name, None)
         exec(compile(source, str(path), 'exec'), module.__dict__)
         return module
 
@@ -53,7 +55,8 @@ class RoundTwo(unittest.TestCase):
     def records(self):
         layers={'root:u':'unit','root:i':'component','root:e':'scenario'}
         stages={'root:u':'unit','root:i':'integration','root:e':'e2e'}
-        checks=['root:u.a','root:i.a','root:i.b','root:e.a']; catalogue={'TF-5':{'checks':checks}}
+        checks=['root:u.a','root:i.a','root:i.b','root:e.a']
+        catalogue={'TF-5':{'checks':checks}}
         records=[]
         for module, case, part in [('u','a',(1,1)),('i','a',(1,2)),('i','b',(2,2)),('e','a',(1,1))]:
             unit=module+('#'+case if module=='i' else '')
@@ -67,21 +70,27 @@ class RoundTwo(unittest.TestCase):
         records=self.records()
         self.assertEqual({'TF-5':'passed'}, fw.combine_run_records(records)['requirements'])
         for status in ('not_run','failed'):
-            altered=copy.deepcopy(records); altered[0]['workers'][0]['outcomes']['root:u.a']=status
+            altered=copy.deepcopy(records)
+            altered[0]['workers'][0]['outcomes']['root:u.a']=status
             with self.subTest(status=status), self.assertRaisesRegex(ValueError, 'requirements failed/not_run.*TF-5'):
                 fw.combine_run_records(altered)
         with self.assertRaisesRegex(ValueError, 'missing or repeated shards'):
             fw.combine_run_records(records[:2]+records[3:])
         paths=[]
         for i,record in enumerate(records):
-            path=self.root/(str(i)+'.json'); path.write_text(json.dumps(record)); paths.append(str(path))
+            path=self.root/(str(i)+'.json')
+            path.write_text(json.dumps(record))
+            paths.append(str(path))
         self.assertEqual(0,runner.main(['--requirement-gate',*paths]))
-        altered=copy.deepcopy(records[0]); altered['workers'][0]['outcomes'].clear(); Path(paths[0]).write_text(json.dumps(altered))
+        altered=copy.deepcopy(records[0])
+        altered['workers'][0]['outcomes'].clear()
+        Path(paths[0]).write_text(json.dumps(altered))
         self.assertEqual(1,runner.main(['--requirement-gate',*paths]), 'real CLI accepted missing requirement outcome')
 
     @fw.requirements('TF-5', 'TF-9')
     def test_M4_caller_cannot_accept_failure_bearing_combiner_result(self):
-        path=self.root/'record.json'; path.write_text('{}')
+        path=self.root/'record.json'
+        path.write_text('{}')
         for status in ('not_run','failed'):
             with mock.patch.object(fw,'combine_run_records',return_value={'requirements':{'TF-5':status}}):
                 self.assertEqual(1,runner.main(['--requirement-gate',str(path)]), 'caller accepted '+status+' requirement report')

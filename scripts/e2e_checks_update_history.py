@@ -32,7 +32,7 @@ import e2e_support  # noqa: E402
 from e2e_checks_run import (drive_lifecycle, lifecycle_preflights, lifecycle_verified_and_closed,  # noqa: E402
                             lifecycle_worker_recorded, trusted_interpreter_checks)
 from e2e_checks_shared import write_patches  # noqa: E402
-from e2e_core import CLAUDE_MODEL, PROBE, _SCENES, CheckFailed, Phase, check  # noqa: E402
+from e2e_core import CLAUDE_MODEL, PROBE, _SCENES, Phase, check  # noqa: E402
 
 TAGS = ("v0.3.1", "v0.3.2", "v0.3.3", "v0.3.4")
 VERSION_PATH = "packages/codex-agents/native-package/VERSION"

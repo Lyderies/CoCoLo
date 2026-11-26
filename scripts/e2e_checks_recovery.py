@@ -8,8 +8,6 @@ commands. Nothing passes on missing or null data. The children are the fake clie
 
 from __future__ import annotations
 
-import contextlib
-import copy
 import hashlib
 import json
 import os
@@ -17,7 +15,6 @@ import signal
 import sqlite3
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,8 +22,8 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))  # -I leaves the script's own folder off the path
 import e2e_support  # noqa: E402
-from e2e_checks_run import WORK_EVIDENCE, WORK_GRANT, WORK_PATH, trusted_interpreter_checks  # noqa: E402
-from e2e_core import CLAUDE_MODEL, PROBE, ROUTE_TASK, _SCENES, CheckFailed, Phase, check  # noqa: E402
+from e2e_checks_run import trusted_interpreter_checks  # noqa: E402
+from e2e_core import CLAUDE_MODEL, _SCENES, CheckFailed, Phase, check  # noqa: E402
 import e2e_checks_shared as shared  # noqa: E402
 from e2e_checks_shared import (INIT, _text, add_project, bridge_run, capacity_read, child_frames,  # noqa: E402,F401
                                ledger_slots, project_history, project_records, project_view, slot_of, state_dir,
@@ -191,7 +188,7 @@ def is_running(reply: dict | None) -> bool:
 
 def closed_ok(result: tuple) -> bool:
     """A close that worked: exit 0 and an explicit ready true (a missing or null ready is not a close)."""
-    code, reply, _text = result
+    code, reply, _unused = result
     return code == 0 and isinstance(reply, dict) and reply.get("ready") is True
 
 
@@ -721,7 +718,7 @@ def lost_run_facts(phase: Phase, scene) -> None:
 @check("L8.1", group="rec_service")
 def l8_1_killed_service_next_service_settles_run_lost_slot_freed_nothing_twice(phase: Phase) -> None:
     scene = service_scene()
-    run, world = scene.run, scene.world
+    run, _world = scene.run, scene.world
     phase.expect(run.open_code == 0 and (run.opened or {}).get("admission") == "admitted", "the run opens admitted")
     phase.expect(is_running(scene.running), "the child is running before the kill (explicit, never missing)")
     phase.expect(scene.slot_before is not None and scene.slot_before["released_at_ms"] is None,

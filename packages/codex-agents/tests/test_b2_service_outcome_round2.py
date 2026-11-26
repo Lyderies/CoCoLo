@@ -10,7 +10,6 @@ import inspect
 import json
 import sqlite3
 import unittest
-from contextlib import closing
 from types import SimpleNamespace
 from unittest import mock
 
@@ -23,8 +22,8 @@ from tests.test_b2_service_outcome_hosts import HostFixture
 from tests.test_b2_service_outcome_sweep import LaneFixture, SweepFixture
 from tests.test_project_history import binding as history_binding
 
-from codex_agents import client_runtime, project_history, refusal_steps, service_record
-from codex_agents.history_contracts import AttemptBinding, HistoryError
+from codex_agents import project_history, refusal_steps, service_record
+from codex_agents.history_contracts import HistoryError
 from codex_agents.hosts import CLAUDE_HOST_CLIENT as CLAUDE, CODEX_HOST_CLIENT as CODEX, OWNER_CLIENT
 from codex_agents.host_result_contracts import HostResultReference
 from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope, SCOPE_FIELDS
