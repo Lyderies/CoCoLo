@@ -4401,6 +4401,7 @@
    "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_a_partial_measurement_is_partial_and_its_note_matches_the_values",
    "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_learning_status_carries_the_run_usage_and_stays_read_only",
    "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_status_coverage_reads_only_the_last_days",
+   "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_the_one_deadline_covers_python_decoding_after_the_last_sql",
    "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_status_says_unknown_with_a_reason_when_the_service_is_not_running",
    "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_status_shows_per_provider_coverage_from_the_service",
    "codex:tests.test_s44a_usage_install.StatusRunUsageTests.test_s44a_2_the_service_reading_returns_at_most_its_row_cap_and_says_truncated",

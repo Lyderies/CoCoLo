@@ -21,3 +21,9 @@ service via the new read-only operation `history.run_usage` (null + plain reason
 client opens no database. Partial measurements are `partial` (MED 4); outcome-only runs count in the recorded span (MED 2);
 status behaviour is pinned through the real `learning-status` output (MED 3). Existing assertions changed: two op-set /
 request-list pins, listed in assertions.md.
+
+Fix (confirm r3c): the single 1 s deadline now covers all service work in `service_run_usage`: an injectable clock
+(`_monotonic`) is checked in the Python row/decoding loops of `_rows` and `_service_reply` and once more before the reply;
+expiry returns the existing partial reply (truncated, partial_reason, both providers unknown/null). The SQLite progress
+handler and its finally-clear stay. Test: `test_s44a_2_the_one_deadline_covers_python_decoding_after_the_last_sql`.
+lifetime_caps.json key moved `service_run_usage` -> `_service_reply` (the row-cap slice moved with it; no assertion changed).

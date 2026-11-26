@@ -347,6 +347,30 @@ class StatusRunUsageTests(InstalledUsageCase):
         self.assertNotIn("partial_reason", again)
 
     @requirements('S44A-2')
+    def test_s44a_2_the_one_deadline_covers_python_decoding_after_the_last_sql(self) -> None:
+        # Python loops cannot be interrupted by SQLite's progress handler: a deadline crossed inside the row decoding
+        # (here in _usage_tokens, after the last SQL) must still give the partial reply, never ordinary coverage.
+        from codex_agents import project_usage_report as module
+        now = int(time.time() * 1000)
+        for index in range(3):
+            self.finished(now - HOUR - index, usage={"input_tokens": 5, "cached": 1, "output_tokens": 1})
+        clock = [100.0]
+        real = module._usage_tokens
+
+        def slow(record):
+            clock[0] += 10.0
+            return real(record)
+
+        with mock.patch.object(module, "_monotonic", lambda: clock[0]), mock.patch.object(module, "_usage_tokens", slow):
+            reply = module.service_run_usage(self.store, now)
+        module.checked_run_usage(reply)
+        self.assertTrue(reply["truncated"])
+        self.assertIn("unknown", reply["partial_reason"])
+        for provider in ("codex", "claude"):
+            self.assertEqual({"state": "unknown", "runs": None, "runs_with_complete_usage": None},
+                             reply["child_runs"][provider])
+
+    @requirements('S44A-2')
     def test_s44a_2_the_service_reading_returns_at_most_its_row_cap_and_says_truncated(self) -> None:
         from codex_agents import project_usage_report as module
         now = int(time.time() * 1000)

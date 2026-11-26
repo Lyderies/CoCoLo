@@ -141,7 +141,7 @@ def _text(value):
     return value if type(value) is str and 0 < len(value) <= 128 else None
 
 
-def _rows(connection, project_id, since_ms, until_ms, limit, *, with_outcomes=True):
+def _rows(connection, project_id, since_ms, until_ms, limit, *, with_outcomes=True, check=lambda: None):
     """This store's runs of the window as (time, run, provider, model, effort, role, outcome, tokens...)."""
     usage_rows = connection.execute(
         "SELECT content,observed_at_ms FROM records WHERE project_id=? AND record_type IN (?,?) AND source='provider' "
@@ -150,6 +150,7 @@ def _rows(connection, project_id, since_ms, until_ms, limit, *, with_outcomes=Tr
     ).fetchall()
     usage = {}
     for blob, observed in usage_rows:
+        check()
         value = _record(blob)
         if value is not None and type(observed) is int:
             usage.setdefault(value["run_id"], (value, observed))
@@ -162,6 +163,7 @@ def _rows(connection, project_id, since_ms, until_ms, limit, *, with_outcomes=Tr
     ).fetchall()
     windowed = {}
     for blob, observed in outcome_rows:
+        check()
         value = _record(blob)
         if value is not None and type(observed) is int and value["run_id"] not in usage:
             windowed.setdefault(value["run_id"], (value, observed))
@@ -169,10 +171,13 @@ def _rows(connection, project_id, since_ms, until_ms, limit, *, with_outcomes=Tr
     outcomes = _by_run(connection, project_id, ("outcome",), "host", usage) if usage and with_outcomes else {}
     rows = []
     for run_id, (record, observed) in usage.items():
+        check()
         outcome = outcomes.get(run_id, (None, None))[0]
         rows.append((observed, run_id, record.get("provider"), _text(record.get("requested_model")), outcome,
                      _usage_tokens(record)))
+    check()
     for run_id, (outcome, observed) in windowed.items():
+        check()
         if run_id not in stored:
             rows.append((observed, run_id, None, None, outcome, _outcome_tokens(outcome)))
     return rows, len(usage_rows) > limit or len(outcome_rows) > limit
@@ -338,6 +343,13 @@ STATUS_USAGE_DAYS = 7
 
 RUN_USAGE_SECONDS = 1.0  # the service's work for one status reading; the client waits 2 s
 RUN_USAGE_PROGRESS = 1_000  # SQLite VM steps between deadline checks
+_monotonic = time.monotonic  # the service's clock; tests replace it
+
+
+class _RunUsageExpired(Exception):
+    """The single run-usage deadline passed during Python work."""
+
+
 RUN_USAGE_UNKNOWN = {"state": "unknown", "runs": None, "runs_with_complete_usage": None}
 
 
@@ -349,12 +361,20 @@ def service_run_usage(history, now_ms: int) -> dict:
     store is left as it was. Content-free: counts and states only.
     """
     connection = history._connection
-    deadline = time.monotonic() + RUN_USAGE_SECONDS
-    connection.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, RUN_USAGE_PROGRESS)
+    deadline = _monotonic() + RUN_USAGE_SECONDS
+
+    def check():
+        if _monotonic() > deadline:
+            raise _RunUsageExpired
+
+    connection.set_progress_handler(lambda: 1 if _monotonic() > deadline else 0, RUN_USAGE_PROGRESS)
     try:
         rows, more = _rows(connection, history.project_id, max(0, now_ms - STATUS_USAGE_DAYS * 86_400_000),
-                           now_ms + 1, MAX_ROWS, with_outcomes=False)
-    except sqlite3.OperationalError:
+                           now_ms + 1, MAX_ROWS, with_outcomes=False, check=check)
+        reply = _service_reply(rows, more, check)
+        check()
+        return reply
+    except (sqlite3.OperationalError, _RunUsageExpired):
         return {"window_days": STATUS_USAGE_DAYS, "truncated": True,
                 "child_runs": {"codex": dict(RUN_USAGE_UNKNOWN), "claude": dict(RUN_USAGE_UNKNOWN)},
                 "primary_session": {"state": "not_reported", "note": PRIMARY_SESSION_NOTE},
@@ -362,8 +382,12 @@ def service_run_usage(history, now_ms: int) -> dict:
                                   "status, so coverage is unknown (not zero): run learning-usage-report."}
     finally:
         connection.set_progress_handler(None, 0)
+
+
+def _service_reply(rows, more, check) -> dict:
     runs = []
     for observed, run_id, provider, model, outcome, (complete, inputs, outputs, creation, cached) in rows[:MAX_ROWS]:
+        check()
         name = _text(outcome.get("model")) if outcome else None
         if provider is None:
             try:
