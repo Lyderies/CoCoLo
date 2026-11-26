@@ -4920,5 +4920,67 @@
   ],
   "source": "tests/requirements/s14b.json#S14b-6",
   "statement": "Retention indexes are created inside the consented records-upgrade step (the ledger 17->18 open of --upgrade-ledger, and the B4t takeover adoption) on every path that performs it; a plain or unconsented open creates none; registration with a running collector leaves them in place (decision 349)."
+ },
+ "S10-HM6-1": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_workspace_threshold_below_equal_above"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-1",
+  "statement": "Refuse a new run when free space on the workspace root is below the larger of 2 GiB and 5%; equal and above allow."
+ },
+ "S10-HM6-2": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_both_low_names_both",
+   "codex:tests.test_health_resources.ResourceTests.test_state_folder_threshold_below_equal_above"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-2",
+  "statement": "Apply the same rule to the state folder separately from the workspace root."
+ },
+ "S10-HM6-3": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_larger_of_two_gib_or_five_percent"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-3",
+  "statement": "The needed free space is the larger of the byte limit and the percentage of the disk, exact at the switch-over."
+ },
+ "S10-HM6-4": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_driver_refuses_before_any_state_exists",
+   "codex:tests.test_health_resources.ResourceTests.test_driver_retry_of_registered_run_is_not_rechecked",
+   "codex:tests.test_health_resources.ResourceTests.test_just_below_amounts_are_distinguishable",
+   "codex:tests.test_health_resources.ResourceTests.test_refusal_is_plain_and_complete"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-4",
+  "statement": "A refused run gives a plain reason naming the folder, free and needed amounts and how to change the limit, before any run state exists."
+ },
+ "S10-HM6-5": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_out_of_range_values_are_refused",
+   "codex:tests.test_health_resources.ResourceTests.test_settings_file_overrides_limits"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-5",
+  "statement": "Limits come from the shared user-settings file; overrides work and out-of-range values are refused."
+ },
+ "S10-HM6-6": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_memory_pressure_is_reported_but_never_refuses"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-6",
+  "statement": "Memory pressure is reported only and never refuses a run."
+ },
+ "S10-HM6-7": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_probe_errors_fail_safe_with_plain_reason"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-7",
+  "statement": "A failing disk probe fails safe: new runs are refused with a plain reason."
+ },
+ "S10-HM6-8": {
+  "checks": [
+   "codex:tests.test_health_resources.ResourceTests.test_check_reports_low_and_unreadable_folders_only",
+   "codex:tests.test_health_resources.ResourceTests.test_import_does_no_io"
+  ],
+  "source": "tests/requirements/s10.json#S10-HM6-8",
+  "statement": "Low or unreadable disks are reported to the user as plain health findings; no import-time I/O."
  }
 }

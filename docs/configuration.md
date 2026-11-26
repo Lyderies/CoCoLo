@@ -96,7 +96,8 @@ changing the installed runtime. The default state folder is listed above;
   "store_growth_bytes_per_day": 1073741824,
   "disk_free_bytes": 2147483648,
   "disk_free_percent": 5,
-  "no_merge_warning_ms": 5400000
+  "no_merge_warning_ms": 5400000,
+  "memory_available_percent": 10
 }
 ```
 
@@ -113,12 +114,16 @@ symlinks and special files are reported as invalid. Duplicate/unknown keys and
 non-integer values also make the whole file invalid; warnings contain no file content.
 
 This is the single file and shared `codex_agents.user_settings.load` loader for
-all user limits. S10 will use `disk_free_bytes` (default 2 GiB, minimum 1 MiB)
-and `disk_free_percent` (default 5, range 1–99) to refuse new runs below the larger
-free-space threshold on the workspace, state folder or VM disk. S35 will use
+all user limits. S10 uses `disk_free_bytes` (default 2 GiB, minimum 1 MiB) and
+`disk_free_percent` (default 5, range 1-99): a new run is refused when free space
+on the workspace folder or on the account state folder is below the larger of the
+two (2 GiB on disks under 40 GiB, 5% above). The refusal says which folder, how
+much is free and needed, and how to change the limit; if the free space cannot be
+read the run is also refused. Low disks are also shown in the status warning list.
+The VM disk joins in S19. `memory_available_percent` (default 10, range 1-99)
+only reports memory pressure in status; it never refuses a run. S35 will use
 `no_merge_warning_ms` (default 5,400,000 ms = 1.5 h, minimum 60,000 ms) for the
-no-merge warning. These keys are already typed and accepted by the loader; their
-S10/S35 consumers remain later work. Integer limits have a maximum of 2^63-1
+no-merge warning. Integer limits have a maximum of 2^63-1
 unless a narrower range is stated. Defaults record owner decisions 340/341.
 
 ## Environment
