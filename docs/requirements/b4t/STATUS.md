@@ -42,14 +42,17 @@ only a design op, and the product hunks are listed below. It fixes the 22 regres
   label, the account refused it (`account_not_authorized`), and the slot was never freed. On ce81bd96,
   learning-status's last enrollment was history-only. Fix: that read ends its enrollment (`finally:
   install_enrollment(None)`). M1 is green.
-- **Open, for the primary: test_candidate_evidence_lookup AP3.** It opens the current ledger with released 0.8.61
-  (schema 17). H1d and T-5 require every pre-B4t binary to refuse schema 18, so this cannot pass until a
-  schema-18 release exists. The test is not changed.
+- **AP3 (resolved, decision 348, `eddd2d00`).** `test_candidate_evidence_lookup` AP3 is re-aimed, not loosened: it
+  compares against the newest previous release with the SAME ledger schema. While none exists (0.8.68 is the first
+  schema-18 build) it asserts that the current schema is newer than every released one and that released 0.8.61
+  refuses the store with zero writes (the T-5 behaviour), never a skip. Old -> new is mapped in
+  [assertions.md](assertions.md). Before that change the test opened the current ledger with 0.8.61 and failed.
 
-Named run, unsandboxed, short TMPDIR, tfvenv python, `--jobs 4`: the 13 modules + the 4 native modules +
-test_b4t_takeover. 85 s, `metadata_errors: []`, no budget failures, only AP3 failing:
-[evidence/regression-fix/named-run.txt](evidence/regression-fix/named-run.txt). No --affected or full run was
-made here (the primary runs it).
+Affected run after the regression fix and the AP3 re-aim:
+[evidence/regression-fix/affected.txt](evidence/regression-fix/affected.txt) (a full-fallback `--affected` run, no
+coverage map). The earlier named run was 85 s with `metadata_errors: []` and no budget failures:
+[evidence/regression-fix/named-run.txt](evidence/regression-fix/named-run.txt). The primary also ran the affected
+set, so "no affected run exists" no longer holds.
 
 ## Final fix (S5, last round) — read first
 
