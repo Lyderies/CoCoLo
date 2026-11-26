@@ -39,3 +39,9 @@ Kept real-time (one case per behaviour): ProbationTests serving-recheck (real re
 | RecordRefusedTests spawn_unrecorded | `sleep(1.0)` after the refusal | `sleep(0.5)` | the pid record's own tries are 3 x 0.05 s apart (SETTLE_*), so 0.5 s is over 3x past them |
 | StartTests E2c-1 idle check | `sleep(1.0)` at check 0.1 (10 passes) | `sleep(0.6)` (6 passes, was 5 at the old 0.2 interval) | an undue project is still never begun over more passes than before the first round |
 | "rechecked, still not replaced" (StartTests E2c-7, OtherVersionTests, ProbationTests serving-recheck) | `sleep(1.0)` (two rechecks of 0.5 s) | `sleep(0.75)` (1.5 rechecks, as the original 1.5 s at 1.0 s) | back to the original recheck count |
+
+## S13g correction (test_run_retention_scale.py, review R1)
+| Old | New | Reason |
+|---|---|---|
+| growth claim asserted rebuild pages (maintenance calls) only | also `rebuild_work_units` (calls of the read scope's progress hook, one per 256 SQLite VM steps, counted across the whole rebuild) at 80,000 <= 4 x 1.25 x at 20,000 | pages measure calls, not work; a per-page rescan keeps the same page ratio. Check: with a temporary stand-in that rescanned `retention_members` after every page, work was 98,896 -> 1,567,461 (15.8x) and the assertion FAILED (1,567,461 not <= 494,480); stand-in removed, real rebuild passes |
+| comments: 20k/80k summaries "a year and four years" | "~0.27 and ~1.10 years at 200/day" | 20,000/200 = 100 days, 80,000/200 = 400 days; five-year envelope assertions unchanged |

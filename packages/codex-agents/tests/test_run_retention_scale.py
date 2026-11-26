@@ -3,15 +3,16 @@ import copy
 import json
 import time
 import unittest
+from unittest import mock
 
 from test_framework import requirements
 from tests import test_learning_store as legacy
 from tests import test_run_retention as retention
-from codex_agents import learning_store, run_retention
+from codex_agents import learning_store, run_retention, sql_read_budget
 from codex_agents.learning_contracts import canonical_json, content_digest, validate_learning_record
 from codex_agents.sql_read_budget import SQLReadError
 
-SUMMARY_SIZES = (20_000, 80_000)  # S13G: a year and four years at ~200 batches/day (was one build of 365,000)
+SUMMARY_SIZES = (20_000, 80_000)  # S13G: ~0.27 and ~1.10 years at ~200 batches/day (was one build of 365,000)
 DETAILS = 10_000  # was 50,000 beside 365,000 summaries; the same 1:8 share of detail rows
 PRODUCT_APPENDS = 2_000
 
@@ -62,8 +63,8 @@ class RunRetentionScaleTests(unittest.TestCase):
         with self.ledger.repository(self.project) as reader:
             with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
                 reader.record('first', 'outcome')
-        # Years of history at about 200 batches/day, each validated; none unlinked. S13G: two sizes (a year and four
-        # years) prove the scale claim by growth (every per-entry measure stays flat as the history quadruples) instead of
+        # Years of history at about 200 batches/day, each validated; none unlinked. S13G: two sizes (~0.27 and ~1.10 years
+        # at 200/day) prove the scale claim by growth (every per-entry measure stays flat as the history quadruples) instead of
         # one 365,000-row build whose insert time grew with machine load.
         with self.ledger._account_transaction():
             for i in range(PRODUCT_APPENDS):
@@ -89,6 +90,9 @@ class RunRetentionScaleTests(unittest.TestCase):
         self.assertLessEqual(large['membership_bytes_per_entry'], 1.15*small['membership_bytes_per_entry'])
         self.assertLessEqual(large['membership_index_pages'], 4.5*small['membership_index_pages'])
         self.assertGreaterEqual(large['membership_index_pages'], 3.5*small['membership_index_pages'])
+        # Work, not calls: read-scope VM work spent by the whole rebuild grows linearly (a rescan per page would be ~16x).
+        self.assertGreater(small['rebuild_work_units'], 0)
+        self.assertLessEqual(large['rebuild_work_units'], 4*1.25*small['rebuild_work_units'])
 
     def measure_at(self, total, first, *, oracle):
         """Everything S14b-4 asserts at one history size; returns what it measured.
@@ -105,11 +109,19 @@ class RunRetentionScaleTests(unittest.TestCase):
             self.db.execute(sql)
         persistent_seconds = time.perf_counter()-started
         started = time.perf_counter()
-        run_retention.rebuild_history_index(self.ledger)
-        pages = 0
-        while self.ledger._history_index_rebuilding:
-            self.ledger.sweep_run_retention(now_ms=retention.START+91*retention.DAY)
-            pages += 1
+        # Work, not calls: the read scope that bounds each rebuild page is called once per 256 SQLite VM steps, so
+        # its call count is the VM work the rebuild's reads spend (a per-page rescan shows up here, not in `pages`).
+        steps = [0]
+        real_progress = sql_read_budget._ReadScope.progress
+        def counting_progress(scope):
+            steps[0] += 1
+            return real_progress(scope)
+        with mock.patch.object(sql_read_budget._ReadScope, 'progress', counting_progress):
+            run_retention.rebuild_history_index(self.ledger)
+            pages = 0
+            while self.ledger._history_index_rebuilding:
+                self.ledger.sweep_run_retention(now_ms=retention.START+91*retention.DAY)
+                pages += 1
         history_seconds = time.perf_counter()-started
         index_bytes = (self.db.execute('PRAGMA temp.page_size').fetchone()[0]
                        * self.db.execute('PRAGMA temp.page_count').fetchone()[0])
@@ -118,7 +130,7 @@ class RunRetentionScaleTests(unittest.TestCase):
                             membership_index_build_seconds=history_seconds,
                             membership_index_bytes=index_bytes,
                             membership_bytes_per_entry=index_bytes/(total+1),
-                            membership_index_pages=pages)
+                            membership_index_pages=pages, rebuild_work_units=steps[0])
         self.assertLessEqual(index_bytes/(total+1), 40)
         # The reviewed implementation's JSON walk cannot reach the oldest
         # member under the read budget. Keep this as the regression oracle.
