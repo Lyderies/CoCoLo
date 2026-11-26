@@ -117,3 +117,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 `cli._migrate_learning` can perform the 17 -> 18 step. Test first (red: schema 18 with 0 indexes after `learning-migrate-project` on a schema-17 ledger), then `_ledger_takes_additive_step` + `create_retention_indexes()` in the same operation. The fixture was split so only the two upgrade tests downgrade to schema 6. Running-collector registration accepted as is (no new collector op). Modules: the part-2 list plus test_learning_migration: 39 units, 585 tests, 128.9 s, 0 failed, metadata_errors empty. No VERSION bump.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### S14b-6 rewrite (decision 352, Codex merge review r1)
+Per-path index calls replaced by one rule inside `LearningLedger._migrate`'s 17 -> 18 transaction (details in docs/requirements/s14b/STATUS.md). Also: registration `--upgrade-ledger` now allows the step on a schema-17 ledger (MED 1); `learning-migrate-project --status` never performs it (MED 4). Four tests red on 17a70460, green now. Two existing tests changed (old -> new in docs/requirements/s14b/assertions.md): the takeover adoption test and test_project_start E2a-1 layout comparison. Modules: part-2 list + test_learning_migration + test_learning_cli: 39 units, 589 tests, ~130 s; one failure (E2a-1 layout, fixed as above, rerun with test_state_location and the new module: 13 units, 67 tests, 46.7 s, 0 failed). No VERSION bump.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

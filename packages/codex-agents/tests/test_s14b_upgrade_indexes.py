@@ -62,6 +62,48 @@ class UpgradeCreatesRetentionIndexesTests(unittest.TestCase):
         self.assertTrue(again['active'])
         self.assertEqual(5, index_count(self.database))
 
+    def set_version(self, version):
+        with closing(sqlite3.connect(self.database)) as db:  # a 0.8.66/0.8.67 ledger: B4t tables kept, version set back
+            db.execute(f'PRAGMA user_version={version}')
+
+    @requirements('S14b-6')
+    def test_offline_register_upgrade_ledger_performs_17_to_18_with_the_indexes(self):
+        self.set_version(17)
+        self.cli._run('learning-register', '--upgrade-ledger')
+        self.cli._stop_collector()
+        self.assertEqual((18, 5), (self.user_version(), index_count(self.database)))
+
+    @requirements('S14b-6')
+    def test_a_schema_16_ledger_migrated_through_17_gets_the_indexes(self):
+        self.set_version(16)
+        self.cli._run('learning-register', '--upgrade-ledger')
+        self.cli._stop_collector()
+        self.assertEqual((18, 5), (self.user_version(), index_count(self.database)))
+
+    @requirements('S14b-6')
+    def test_a_failure_on_the_third_index_leaves_17_with_no_index_and_a_retry_gets_all_five(self):
+        from unittest import mock
+        self.set_version(17)
+        state = LearningState(self.state_root, create=False)
+        broken = (run_retention.PROTECTION_INDEXES[0], 'CREATE INDEX no_such_index ON no_such_table(x)',
+                  *run_retention.PROTECTION_INDEXES[1:])
+        with mock.patch.object(run_retention, 'PROTECTION_INDEXES', broken):
+            with self.assertRaises(Exception):
+                LearningLedger(state, allow_schema_upgrade=True)
+        self.assertEqual((17, 0), (self.user_version(), index_count(self.database)))
+        LearningLedger(state, allow_schema_upgrade=True).close()
+        self.assertEqual((18, 5), (self.user_version(), index_count(self.database)))
+
+    @requirements('S14b-6')
+    def test_learning_migrate_status_on_an_offline_schema_17_ledger_changes_nothing(self):
+        import subprocess, sys
+        from tests.support import ORCHESTRATION_ROOT
+        self.set_version(17)
+        subprocess.run([sys.executable, str(ORCHESTRATION_ROOT / 'cli.py'), 'learning-migrate-project', '--status',
+                        '--state-root', str(self.state_root), '--project-root', str(self.cli.project)],
+                       text=True, capture_output=True, env=self.cli._environment(), check=False)
+        self.assertEqual((17, 0), (self.user_version(), index_count(self.database)))
+
     @requirements('S14b-6')
     def test_learning_migrate_that_performs_the_schema_step_creates_the_indexes(self):
         import subprocess, sys

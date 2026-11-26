@@ -1666,7 +1666,13 @@ class ReleasedLedgerUpgradeTests(upgrade_tests.Fixture, unittest.TestCase):
                                                "AND type IN ('table','index')")}
                 # Triggers are left out: the collector adds and drops cleanup_host_binding_with_event while it runs
                 # (also in 0.8.59), and the released collector here was stopped, not closed.
-                self.assertEqual(layout(fresh._connection), layout(ledger._connection))
+                # Decision 352 (S14b-6): the consented 17 -> 18 step also creates the five retention indexes; a
+                # fresh plain open does not. Everything else must be identical.
+                from codex_agents import run_retention
+                upgraded = layout(ledger._connection)
+                retention = {'index:' + name for name in run_retention.RETENTION_INDEX_NAMES}
+                self.assertTrue(retention <= set(upgraded))
+                self.assertEqual(layout(fresh._connection), {k: v for k, v in upgraded.items() if k not in retention})
             # The machine-local rows stay with this machine's ledger, untouched by the move.
             self.assertEqual((str(Path('/var/empty/owner/.codex/agent-orchestration') / folder / digest), digest),
                              ledger.launch_record(project_id))

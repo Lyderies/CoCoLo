@@ -1741,13 +1741,14 @@ class AccountLineageTests(unittest.TestCase):
             terminal_evidence=bytes.fromhex(self.data['terminal']))
 
     @requirements('S14b-6')
-    def test_S14b_6_takeover_adoption_creates_the_retention_indexes_on_the_consented_open(self):
+    def test_S14b_6_takeover_adoption_keeps_the_retention_indexes_of_the_consented_step(self):
         from codex_agents.takeover_owner import OwnerOperations
         from codex_agents.learning_store import LearningLedger
         from codex_agents import run_retention
         names = ', '.join("'%s'" % n for n in run_retention.RETENTION_INDEX_NAMES)
         query = f"SELECT count(*) FROM sqlite_master WHERE name IN ({names})"
-        self.assertEqual(0, self.ledger._connection.execute(query).fetchone()[0])  # the 0.8.66 store has none
+        # setUp's consented open performed the 17 -> 18 step, whose transaction created them (decision 352).
+        self.assertEqual(5, self.ledger._connection.execute(query).fetchone()[0])
         root = self.case / 'P'
         root.mkdir()
         project_p = self.ledger.register_project(root)

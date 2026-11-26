@@ -56,12 +56,17 @@ def rebuilding_answer():
     return {'record_type': 'history_index_rebuilding', 'detail': 'history index rebuilding'}
 
 
+def create_index_statements(db):
+    """The five CREATE INDEX statements, nothing else: run inside the ledger 17 -> 18 schema step's transaction
+    (decision 352), so they commit with the version write or roll back with it."""
+    for sql in (RETENTION_INDEX, *PROTECTION_INDEXES):
+        db.execute(sql)
+
+
 def ensure_indexes(ledger):
     """Create the persistent retention indexes. Only the consented upgrade flow (setup --upgrade-ledger,
     after its whole-ledger copy, on the drained offline owner) may call this; no open ever does."""
-    db = ledger._connection
-    for sql in (RETENTION_INDEX, *PROTECTION_INDEXES):
-        db.execute(sql)
+    create_index_statements(ledger._connection)
     probe(ledger)
 
 

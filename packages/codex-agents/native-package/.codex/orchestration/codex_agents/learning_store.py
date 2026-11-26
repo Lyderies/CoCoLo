@@ -3545,6 +3545,11 @@ class LearningLedger:
                 self._adopt_runtime_lineage_locked()
                 self._initialize_run_holds_locked(target_version=18)
                 self._validate_current_ledger()
+                if self._allow_schema_upgrade and initial != 0:
+                    # Decision 352 (S14b-6): the consented 17 -> 18 step creates the retention indexes in its own
+                    # transaction (any start version); a fresh or unconsented open never does.
+                    from .run_retention import create_index_statements
+                    create_index_statements(self._connection)
                 self._connection.execute('PRAGMA user_version=18')
         elif current == 18:
             if not pending(self._connection):

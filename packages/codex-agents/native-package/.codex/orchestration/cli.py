@@ -982,21 +982,6 @@ def _migration_state(snapshot):
     return "pending" if snapshot["has_learning"] else "not_needed"
 
 
-def _ledger_takes_additive_step(state):
-    """True when the ledger is at schema 17, so an owner open performs the additive 17 -> 18 step."""
-    import sqlite3
-    try:
-        if not state.database.is_file() or not state.database.stat().st_size:
-            return False
-        connection = sqlite3.connect(state.database.as_uri() + "?mode=ro", uri=True, timeout=5)
-        try:
-            return int(connection.execute("PRAGMA user_version").fetchone()[0]) == 17
-        finally:
-            connection.close()
-    except (OSError, sqlite3.Error, TypeError, ValueError):
-        return False
-
-
 def _migrate_learning(args):
     """Move, report or roll back one project's learning history: offline owner work.
 
@@ -1031,12 +1016,9 @@ def _migrate_learning(args):
             raise
     ledger = history = None
     try:
-        steps = _ledger_takes_additive_step(state)
-        ledger = LearningLedger(state, allow_schema_upgrade=True)
-        if steps:
-            # S14b-6 (decision 349): this open performed the 17 -> 18 step under the owner's migration
-            # consent, so the retention indexes are created in the same operation (drained offline owner).
-            ledger.create_retention_indexes()
+        # A report-only request never performs a schema step (decision 352); the step's own transaction
+        # creates the retention indexes when a real migration does perform it.
+        ledger = LearningLedger(state, allow_schema_upgrade=not args.status)
         project_id = ledger.project_for_root(args.project_root)
         try:
             history = open_offline_history(state, project_id)
@@ -1121,7 +1103,9 @@ def _register_project(args, moved_aside, upgrade_required, progress):
         behind = progress["behind"] = ledger_schema_behind(state) if args.upgrade_ledger else None
         if behind is not None:
             progress["copy"] = copy_ledger_before_upgrade(state, behind)
-        ledger = LearningLedger(state, allow_schema_upgrade=behind is not None,
+        # --upgrade-ledger is the owner's consent for every records step, including the additive 17 -> 18 one
+        # (its transaction creates the retention indexes, decision 352).
+        ledger = LearningLedger(state, allow_schema_upgrade=bool(args.upgrade_ledger),
                                 backup_before_upgrade=behind is not None)
         try:
             if args.upgrade_ledger:

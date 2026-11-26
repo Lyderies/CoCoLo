@@ -151,3 +151,13 @@ Merge-time pin updates in the S5 merge (not S14b): `test_holds_report_socket` ex
 `['history.holds_report', 'history.run_usage', 'history.takeover_report']` (S44a + S5 reads, in the order the status
 command asks them); op sets in `service_host.py` and `test_b2_service_outcome` carry both `history.run_usage` and
 `history.takeover_report` (+ `service.stop_for_update`).
+
+## S14b-6 rewrite (decision 352)
+
+- `test_b4t_takeover...test_S14b_6_takeover_adoption_creates_the_retention_indexes_on_the_consented_open` ->
+  `..._adoption_keeps_the_retention_indexes_of_the_consented_step`: the old "0 indexes before adoption" assertion is
+  replaced by "5 before" (setUp's consented open at schema 17 already performed the step, which now creates them);
+  the final "5 after adoption" is unchanged.
+- `test_project_start...test_E2a_1_a_released_0_8_59_ledger_...`: old `layout(fresh) == layout(upgraded)` -> new: the
+  upgraded layout contains the five retention indexes and, without them, equals the fresh layout (a consented
+  upgrade creates the indexes, a fresh plain open does not; every other object is still compared).

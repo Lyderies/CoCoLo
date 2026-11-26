@@ -241,3 +241,20 @@ inside the consented records-upgrade step on every path that performs it, never 
 - Registered: requirement in `tests/requirements/s14b.json` and `scripts/test-requirements.json`, module
   `test_s14b_upgrade_indexes` in layers/stages/timings. Live proof after install (indexes present on the local ledger,
   `retention_due` set) is still to do (decision 349).
+
+### S14b-6 rewrite (decision 352, after Codex merge review r1: 4 MED)
+
+One rule replaces the per-path calls of 60a4857d/17a70460: the five retention indexes are created INSIDE the ledger
+17 -> 18 step of `LearningLedger._migrate` (`run_retention.create_index_statements`, same `_account_transaction` as the
+`PRAGMA user_version=18` write), only when the open is consented (`allow_schema_upgrade`) and not a fresh create
+(`initial != 0`). Any start version (16 -> 17 -> 18 too) gets them; a failure rolls back to 17 with no partial index
+(DDL is transactional); nothing that does not perform the step creates any. Removed: the adoption call in
+`takeover_owner.adopt_ledger` and `cli._ledger_takes_additive_step` with its block in `_migrate_learning`. Kept:
+the explicit `--upgrade-ledger` `create_retention_indexes()` (idempotent, consented; covers an 18 ledger without them).
+- MED 1: `_register_project` now opens with `allow_schema_upgrade=args.upgrade_ledger` (the old `behind is not None`
+  excluded 17). MED 4: `learning-migrate-project --status` opens with `allow_schema_upgrade=False`, so it never
+  performs the step.
+- Tests (red on 17a70460: 3 failures + 1 error; green now): `test_offline_register_upgrade_ledger_performs_17_to_18_with_the_indexes`,
+  `test_a_schema_16_ledger_migrated_through_17_gets_the_indexes`,
+  `test_a_failure_on_the_third_index_leaves_17_with_no_index_and_a_retry_gets_all_five`,
+  `test_learning_migrate_status_on_an_offline_schema_17_ledger_changes_nothing`; the migrate and plain-open tests stay.
