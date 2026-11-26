@@ -49,3 +49,14 @@ not edited here). test_reply_shape_live: see report.
   (RS-B-4 driver-reply list gains run.check's reply, see assertions.md; finding_text registered in lifetime_caps.json)
   plus why_not_scenario added. Run B (health_resources, _open, project_driver, lifetime_cap_guard, learning_cli):
   166 tests green, 118.1 s wall, metadata_errors []. test_reply_shape_live not run (primary, quiet machine).
+
+## Decision 360 fix (review r2c)
+- project_driver._check_new_run(orchestration_handle, attempt, inputs_digest, host_client): the retry exemption now matches
+  orchestration, attempt, inputs digest and host class (the account's identity).
+- client_runtime._check_new_run fails closed: missing run.sock or a failed/unanswered run.check -> RuntimeOpenError
+  `open_service_unreachable` before account admission (no new reason code).
+- Tests: 2 added to test_health_resources_open (checks registered in scripts/test-requirements.json); M11 test in
+  test_account_original_open stubs `_check_new_run` (assertions.md).
+- Green (13 modules incl. health_resources(+_open), project_driver, account_original_open, dispatch_client_runtime,
+  run_driver_retries, refusal_steps, contracts, reply_shape_compatibility, dispatch_delivery_cli, learning_cli, host_slots,
+  lifetime_cap_guard); metadata_errors []. test_reply_shape_live not run.

@@ -1610,16 +1610,17 @@ def abandon_bridged_run(state_root, project_root, run_handle, reason, *, host_cl
 def _check_new_run(state, project_root, scope, control, orchestration_handle, attempt, digest, host_client, warning):
     """S10 HM-6: ask the project host whether a new run may open, before the account admits it.
 
-    Raises RuntimeResourceRefusal on a low or unreadable disk. A runtime without a run driver, or one that cannot
-    answer, is not checked here: its registration, after the account, checks again (and refuses plainly)."""
+    Raises RuntimeResourceRefusal on a low or unreadable disk. Fails closed (review r2c): a runtime without a run
+    driver, or one that cannot answer, refuses the open here, before the account writes anything, as an unreachable
+    service (`open_service_unreachable`, whose next step is the usual one)."""
     driver = Path(control).parent / 'run.sock'
     if not driver.exists():
-        return
+        raise RuntimeOpenError('open_service_unreachable')
     try:
         contexts = enroll_clients(state, project_root, scope, (control, driver), host_client=host_client)
         answer = _run_driver(contexts, control, 'run.check', orchestration_handle, attempt, digest, {}, timeout=10)
     except Exception:
-        return
+        raise RuntimeOpenError('open_service_unreachable') from None
     if answer['state'] == 'refused' and answer['reason_code'] == 'resource_low':
         raise RuntimeResourceRefusal(answer['message'], warning)
 

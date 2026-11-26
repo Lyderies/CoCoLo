@@ -4953,7 +4953,9 @@
    "codex:tests.test_health_resources.ResourceTests.test_refusal_is_plain_and_complete",
    "codex:tests.test_health_resources_open.ResourceOpenTests.test_disk_filling_between_admission_and_registration_never_reports_success",
    "codex:tests.test_health_resources_open.ResourceOpenTests.test_identical_retry_of_a_registered_open_is_not_probed_again",
-   "codex:tests.test_health_resources_open.ResourceOpenTests.test_low_disk_open_is_refused_before_any_account_or_run_write"
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_low_disk_open_is_refused_before_any_account_or_run_write",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_new_orchestration_reusing_registered_inputs_is_probed_and_refused",
+   "codex:tests.test_health_resources_open.ResourceOpenTests.test_run_driver_that_cannot_answer_the_check_refuses_before_admission"
   ],
   "source": "tests/requirements/s10.json#S10-HM6-4",
   "statement": "A refused run gives a plain reason naming the folder, free and needed amounts and how to change the limit, before any account or run write, and is never reported as started."

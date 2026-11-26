@@ -344,6 +344,7 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
               mock.patch.object(client_runtime.HistoryClient, 'worker_input',
                   return_value={'worker': p.base.context.snapshot()[1]['worker']}),
               mock.patch.object(account_api, 'exchange_frame', side_effect=exchange),
+              mock.patch.object(client_runtime, '_check_new_run'),  # S10: this fixture has no run driver socket
               mock.patch.object(client_runtime, '_run_driver', side_effect=[
                   {'protocol': 1, 'state': 'refused', 'reason_code': 'history_service_unavailable'},
                   {'protocol': 1, 'state': 'preparing', 'reason_code': None}]) as register):

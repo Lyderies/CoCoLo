@@ -16,7 +16,7 @@ from test_framework import requirements
 from tests.test_bridge import PARENT_GRANT, cli
 from tests.test_project_driver import DriverHarness
 
-from codex_agents import account_api, health_resources as hr, project_driver, user_settings
+from codex_agents import account_api, client_runtime, health_resources as hr, project_driver, user_settings
 
 GIB = 1024 ** 3
 # The account rows an open writes (binding, provenance, receipt, request journal, hold); none may appear on refusal.
@@ -150,3 +150,38 @@ class ResourceOpenTests(DriverHarness):
         code, refused = self.open(arguments)
         self.assert_refused_plainly(code, refused)
         self.assertEqual(user_settings.WARNING, refused['settings_warning'])
+
+    # Decision 360 (review r2c): the retry exemption matches the identity admission uses; a driver that cannot
+    # answer the check refuses the open before admission.
+    @requirements('S10-HM6-4', why_not_scenario=WHY)
+    def test_new_orchestration_reusing_registered_inputs_is_probed_and_refused(self):
+        arguments = list(self.prepare_open())
+        code, first = self.open(arguments)
+        self.assertEqual((0, True), (code, first['project_host_registered']), first)
+        again = self.cli('learning-open-orchestration')['orchestration_handle']
+        self.assertNotEqual(arguments[-1], again)
+        arguments[-1] = again  # same task, assignment, route and grant (so the same inputs digest and host): new orchestration
+        before = self.counts()
+        runs = set(self.runs())
+        self.low = True
+        code, report = self.open(arguments)
+        self.assert_refused_plainly(code, report)
+        self.assertEqual(before, self.counts())
+        self.assertEqual(runs, set(self.runs()))
+
+    @requirements('S10-HM6-4', why_not_scenario=WHY)
+    def test_run_driver_that_cannot_answer_the_check_refuses_before_admission(self):
+        arguments = self.prepare_open()
+        before = self.counts()
+        for broken in (mock.patch.object(client_runtime, '_run_driver', side_effect=OSError('gone')),
+                       mock.patch.object(client_runtime.Path, 'exists', return_value=False)):
+            with broken:
+                code, report = self.open(arguments)
+            self.assertEqual(2, code, report)
+            self.assertIs(False, report['ready'])
+            self.assertEqual('open_service_unreachable', report['reason_code'])
+            self.assertTrue(report['error'] and report['next_step'])
+            for bad in ('Traceback', 'history_', 'None', 'gone'):
+                self.assertNotIn(bad, report['error'])
+            self.assertEqual(before, self.counts())
+            self.assertEqual({}, self.runs())

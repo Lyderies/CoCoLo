@@ -24,3 +24,14 @@ One existing assertion changed:
   disk). The register's answer, the requirement under test (RS-B-4), is unchanged and still checked; the open is still
   left unregistered and dispatch still answers dispatch_unavailable.
 Also registered: `health_resources.py::finding_text` in tests/lifetime_caps.json (a per-sentence text bound, not a count).
+
+## Decision 360 (review r2c NOT-READY)
+One existing test changed, no assertion removed or edited:
+- `test_account_original_open.OriginalAccountOpenJobTests.test_M11_refused_registration_retries_the_retained_open_after_availability_refresh`:
+  gains `mock.patch.object(client_runtime, '_check_new_run')` in its patch block (old: no such patch; the fixture has no
+  run driver socket and relied on the open proceeding without one; new: the disk check is stubbed out). The test is about
+  registration retry (M11-1, M11-3); its assertions and the `_run_driver` side_effect list are unchanged. Needed because the
+  open now fails closed without a driver.
+New tests (test_health_resources_open): new orchestration reusing registered inputs is probed and refused (red on
+a0fb30c2: second open admitted, account rows grew); driver that cannot answer `run.check` refuses before admission
+(red: open succeeded). Both use reason `open_service_unreachable` (existing code; no new code registered).

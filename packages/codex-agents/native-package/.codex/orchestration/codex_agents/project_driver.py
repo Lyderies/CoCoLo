@@ -566,7 +566,8 @@ class RunDriver:
         if request['operation'] == 'run.check':
             # S10 review r1: asked by the opening CLI before the account admits anything (no binding, provenance,
             # receipt or run state yet). Its run handle names the orchestration; the account gives the run's later.
-            self._reply(connection, self._check_new_run(request['inputs_digest'], enrolled.host_client))
+            self._reply(connection, self._check_new_run(request['run_handle'], request['attempt'], request['inputs_digest'],
+                                                        enrolled.host_client))
             return
         if request['operation'] == 'run.prepare':
             failed = self._late_failure(key, request['inputs_digest'], enrolled.host_client)
@@ -665,10 +666,13 @@ class RunDriver:
             raise HistoryError('history_invalid_input')
         run.result_admitted = True
 
-    def _check_new_run(self, inputs_digest, host_client):
+    def _check_new_run(self, orchestration_handle, attempt, inputs_digest, host_client):
         """S10 HM-6: may a new run be opened? An identical retry of a run this host registered is not probed again
-        (the account replays its open); anything else is a new run and is refused on a low or unreadable disk."""
-        if any(run.inputs_digest == inputs_digest and run.host_client == host_client for run in self._runs.values()):
+        (the account replays its open); anything else is a new run and is refused on a low or unreadable disk.
+        Identical means the identity admission uses (review r2c): orchestration, attempt, inputs and host class."""
+        if any(run.inputs_digest == inputs_digest and run.host_client == host_client
+               and run.prospective.orchestration_handle == orchestration_handle and run.key[1] == attempt
+               for run in self._runs.values()):
             return {'state': 'ready', 'reason_code': None}
         stop = health_resources.refusal(self._root, self._state.root, user_settings.load(self._state.root))
         if stop is not None:
