@@ -278,9 +278,28 @@ class HealthMonitor:
         with self._publish:
             last, fixed = self._last, list(self._fixed)
         if last is None:
-            return {"last_pass_at_ms": None, "pass_ms": None, "summary": "The health monitor has not run a pass yet.",
+            summary = "The health monitor has not run a pass yet."
+            for check in self._checks:
+                describe = getattr(check, 'status_summary', None)
+                if callable(describe):
+                    summary += ' ' + describe()
+            return {"last_pass_at_ms": None, "pass_ms": None, "summary": summary,
                     "checks": [], "findings": [], "more": 0}
         reported = [f for f in last.findings if f.outcome == "reported" and f.visible_to(project_id)]
+        # A paged check can retain observations outside the pass's finding cap.
+        # Ask only for this viewer's bounded, derived status (never live stores).
+        for check in self._checks:
+            status = getattr(check, 'status_findings', None)
+            if callable(status):
+                try:
+                    for item in status(project_id):
+                        if (isinstance(item, Finding) and item.check == check.name and item.visible_to(project_id)
+                                and not any((known.check, known.subject, known.reason_code) ==
+                                            (item.check, item.subject, item.reason_code) for known in reported)):
+                            reported.append(item)
+                except Exception:
+                    reported.append(Finding(check.name, 'machine', 'status', 'reported', 'check_status_unavailable',
+                                            'The saved health reading could not be loaded; the check will try again.'))
         visible = reported + [f for f in fixed if f.visible_to(project_id)]
         shown = visible[:VIEW_MAX_FINDINGS]
         checks = []
@@ -297,5 +316,9 @@ class HealthMonitor:
         else:
             summary = (f"Health monitor: {waiting} finding(s) to look at, "
                        f"{len(visible) - waiting} fixed by itself.")
+        for check in self._checks:
+            describe = getattr(check, 'status_summary', None)
+            if callable(describe):
+                summary += ' ' + describe()
         return {"last_pass_at_ms": last.started_at_ms, "pass_ms": last.duration_ms, "summary": summary,
                 "checks": checks, "findings": [f.shown() for f in shown], "more": len(visible) - len(shown)}

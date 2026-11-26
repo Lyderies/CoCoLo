@@ -416,5 +416,7 @@
  "codex:tests.test_health_workspaces": "scenario",
  "codex:tests.test_s12_account_lanes": "scenario",
  "codex:tests.test_s13d_regressions": "component",
- "codex:tests.test_idle_cpu_budget": "scenario"
+ "codex:tests.test_idle_cpu_budget": "scenario",
+ "codex:tests.test_health_ledger": "scenario",
+ "codex:tests.test_health_ledger_fix": "scenario"
 }
