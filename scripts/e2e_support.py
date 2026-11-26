@@ -258,7 +258,7 @@ def setup_environment() -> dict:
             if not os.path.isfile(real) or (sys.platform == "darwin" and os.path.dirname(real) == "/usr/bin"):
                 continue
             if subprocess.run([real, "-I", "-c", "import sys; sys.exit(sys.version_info < (3, 11))"],
-                              capture_output=True, check=False).returncode != 0:
+                              capture_output=True, check=False, env=env).returncode != 0:
                 continue
             folder = tempfile.mkdtemp(prefix="e2e-trusted-python-")
             os.symlink(real, os.path.join(folder, "python3"))
