@@ -23,13 +23,35 @@ ALL = "\n".join(SOURCES.values())
 LAUNCHER = (ROOT / "setup.sh").read_text(encoding="utf-8")
 
 
+_LINES: dict = {}
+
+
+def segment(source: str, node):
+    """ast.get_source_segment, but the source is split into lines once (the stdlib re-splits it on every call)."""
+    lines = _LINES.get(source)
+    if lines is None:
+        lines = _LINES[source] = ast._splitlines_no_ff(source)
+    try:
+        if node.end_lineno is None or node.end_col_offset is None:
+            return None
+        first, last = node.lineno - 1, node.end_lineno - 1
+        start, end = node.col_offset, node.end_col_offset
+    except AttributeError:
+        return None
+    if first == last:
+        return lines[first].encode()[start:end].decode()
+    head = lines[first].encode()[start:].decode()
+    tail = lines[last].encode()[:end].decode()
+    return "".join([head, *lines[first + 1:last], tail])
+
+
 def launches(source: str):
     """Every list given as the first argument of subprocess.run/Popen, as source text."""
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("run", "Popen")
                 and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess" and node.args):
-            yield ast.get_source_segment(source, node.args[0])
+            yield segment(source, node.args[0])
 
 
 # Review 040-s5-wizard-3 (b): one audited way to start a process. Only these functions may use
@@ -64,7 +86,7 @@ def launch_problems(source: str, name: str = "flow.py") -> list[str]:
             names = [alias for alias in node.names]
             module = getattr(node, "module", None)
             if module == "subprocess" or any(a.name == "subprocess" and a.asname for a in names):
-                problems.append(ast.get_source_segment(source, node))
+                problems.append(segment(source, node))
     permitted = set()
     for owner, function, node in _functions(tree):
         if (name, owner, function) in SUBPROCESS_USERS:
@@ -99,7 +121,7 @@ def launch_problems(source: str, name: str = "flow.py") -> list[str]:
                     given = next((k.value for k in inner.keywords if k.arg == "args"), inner.args[0] if inner.args else None)
                     plain_argv = isinstance(given, ast.Name) and given.id == "argv"
                     git_tool = (isinstance(given, ast.Call)
-                                and ast.get_source_segment(source, given.func) == "owner_git_argv")
+                                and segment(source, given.func) == "owner_git_argv")
                     if not (plain_argv or git_tool):
                         problems.append(f"{owner}.{function} launches something other than its argv")
     # No other way to start a process, and no launcher held under another name.
@@ -150,7 +172,7 @@ def launch_problems(source: str, name: str = "flow.py") -> list[str]:
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr in LAUNCH_POSITION):
                 continue
-            receiver = ast.get_source_segment(source, node.func.value)
+            receiver = segment(source, node.func.value)
             if receiver not in ("self", "self.t"):
                 continue
             argv = next((k.value for k in node.keywords if k.arg in ("argv", "args")), None)
@@ -161,10 +183,10 @@ def launch_problems(source: str, name: str = "flow.py") -> list[str]:
                 continue
             if id(argv) in forwarded:
                 continue
-            builder = ast.get_source_segment(source, argv.func) if isinstance(argv, ast.Call) else ""
+            builder = segment(source, argv.func) if isinstance(argv, ast.Call) else ""
             if builder not in BUILDERS or (builder == "effects.owner_git_argv"
-                                           and ast.get_source_segment(source, argv.args[0]) != "self.py"):
-                problems.append(ast.get_source_segment(source, node))
+                                           and segment(source, argv.args[0]) != "self.py"):
+                problems.append(segment(source, node))
     return problems
 
 
@@ -174,8 +196,8 @@ def git_problems(source: str) -> list[str]:
     tree = ast.parse(source)
     problems, allowed = [], set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and ast.get_source_segment(source, node.func) in GIT_CALLS:
-            func = ast.get_source_segment(source, node.func)
+        if isinstance(node, ast.Call) and segment(source, node.func) in GIT_CALLS:
+            func = segment(source, node.func)
             rest = node.args[1:] if func != "self.git_argv" else node.args
             for arg in rest:
                 if isinstance(arg, ast.Constant) and arg.value == "--":
@@ -185,16 +207,16 @@ def git_problems(source: str) -> list[str]:
                 if isinstance(arg, ast.Starred) and isinstance(arg.value, ast.Name) and arg.value.id == "args":
                     continue  # self.g forwarding its own literal-checked arguments
                 if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
-                    problems.append(ast.get_source_segment(source, node))
+                    problems.append(segment(source, node))
                     break
                 if arg.value in PORCELAIN:
-                    problems.append(ast.get_source_segment(source, node))
+                    problems.append(segment(source, node))
             if func == "install._git_run":
                 allowed.update(id(arg) for arg in node.args)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and "ls-files" in node.value:
             if id(node) not in allowed:
-                problems.append(ast.get_source_segment(source, node))
+                problems.append(segment(source, node))
     return problems
 
 
@@ -328,7 +350,7 @@ class WizardSourceTests(unittest.TestCase):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                         and node.func.attr in ("run", "Popen", "call", "run_cmd") and node.args
                         and isinstance(node.args[0], ast.List) and node.args[0].elts):
-                    first = ast.get_source_segment(source, node.args[0].elts[0])
+                    first = segment(source, node.args[0].elts[0])
                     with self.subTest(launch=first):
                         self.assertIn(first, ("self.py", "self.git"))
         # Owner commands run this clone's CLI, never the project's copy.
@@ -356,7 +378,7 @@ class WizardSourceTests(unittest.TestCase):
         # parentheses or quotes cannot hide one); commits go through the installer's git tool.
         for name, source in SOURCES.items():
             for node in ast.walk(ast.parse(source)):
-                if isinstance(node, ast.Call) and ast.get_source_segment(source, node.func) == "self.g":
+                if isinstance(node, ast.Call) and segment(source, node.func) == "self.g":
                     words = {arg.value for arg in node.args if isinstance(arg, ast.Constant)}
                     self.assertFalse(words & {"status", "add", "commit", "diff"}, (name, words))
         self.assertIn("sys.exit(module.git_tool(sys.argv[2:]))", SOURCES["effects.py"])
