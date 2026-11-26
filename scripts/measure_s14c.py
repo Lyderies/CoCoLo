@@ -239,6 +239,27 @@ def profiled(function, limit=OP_LIMIT):
     return seconds, box.get('result', box.get('error')), top(profile), True
 
 
+def status_profile(ledger, project):
+    """S14h: cProfile of one `account_holds_status` plus the held-row counts that its time should scale with."""
+    import cProfile
+    import io
+    import pstats
+    db = ledger._connection
+    counts = {kind: db.execute("SELECT COUNT(*) FROM run_holds WHERE project_id=? AND kind=? AND state='held'", (project, kind)).fetchone()[0]
+              for kind in ('run_slot', 'binding', 'probe')}
+    counts['run_holds_total'] = db.execute('SELECT COUNT(*) FROM run_holds').fetchone()[0]
+    profile = cProfile.Profile()
+    started = time.perf_counter()
+    profile.enable()
+    ledger.account_holds_status(project)
+    profile.disable()
+    seconds = round(time.perf_counter() - started, 4)
+    out = io.StringIO()
+    pstats.Stats(profile, stream=out).sort_stats('cumulative').print_stats(14)
+    text = [line.rstrip() for line in out.getvalue().splitlines() if line.strip()][-16:]
+    return {'seconds': seconds, 'held_rows': counts, 'top_cumulative': text}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--size-mib', type=int, required=True, help='target database file size')
@@ -349,6 +370,7 @@ def main():
     for _ in range(5):
         status = ledger.account_holds_status(project)
     report['status_read_seconds'] = round((time.perf_counter() - started) / 5, 4)
+    report['status_profile'] = status_profile(ledger, project)  # S14h: where the status read spends its time
     started = time.perf_counter()
     lineage = runtime_lineage.lineage_status(db)
     report['lineage_status_seconds'] = round(time.perf_counter() - started, 4)

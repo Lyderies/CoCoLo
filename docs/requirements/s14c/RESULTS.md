@@ -119,3 +119,19 @@ Proposed steps (one line each):
 1. S14h: profile `account_holds_status` and bound it (cache or page), since it is the only measured path still growing with history on a read the user waits for.
 2. Make the 17->18 upgrade stream or batch its copy so it needs no second full-size copy and has a visible progress and budget at 8-16 GiB.
 3. Re-measure at 1 GiB with an owner-approved cap (or skip) only after step 1; everything else is linear and below 20 s at 16 GiB.
+
+## S14h: `account_holds_status` profile (no product change)
+Added `status_profile()` to `scripts/measure_s14c.py` (cProfile of one status call plus held-row counts). Runner defaults, `--no-upgrade`, one size per run:
+64 MiB 5.6 s wall / 100 MB data / 162 MiB RSS; 256 MiB 25.4 s / 318 MB / 173 MiB; 514 MiB 77.6 s / 736 MB / 216 MiB (data deleted after each; 109 s total).
+| MiB | runs | held run_slot / binding rows | run_holds rows | status read (s, mean of 5) | profiled single call (s) |
+|---|---|---|---|---|---|
+| 64 | 4,101 | 4,102 / 4,103 | 8,205 | 0.0142 | 0.0166 |
+| 256 | 12,214 | 12,215 / 12,216 | 24,431 | 0.0508 | 0.0562 |
+| 514 | 24,346 | 24,347 / 24,348 | 48,695 | 0.1089 | 0.1235 |
+Where the time goes: all three statements already read only held rows (`run_holds INDEXED BY run_holds_due ... state='held' AND kind=... AND project_id=?`, pinned by
+`test_s14g_hold_queries.py` and `test_run_holds.py`); SQL fetch is about 9 ms of 56 ms at 256 MiB, the rest is the Python loop over each HELD slot (`_slot_eligible`, deadline/due
+min/sum, about 4.5 us per row). Time is linear in the number of HELD holds, not in released history. The fixture is the worst case: every cloned run is claimed and never released
+(24k held slots), which a real ledger never has (held slots are bounded by concurrent runs and the open-request/binding caps; settled runs are released and not read).
+Conclusion: no query scans history; nothing to bound or index with the same result. No product code, requirement or test changed. The 16 GiB figure (3.5 s) is the all-runs-held
+fixture extrapolation (linear in held rows, about 2.2 ms per 1,000 held); with real held counts (tens) the read is sub-millisecond at any history size.
+Q1 `active_run_capacity` (plain scan, 6.5 ms at 514 MiB, 0.1 s at 16 GiB) stays accepted; it too sits under every budget.
