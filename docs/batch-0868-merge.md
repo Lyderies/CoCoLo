@@ -286,3 +286,12 @@ Both registrations are done (IP-B 0.8.68), tests first (red on 506f6d1a, green a
 - Budget failures: test_project_start 190.9 s (alone via runner 159.1 s, under its 183.4 debt ceiling) -> load flake;
   test_run_retention_scale 72.0 s (alone: within 60 s, no over-budget notice) -> load flake.
 - Retire notices: test_b2_service_outcome_paths, test_container_stop, test_result_lifetime, test_session_guard now within budget.
+
+### Full run 3: closing evidence (primary decision: private scratch parent)
+- tests/test_project_service_startup.py, assert_service_health_fault: OLD the S11 workspaces check scanned the real shared per-user
+  scratch container -> NEW `mock.patch.object(bridge, 'WORKSPACE_PARENT', <private dir under the observer's copy>)` (same seam as
+  other tests, e.g. test_account_settlement_driver), cleaned up with the test. The strict `'no findings'` assertion is unchanged;
+  the view is NOT filtered.
+- Rerun through the runner, each with metadata_errors [], requirement_failures [], failed_units []: test_project_service_startup,
+  test_health_holds, test_health_workspaces, test_health_monitor. S8-HM3-3 now passes.
+- The product tree is identical to full run 3; only this test file changed, so no full run 4. No __pycache__/.pyc is tracked.

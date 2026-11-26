@@ -365,6 +365,14 @@ class ProjectServiceStartupTests(unittest.TestCase):
         from codex_agents.project_service import history_directory
         copy = Path(tempfile.mkdtemp(dir=TEMP_ROOT))
         self.addCleanup(shutil.rmtree, copy, True)
+        # The S11 workspaces check scans the scratch parent's container: a private one, so only this test's folders count.
+        from unittest import mock
+        from codex_agents import bridge
+        scratch = copy / 'scratch'
+        scratch.mkdir()
+        patcher = mock.patch.object(bridge, 'WORKSPACE_PARENT', str(scratch))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         live = self.state.root
         skipped = {self.state.lock.name, 'learning.sqlite3', 'learning.sqlite3-wal', 'learning.sqlite3-shm',
                    'learning.sqlite3-journal', 'projects'}
