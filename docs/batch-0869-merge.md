@@ -89,3 +89,11 @@ Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-
   - refusal message `'released build must refuse a newer ledger schema'` -> `'a released build older than the current one must refuse (B4t H1d floor; decision 362)'`.
   - `test_AP3_missing_previous_source_has_actionable_failure` unchanged and green; no skip. AP3 statement amended in tests/requirements/ap5-lookup.json, docs/requirements/ap5-lookup.md, scripts/test-requirements.json.
 - Rerun, all green, `metadata_errors: []`: test_cli_open_client_runtime 9.8 s, test_candidate_evidence_lookup 2.3 s, test_health_resources 0.4 s, test_health_resources_open 5.7 s, test_account_original_open 8.1 s, test_dispatch_client_runtime 7.3 s, test_b4t_takeover 13.6 s, test_runtime_release 0.2 s.
+
+## Full run 2 (0.8.69, after merging fix/0869-workspaces-live @00451171 and re-recording the digest; HEAD 7baaa123; base e46759a5)
+
+Command: `parallel_tests.py --base e46759a5 --save-timings docs/batch-0869-full-run2-timings.json` (output docs/batch-0869-full-run2.txt).
+- Exit 1. 554 units; elapsed 696.5 s; `metadata_errors` []; not partial. The two run-1 regressions (cli_open_client_runtime, candidate_evidence_lookup) are green.
+- Failed units (2), both LOAD FLAKES (rerun alone through the runner: `failed_units` []):
+  `test_project_start#2` (E2c-1 "due projects not serving within one interval"), `test_s13_budgets` (S13C-1/2/3, RS-10-DUE: batch 61.6 ms vs 50 ms limit under load).
+- Budget failures (11): admission_history_growth 65.9, b4t_takeover 92.8, cli_observation_runtime 85.1, host_commands 127.5, host_slots 64.5, large_project_backups 70.3, lost_run_settlement 140, project_start 215.5, routing_judgment 5.2 (budget 5), run_retention_scale 78.5, root:test_setup_update 384.9 (sum of fragments). Rerun together with 12 modules (still loaded) only project_start (190), routing_judgment (5.0) and run_retention_scale (68) stayed over: all known load/sum-of-fragments flakes (project_start 23 s and run_retention_scale 32 s alone in the 0.8.69 run 1). No test failure needed a base comparison (all pass on rerun). Nothing fixed.
