@@ -2255,11 +2255,17 @@ class RunDriver:
                     elif tree_state(entry) != 'gone':
                         process_pending.add(handle)
                         continue
+                    if entry['bridge_run_id'] in self._unverified_settlements:
+                        continue  # UH-3: the update left this hold unverified; it stays unchanged, never retried here
                     try:
                         reply = self._settle_entry(entry)
                     except AccountError as error:
                         if error.reason_code == 'account_unavailable':
                             unreachable.add(handle)
+                        continue
+                    except HistoryError as error:
+                        if error.reason_code == 'history_conflict' and self._takeover_unverified(entry):
+                            self._unverified_settlements = self._unverified_settlements | {entry['bridge_run_id']}
                         continue
                     except Exception:
                         continue  # A local failure is not evidence that the account is unreachable.
@@ -2311,6 +2317,17 @@ class RunDriver:
         finally:
             if call is not None:
                 call.recovery_unreachable = None
+
+    _unverified_settlements = frozenset()
+
+    def _takeover_unverified(self, entry):
+        """UH-3 (decision 366): after a `history_conflict`, is this run's hold one the update takeover left unverified
+        (A1: unchanged, never released)? Any failure to ask is 'no': the settlement is tried again as before."""
+        try:
+            return self._settlement_step('takeover_unverified', entry['run_handle'], entry['attempt'],
+                                         entry['bridge_run_id']) is True
+        except Exception:
+            return False
 
     def _settle_intent(self, entry, claimed):
         """Sweep thread, B4s r1 HIGH 3 (decision 146): a stopped instance's process intent with no later entry.

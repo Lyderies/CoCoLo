@@ -2551,6 +2551,82 @@ class ChainedOutboxTests(unittest.TestCase):
                                                 run['payload'], runtime_digest=B)
             self.assertEqual(before, [tuple(r) for r in history._connection.execute('SELECT * FROM project_holds ORDER BY rowid')])
 
+    def unverified_case(self, *, corrupt):
+        """0.8.70 UH: the corrupt-original fixture above (or the intact one), adopted by B, with only the first run's
+        holds made due so the holds check would look at them."""
+        from codex_agents import learning_store
+        root = Path(tempfile.mkdtemp(dir=self.root))
+        shutil.copytree(self.source / 'history', root / 'history')
+        shutil.copytree(self.source / 'state', root / 'state')
+        run = self.data['runs'][0]
+        if corrupt:
+            with closing(sqlite3.connect(root / 'history/history.sqlite3')) as db:
+                db.execute("UPDATE project_holds SET request_digest=? WHERE kind='reservation' AND identity=?",
+                           ('f' * 64, run['binding']['claim_id']))
+                db.commit()
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(self.build_identity(B, '0.8.68'))
+        stack.enter_context(mock.patch.object(learning_store.LearningLedger, '_clock_ms', return_value=self.data['now']))
+        stack.enter_context(mock.patch.object(learning_store.LearningLedger, '_capacity_clock_reference',
+                                              return_value=self.data['clock_reference_ns']))
+        history, _ = self.owners(root, dict(version=self.data['version'], digest=self.data['runtime_digest']),
+                                 dict(version='0.8.68', digest=B), 3)
+        with history._transaction():
+            history._connection.execute(
+                "UPDATE project_holds SET due_at_ms=1000,next_check_ms=1000 WHERE state='releasing' AND "
+                "((kind='reservation' AND identity=?) OR (kind='lease' AND identity=?))",
+                (run['binding']['claim_id'], run['binding']['run_handle'] + ':' + str(run['binding']['attempt'])))
+            history._connection.execute(
+                "UPDATE project_holds SET due_at_ms=NULL,next_check_ms=9000000000000 WHERE NOT "
+                "((kind='reservation' AND identity=?) OR (kind='lease' AND identity=?))",
+                (run['binding']['claim_id'], run['binding']['run_handle'] + ':' + str(run['binding']['attempt'])))
+        return history, root, run
+
+    def holds_codes(self, root, now=61_001):
+        import time
+        from codex_agents import health_holds
+        from codex_agents.health_monitor import CheckContext
+        check = health_holds.HoldsCheck(None, sweep_interval_seconds=60)
+        with closing(health_holds.open_reader(root / 'history/history.sqlite3')) as reader:
+            found = check.check_project(reader, self.data['project'], CheckContext(time.monotonic() + 5, now, 60_000),
+                                        bytes.fromhex(self.data['key']))
+        return {f.reason_code: f for f in found}
+
+    @requirements('UH-1', 'UH-2')
+    def test_UH_a_hold_the_takeover_left_unverified_is_its_own_plain_finding_not_overdue(self):
+        history, root, run = self.unverified_case(corrupt=True)
+        self.assertEqual('releasing', history._connection.execute(
+            "SELECT state FROM project_holds WHERE kind='reservation' AND identity=?",
+            (run['binding']['claim_id'],)).fetchone()[0])
+        self.assertIsNone(history._connection.execute(
+            "SELECT 1 FROM takeover_obligations WHERE kind='reservation' AND identity=?",
+            (run['binding']['claim_id'],)).fetchone())
+        found = self.holds_codes(root)
+        self.assertNotIn('hold_overdue', found)
+        self.assertIn('hold_unverified_takeover', found)
+        text = found['hold_unverified_takeover'].text
+        for words in ('could not be checked', 'harmless', 'no run slot', 'will not clear by itself'):
+            self.assertIn(words, text)
+
+    @requirements('UH-5')
+    def test_UH_a_verified_takeover_hold_that_is_overdue_is_still_reported_overdue(self):
+        history, root, run = self.unverified_case(corrupt=False)
+        found = self.holds_codes(root)
+        self.assertIn('hold_overdue', found)
+        self.assertNotIn('hold_unverified_takeover', found)
+
+    @requirements('UH-3')
+    def test_UH_the_writer_says_which_runs_the_takeover_left_unverified(self):
+        corrupt, _, run = self.unverified_case(corrupt=True)
+        scope = run['scope']
+        self.assertIs(True, corrupt.takeover_unverified(scope['run_handle'], scope['attempt'], run['binding']['claim_id']))
+        other = self.data['runs'][1]
+        self.assertIs(False, corrupt.takeover_unverified(other['scope']['run_handle'], other['scope']['attempt'],
+                                                         other['binding']['claim_id']))
+        intact, _, run = self.unverified_case(corrupt=False)
+        self.assertIs(False, intact.takeover_unverified(scope['run_handle'], scope['attempt'], run['binding']['claim_id']))
+
     @requirements('RS-B-B4t-4', 'RS-B-B4t-5', 'RS-B-B4t-9', 'RS-B-B4t-10')
     def test_two_archived_outboxes_survive_A_B_C_with_one_effect_and_immutable_originals(self):
         from codex_agents import learning_store

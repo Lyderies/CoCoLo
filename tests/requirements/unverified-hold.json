@@ -1,0 +1,10 @@
+{
+ "authority": "docs/requirements/unverified-hold.md",
+ "requirements": [
+  {"id": "UH-1", "statement": "A project hold the update takeover left unverified (releasing, no takeover obligation row, run listed in an adopted takeover journal) is not reported as hold_overdue.", "source": "tests/requirements/unverified-hold.json#UH-1"},
+  {"id": "UH-2", "statement": "Such a hold is reported as its own plain finding, hold_unverified_takeover, once per project, saying it is harmless, takes no run slot, will not clear by itself and needs nothing.", "source": "tests/requirements/unverified-hold.json#UH-2"},
+  {"id": "UH-3", "statement": "The driver stops retrying settlement of a run whose hold the takeover left unverified: it is identified once, remembered, and never attempted again by that service, with no release or account change.", "source": "tests/requirements/unverified-hold.json#UH-3"},
+  {"id": "UH-4", "statement": "docs/troubleshooting.md Update hand-over explains in plain words the run an update left counted because its records could not be checked.", "source": "tests/requirements/unverified-hold.json#UH-4"},
+  {"id": "UH-5", "statement": "Verified takeover rows and genuinely overdue holds behave exactly as before.", "source": "tests/requirements/unverified-hold.json#UH-5"}
+ ]
+}

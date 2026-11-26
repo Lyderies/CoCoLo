@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
+from test_framework import requirements
 from tests import test_result_leases as leases
 from tests.test_project_history import PROJECT_A, PROJECT_B
 from codex_agents import health_holds as holds
@@ -543,6 +544,15 @@ HoldsTests.test_durable_service_status_reaches_monitor_and_clears_on_recovery.__
 
 HoldsTests.test_durable_service_fault_survives_unreadable_history.__requirements__ = ('S8-HM3-3',)
 HoldsTests.test_report_io_failure_still_attempts_service_close.__requirements__ = ('S8-HM3-3',)
+
+class UnverifiedDocsTests(unittest.TestCase):
+    @requirements('UH-4', why_not_scenario='A text check of the shipped troubleshooting page; no service or store is involved.')
+    def test_UH_troubleshooting_explains_the_unverified_update_hold(self):
+        text = (Path(__file__).parents[3] / 'docs/troubleshooting.md').read_text()
+        update = text.split('## Update hand-over', 1)[1].split('\n## ', 1)[0]
+        for words in ('hold_unverified_takeover', 'could\nnot be checked', 'Nothing needs doing', 'hold_overdue'):
+            self.assertIn(words, update)
+
 
 if __name__ == '__main__':
     unittest.main()

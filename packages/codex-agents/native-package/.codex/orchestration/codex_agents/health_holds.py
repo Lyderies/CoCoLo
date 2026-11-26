@@ -23,9 +23,12 @@ import sqlite3
 import time
 
 from .health_monitor import Check, Finding
+from .project_takeover import unverified_hold_condition
 
 READ_PAGE_ROWS = 64
 SQL_PROGRESS_OPS = 1000
+UNVERIFIED_TEXT = ('A run ended by the last update is still counted because its records could not be checked. It is '
+                   'harmless, takes no run slot, and will not clear by itself. Nothing needs doing.')
 _ROOT = re.compile(r'\bFROM ([a-z_]+)(?: ([a-z])\b)?(?: INDEXED BY [a-z_]+)?')
 
 
@@ -225,11 +228,17 @@ class HoldsCheck(Check):
             "SELECT 1 FROM project_holds h INDEXED BY project_holds_due WHERE h.state<>'released' "
             "AND h.state IN ('held','releasing') AND h.project_id=? "
             'AND h.due_at_ms IS NOT NULL AND h.due_at_ms<? AND h.next_check_ms<? '
+            'AND NOT (' + unverified_hold_condition('h') + ') '
             'ORDER BY h.state,h.next_check_ms LIMIT 1',
             (project_id, now - self.interval_ms, now - self.interval_ms)).fetchone()
         if overdue:
             findings.append(_finding(project_id, 'hold_overdue',
                                      'A held resource is more than one sweep late for its next check; the supervisor must act.'))
+        unverified = connection.execute(
+            'SELECT 1 FROM project_holds h WHERE h.project_id=? AND ' + unverified_hold_condition('h') + ' LIMIT 1',
+            (project_id,)).fetchone()
+        if unverified:
+            findings.append(_finding(project_id, 'hold_unverified_takeover', UNVERIFIED_TEXT))
         return findings
 
     def check_account(self, connection, context, project_id=None):

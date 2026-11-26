@@ -108,6 +108,29 @@ def adopt_project(history, intent, *, migration=None):
                (intent['takeover_id'],))
 
 
+# 0.8.70 (UH, decision 366): a hold the takeover left unverified is a `releasing` lease/reservation hold with no
+# takeover_obligations row that belongs to a run of an adopted takeover journal. Adoption skipped it
+# (`refused_unverifiable`) and nothing may release it (A1); no extra record is kept, this is read from the two that exist.
+UNVERIFIED_HOLD_SQL = (
+    "{h}.state='releasing' AND {h}.kind IN ('lease','reservation') "
+    "AND NOT EXISTS (SELECT 1 FROM takeover_obligations o WHERE o.kind={h}.kind AND o.identity={h}.identity) "
+    "AND EXISTS (SELECT 1 FROM takeover_runs r JOIN takeover_record t ON t.takeover_id=r.takeover_id "
+    "WHERE t.state='adopted' AND (({h}.kind='reservation' AND {h}.identity=r.bridge_run_id) "
+    "OR ({h}.kind='lease' AND {h}.identity=r.run_handle||':'||r.attempt)))")
+
+
+def unverified_hold_condition(alias='h'):
+    return UNVERIFIED_HOLD_SQL.format(h=alias)
+
+
+def takeover_left_unverified(db, project_id, run_handle, attempt, bridge_run_id):
+    """Did the takeover leave a hold of this run unverified? Reads only."""
+    rows = db.execute("SELECT 1 FROM project_holds h WHERE h.project_id=? AND " + unverified_hold_condition('h')
+                      + " AND ((h.kind='reservation' AND h.identity=?) OR (h.kind='lease' AND h.identity=?)) LIMIT 1",
+                      (project_id, bridge_run_id, f'{run_handle}:{attempt}')).fetchone()
+    return rows is not None
+
+
 def successor_settlement(history, hold, request_id, digest, *, payload=None):
     """An offered current request may close the immutable original outbox only."""
     obligation = history._connection.execute('SELECT * FROM takeover_obligations WHERE kind=? AND identity=?',

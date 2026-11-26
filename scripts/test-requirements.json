@@ -3789,6 +3789,43 @@
   "source": "tests/requirements/u3.json#U3",
   "statement": "Budgeted account and project reads have indexed or otherwise bounded work, unchanged answers and production-budget completion with a fixed live set at 1k and 100k historical rows."
  },
+ "UH-1": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_a_hold_the_takeover_left_unverified_is_its_own_plain_finding_not_overdue"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-1",
+  "statement": "A project hold the update takeover left unverified (releasing, no takeover obligation row, run listed in an adopted takeover journal) is not reported as hold_overdue."
+ },
+ "UH-2": {
+  "checks": [
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_a_hold_the_takeover_left_unverified_is_its_own_plain_finding_not_overdue"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-2",
+  "statement": "Such a hold is reported as its own plain finding, hold_unverified_takeover, once per project, saying it is harmless, takes no run slot, will not clear by itself and needs nothing."
+ },
+ "UH-3": {
+  "checks": [
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_UH_a_run_whose_hold_the_takeover_left_unverified_is_not_settled_again_by_this_service",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_the_writer_says_which_runs_the_takeover_left_unverified"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-3",
+  "statement": "The driver stops retrying settlement of a run whose hold the takeover left unverified: it is identified once, remembered, and never attempted again by that service, with no release or account change."
+ },
+ "UH-4": {
+  "checks": [
+   "codex:tests.test_health_holds.UnverifiedDocsTests.test_UH_troubleshooting_explains_the_unverified_update_hold"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-4",
+  "statement": "docs/troubleshooting.md Update hand-over explains in plain words the run an update left counted because its records could not be checked."
+ },
+ "UH-5": {
+  "checks": [
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_UH_a_conflict_that_is_not_an_unverified_takeover_hold_is_still_retried",
+   "codex:tests.test_b4t_takeover.ChainedOutboxTests.test_UH_a_verified_takeover_hold_that_is_overdue_is_still_reported_overdue"
+  ],
+  "source": "tests/requirements/unverified-hold.json#UH-5",
+  "statement": "Verified takeover rows and genuinely overdue holds behave exactly as before."
+ },
  "USAGE-RECHECK-1": {
   "checks": [
    "codex:tests.test_usage_recheck.RecheckDueTests.test_a_far_reset_exhaustion_is_due_for_a_recheck_after_the_interval",
