@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import threading
 
 from .contracts import ContractError
 from .history_contracts import HistoryError, MAX_SEQUENCE, _DIGEST, _ID, matches, valid_integer
@@ -109,6 +110,33 @@ def _manifest(value, project_id):
     return parse_bounded_json(canonical_json(value))
 
 
+# One staged chunk is parsed, validated and canonically compared several times (the source read, the stage,
+# the membership recheck and the stored-material recheck). Parsing and validating bytes is a pure function of
+# the bytes, so the last few chunks' results are kept and reused. The callers only read the checked record.
+_CHECKED_KEEP = 256
+_checked_by_content = {}
+_checked_lock = threading.Lock()
+
+
+def _checked_content(content):
+    with _checked_lock:
+        checked = _checked_by_content.get(content)
+    if checked is not None:
+        return checked
+    record = parse_bounded_json(content)
+    if (type(record) is not dict or record.get("record_type") not in _RECORD_TYPES
+            or type(record.get("schema_version")) is not int):
+        raise HistoryError("history_invalid_input")
+    checked = validate_learning_record(record, stored=True)
+    if canonical_json(checked) != content:
+        raise HistoryError("history_invalid_input")
+    with _checked_lock:
+        if len(_checked_by_content) >= _CHECKED_KEEP:
+            del _checked_by_content[next(iter(_checked_by_content))]
+        _checked_by_content[content] = checked
+    return checked
+
+
 def _prepare_chunk(records, attestations):
     if (type(records) not in (list, tuple) or type(attestations) not in (list, tuple)
             or not 1 <= len(records) + len(attestations) <= MAX_CHUNK_ENTRIES):
@@ -129,13 +157,8 @@ def _prepare_chunk(records, attestations):
             size += len(entry["content"])
             if size > MAX_CHUNK_BYTES:
                 raise HistoryError("history_learning_capacity")
-            record = parse_bounded_json(entry["content"])
-            if (type(record) is not dict or record.get("record_type") not in _RECORD_TYPES
-                    or type(record.get("schema_version")) is not int):
-                raise HistoryError("history_invalid_input")
-            checked = validate_learning_record(record, stored=True)
-            if (canonical_json(checked) != entry["content"]
-                    or ("observed_at_ms" in checked and checked["observed_at_ms"] != entry["observed_at_ms"])):
+            checked = _checked_content(entry["content"])
+            if "observed_at_ms" in checked and checked["observed_at_ms"] != entry["observed_at_ms"]:
                 raise HistoryError("history_invalid_input")
             previous = entry["source_sequence"]
             captured = dict(entry)
