@@ -226,9 +226,15 @@ class HoldsTests(unittest.TestCase):
         current = json.loads(path.read_text(encoding='utf-8'))
         # S14a (335) deliberately re-audited these two sites (checks 5 -> 6, new ends text); every other value is unchanged.
         updated_by_other_steps = {'account_service.py::_capture_admission_rows_locked', 'admission_input_decode.py::_preflight'}
+        # S5 B4t (146955fc, accepted) replaced test_B7_2_ended_by_update_unrecorded_... with the test below (assertion-audit.md);
+        # the entry's other bytes stay pinned exactly, only its `test` follows the rename.
+        renamed_by_other_steps = {'project_holds_report.py::_ended_by_update':
+                                  'test_B4t_runtime_change_creates_no_legacy_update_close_count'}
         for site, entry in original['sites'].items():
             self.assertIn(site, current['sites'], site)
-            if site not in updated_by_other_steps:
+            if site in renamed_by_other_steps:
+                self.assertEqual({**entry, 'test': renamed_by_other_steps[site]}, current['sites'][site], site)
+            elif site not in updated_by_other_steps:
                 self.assertEqual(entry, current['sites'][site], site)
 
     def test_missing_hold_is_reported(self):
