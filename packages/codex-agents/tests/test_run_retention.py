@@ -405,6 +405,12 @@ class RunRetentionTests(unittest.TestCase):
         self.addCleanup(plain.tearDown)
         ledger, db = plain.ledger, plain.ledger._connection
         names = ', '.join("'%s'" % n for n in run_retention.RETENTION_INDEX_NAMES)
+        # Decision 352 (S14b-6): a fresh schema-18 ledger is created with the five indexes. The rest of this test
+        # is for a ledger that lacks them (one made before the step): drop them, as that ledger would be.
+        self.assertEqual(5, db.execute(f"SELECT count(*) FROM sqlite_master WHERE name IN ({names})").fetchone()[0])
+        for name in run_retention.RETENTION_INDEX_NAMES:
+            db.execute(f'DROP INDEX {name}')
+        run_retention.probe(ledger)
         self.assertEqual(0, db.execute(f"SELECT count(*) FROM sqlite_master WHERE name IN ({names})").fetchone()[0])
         store_product_row(ledger, plain.project_a_id, identity('old'))
         statements = []

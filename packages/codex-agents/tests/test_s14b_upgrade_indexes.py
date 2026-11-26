@@ -28,7 +28,10 @@ class UpgradeCreatesRetentionIndexesTests(unittest.TestCase):
         self.database = LearningState(self.state_root, create=False).database
         ledger = LearningLedger(LearningState(self.state_root, create=False))
         store_product_row(ledger, self.cli.project_id, identity('old'))
-        self.assertEqual(0, index_count(self.database))  # a plain open made none
+        self.assertEqual(5, index_count(self.database))  # created with the fresh schema-18 ledger
+        for name in run_retention.RETENTION_INDEX_NAMES:  # then made like a ledger that lacks them (0.8.67 had none)
+            ledger._connection.execute(f'DROP INDEX {name}')
+        self.assertEqual(0, index_count(self.database))
         ledger.close()
 
     def downgrade(self):
@@ -103,6 +106,26 @@ class UpgradeCreatesRetentionIndexesTests(unittest.TestCase):
                         '--state-root', str(self.state_root), '--project-root', str(self.cli.project)],
                        text=True, capture_output=True, env=self.cli._environment(), check=False)
         self.assertEqual((17, 0), (self.user_version(), index_count(self.database)))
+
+    @requirements('S14b-6')
+    def test_a_fresh_ledger_is_created_with_the_five_indexes_and_retention_is_ready(self):
+        import tempfile
+        from pathlib import Path
+        from tests.support import TEMP_ROOT
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as folder:
+            state = LearningState(Path(folder) / 'fresh')
+            ledger = LearningLedger(state)
+            project = ledger.register_project(Path(folder))
+            store_product_row(ledger, project, identity('old'))
+            ledger.close()
+            self.assertEqual(5, index_count(state.database))  # schema 18 includes them from its creation
+            reopened = LearningLedger(state)
+            try:
+                self.assertTrue(reopened._retention_ready)
+                self.assertLess(reopened._run_retention_due_ms, run_retention.NEVER_DUE)
+                self.assertEqual(1, reopened.sweep_run_retention(now_ms=START + 91 * DAY))
+            finally:
+                reopened.close()
 
     @requirements('S14b-6')
     def test_learning_migrate_that_performs_the_schema_step_creates_the_indexes(self):

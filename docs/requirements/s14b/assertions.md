@@ -161,3 +161,18 @@ command asks them); op sets in `service_host.py` and `test_b2_service_outcome` c
 - `test_project_start...test_E2a_1_a_released_0_8_59_ledger_...`: old `layout(fresh) == layout(upgraded)` -> new: the
   upgraded layout contains the five retention indexes and, without them, equals the fresh layout (a consented
   upgrade creates the indexes, a fresh plain open does not; every other object is still compared).
+
+### Revert (primary, decision 352 refined)
+
+The `test_project_start` E2a-1 edit above is REVERTED: the strict original `layout(fresh) == layout(upgraded)` stands.
+It now holds because a fresh create at schema 18 includes the five retention indexes in its creation transaction, as
+the 17 -> 18 step does. The takeover test's "5 before adoption" is unchanged (still right: setUp's consented open performed the step).
+
+### Changed under the refined rule (old -> new)
+
+- `test_run_retention...test_plain_open_makes_no_index_and_the_consented_step_enables_retention_with_a_silent_idle`
+  (S14b-3): old "a plain (fresh) ledger has 0 retention indexes" -> new "a fresh schema-18 ledger has 5; the rest of the
+  test runs unchanged on a ledger made to lack them (indexes dropped, `probe` refreshed)": still proves a plain open
+  creates none, an idle pass issues no statement, and `create_retention_indexes` enables retention. Reason: decision
+  352 refined; the old fresh-has-none premise is exactly the "fresh install never retains" gap.
+- `test_s14b_upgrade_indexes` setUp: now drops the five indexes of its fresh fixture ledger before each test (was: asserted a plain open made none).

@@ -122,3 +122,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Per-path index calls replaced by one rule inside `LearningLedger._migrate`'s 17 -> 18 transaction (details in docs/requirements/s14b/STATUS.md). Also: registration `--upgrade-ledger` now allows the step on a schema-17 ledger (MED 1); `learning-migrate-project --status` never performs it (MED 4). Four tests red on 17a70460, green now. Two existing tests changed (old -> new in docs/requirements/s14b/assertions.md): the takeover adoption test and test_project_start E2a-1 layout comparison. Modules: part-2 list + test_learning_migration + test_learning_cli: 39 units, 589 tests, ~130 s; one failure (E2a-1 layout, fixed as above, rerun with test_state_location and the new module: 13 units, 67 tests, 46.7 s, 0 failed). No VERSION bump.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### S14b-6 refinement (decision 352 refined)
+The five indexes are part of the schema-18 layout: `_migrate` now adds them on every 17 -> 18 step including a fresh create (same transaction as the version write); a plain open of an existing 18 ledger creates none. New test (red on ed6aae6b: 5 != 0): fresh ledger -> 5 indexes, retention ready and due set, sweep removes the old row. The E2a-1 edit is reverted to the strict original (it passes again). `test_plain_open_makes_no_index...` (S14b-3) and the new module's setUp changed old -> new, recorded in docs/requirements/s14b/assertions.md; the takeover "5 before adoption" still reads right. Full named set: 39 units, 590 tests, 130.4 s, 0 failed, metadata_errors empty. No VERSION bump.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
