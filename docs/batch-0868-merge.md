@@ -275,3 +275,14 @@ Both registrations are done (IP-B 0.8.68), tests first (red on 506f6d1a, green a
   prepare-* folders, and finds other runs' leftover folders. Classification: ENVIRONMENTAL / test isolation gap (the test
   does not point bridge.WORKSPACE_PARENT at a private directory). Not fixed here; decision needed (isolate the container in
   the test, or filter the view to the holds check).
+
+## Full run 3 (after memholds merge, test edit, digest 28435b17…; base ce81bd96)
+- Exit 1; 549 units; elapsed 617.2 s; preflight 8.0 s vs job seconds 6050.9; metadata_errors: []; requirement_failures: S8-HM3-3
+  (RS-B-B7-5 now passes). Run 2's other failures are gone (b7b flake did not recur).
+- Failure: tests.test_project_service_startup, the 2 HM3 tests, `'no findings' not found in '... 17 finding(s)'`. Alone through
+  the runner: same 2 failures. Base ce81bd96: passes (13 tests), but base has no S11 workspaces wiring. Classification:
+  ENVIRONMENTAL / test isolation gap (S11 workspaces check scans the shared per-user scratch container and reports other runs'
+  leftover prepare-* folders as owner_unknown); see the final-pass section above. Not a holds-check regression.
+- Budget failures: test_project_start 190.9 s (alone via runner 159.1 s, under its 183.4 debt ceiling) -> load flake;
+  test_run_retention_scale 72.0 s (alone: within 60 s, no over-budget notice) -> load flake.
+- Retire notices: test_b2_service_outcome_paths, test_container_stop, test_result_lifetime, test_session_guard now within budget.
