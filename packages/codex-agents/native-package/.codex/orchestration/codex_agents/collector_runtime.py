@@ -91,13 +91,7 @@ def validate_collector_runtime(cli_path: Path) -> dict[str, str | int]:
             "runtime_version": version,
             "runtime_digest": digest,
         }
-    except (
-        ContractError,
-        OSError,
-        UnicodeError,
-        json.JSONDecodeError,
-        IndexError,
-    ) as exc:
+    except (ContractError, OSError, UnicodeError, json.JSONDecodeError, IndexError, RecursionError) as exc:
         raise CollectorAuthorizationError(
             "installed package integrity validation failed",
             code="runtime_integrity_invalid",
@@ -134,7 +128,7 @@ def _collector_runtime_authorization(
         if len(raw) > 1024:
             raise StateError("collector runtime authorization is invalid")
         value = json.loads(raw)
-    except (OSError, StateError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, StateError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise CollectorAuthorizationError(
             "collector runtime authorization is invalid",
             code="runtime_authorization_invalid",
@@ -208,6 +202,28 @@ CLIENT_HEALTH_CODES = {
 }
 
 
+# O0c P11: writes stay within CLIENT_HEALTH_WRITE_BYTES by dropping the projects whose newest counter is oldest;
+# reads accept up to CLIENT_HEALTH_READ_BYTES, so a file an older build wrote past the bound is read and repaired by
+# the next write instead of failing status, writes and clears for good.
+CLIENT_HEALTH_WRITE_BYTES = 65_536
+CLIENT_HEALTH_READ_BYTES = 1_048_576
+
+
+def _client_health_payload(data: dict[str, Any], keep: str | None = None) -> bytes:
+    """The file's bytes, within CLIENT_HEALTH_WRITE_BYTES; `keep` (the project just written) is dropped last."""
+    projects = data["projects"]
+    payload = canonical_json(data) + b"\n"
+    while len(payload) > CLIENT_HEALTH_WRITE_BYTES and projects:
+        excess = len(payload) - CLIENT_HEALTH_WRITE_BYTES
+        for digest in sorted(projects, key=lambda d: (d == keep, max(
+                (c["updated_at_ms"] for c in projects[d].values()), default=0))):
+            if excess <= 0:
+                break
+            excess -= len(canonical_json({digest: projects.pop(digest)})) - 1  # its entry and comma
+        payload = canonical_json(data) + b"\n"
+    return payload
+
+
 def _client_health_data(state: CollectorPaths) -> dict[str, Any]:
     if not state.client_health.exists():
         return {"schema_version": 1, "projects": {}}
@@ -216,11 +232,11 @@ def _client_health_data(state: CollectorPaths) -> dict[str, Any]:
     _check_owner_mode(state.client_health, directory=False)
     try:
         with state.client_health.open('rb') as stream:
-            raw = stream.read(65_537)
-        if len(raw) > 65_536:
+            raw = stream.read(CLIENT_HEALTH_READ_BYTES + 1)
+        if len(raw) > CLIENT_HEALTH_READ_BYTES:
             raise StateError("client health state is invalid")
         value = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise StateError("client health state is invalid") from exc
     if (
         not isinstance(value, dict)
@@ -281,8 +297,6 @@ def client_health_increment(
         fcntl.flock(descriptor, fcntl.LOCK_EX)
         data = _client_health_data(state)
         projects = data["projects"]
-        if project_digest not in projects and len(projects) >= 4096:
-            return
         project = projects.setdefault(project_digest, {})
         current = project.get(code, {"count": 0, "updated_at_ms": 0})
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
@@ -296,7 +310,7 @@ def client_health_increment(
                 else "unknown_rejection"
             )
         temporary = state.root / f".collector-client-health.{secrets.token_hex(8)}.tmp"
-        payload = canonical_json(data) + b"\n"
+        payload = _client_health_payload(data, keep=project_digest)
         file_descriptor = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -350,7 +364,7 @@ def client_health_clear(state: CollectorPaths, project_root: Path) -> None:
         )
         try:
             with os.fdopen(descriptor_out, "wb") as handle:
-                handle.write(canonical_json(data) + b"\n")
+                handle.write(_client_health_payload(data))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, state.client_health)

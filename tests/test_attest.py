@@ -362,7 +362,10 @@ class AttestHarness(unittest.TestCase):
 
         def fake_input(prompt: str = "") -> str:
             prompts.append(prompt)
-            return answers.pop(0)
+            answer = answers.pop(0)
+            if answer is EOFError:  # Ctrl-D at this prompt
+                raise EOFError
+            return answer
 
         with mock.patch.object(attest, "_is_terminal", return_value=terminal), \
                 mock.patch.object(attest.subprocess, "run", self.world.run), \
@@ -657,6 +660,16 @@ class AttestTests(AttestHarness):
             with self.assertRaises(attest.AttestError) as stopped:
                 attest.run_cli(self.target, ["provider-observe"], None)
         self.assertNotIn("\x1b", str(stopped.exception))
+
+    def test_A1_end_of_input_at_a_prompt_stops_plainly(self) -> None:
+        (self.state / "owner-allowed-signers").write_text("codex-agents-owner ssh-ed25519 AAAAkey\n")
+        self.set_providers(codex=True)
+        for change in (False, True):
+            with self.subTest(change_passphrase=change):
+                self.assertEqual(self.run_main([EOFError], change=change), 1)
+                self.assertIn("Stopped: no answer was given (end of input).", self.output)
+                self.assertNotIn("Traceback", self.output)
+                self.assertFalse(any("-Y" in c for c in self.world.calls))
 
     def test_a_non_path_entry_is_refused_and_never_echoed(self) -> None:
         (self.state / "owner-allowed-signers").write_text("codex-agents-owner ssh-ed25519 AAAAkey\n")

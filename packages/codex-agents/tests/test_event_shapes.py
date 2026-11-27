@@ -121,7 +121,8 @@ class EventShapeTests(unittest.TestCase):
                          {key: value for key, value in lines[0].items() if key != "ms"})
         self.assertEqual(["start"] + ["frame"] * len(CLAUDE_FRAMES) + ["end"], [line["kind"] for line in lines])
         frames = lines[1:-1]
-        self.assertEqual(("system", "init", "2.1.311", 3), (
+        # Corrected for O10 VF (requirement): the init frame also lists the client's output tool.
+        self.assertEqual(("system", "init", "2.1.311", 4), (
             frames[0]["type"], frames[0]["subtype"], frames[0]["client_version"], frames[0]["tools_count"]))
         thinking = frames[3]
         self.assertEqual(("uuid", False, "thinking_delta", len(CANARY).bit_length(), False), (
@@ -179,15 +180,33 @@ class EventShapeTests(unittest.TestCase):
         event_shapes.finished(made, {"abort": None})  # Written once.
         self.assertEqual(1, len(self.runs()))
 
-    def test_recording_stops_when_the_folder_is_full(self):
+    def test_P12_a_full_folder_drops_its_oldest_records_and_keeps_recording(self):
+        """O0c P12 (requirement changed from "recording stops when the folder is full", a lifetime cap: nothing
+        ever deleted the records): the oldest records COCOLO wrote go first, so the newest run is recorded."""
         self.ask()
-        self.record("claude", CLAUDE_FRAMES)
+        with mock.patch.object(event_shapes, "MAX_FILES", 3):
+            for index in range(5):
+                with mock.patch.object(event_shapes.time, "time_ns", return_value=1_000 + index):
+                    self.assertIsNotNone(self.record("claude", CLAUDE_FRAMES))
+        names = [path.name for path in self.runs()]
+        self.assertLessEqual(len(names), 3)
+        self.assertTrue(any(name.startswith("claude-1004-") for name in names))
+        self.assertFalse(any(name.startswith(("claude-1000-", "claude-1001-")) for name in names))
+        size = sum(path.stat().st_size for path in self.runs())
+        with mock.patch.object(event_shapes, "MAX_FOLDER_BYTES", size + 1):
+            with mock.patch.object(event_shapes.time, "time_ns", return_value=2_000):
+                self.assertIsNotNone(self.record("codex", CODEX_FRAMES, model="gpt-6-astra"))
+        self.assertTrue(any(path.name.startswith("codex-2000-") for path in self.runs()))
+
+    def test_P12_files_cocolo_did_not_write_are_never_removed(self):
+        """O0c P12: only COCOLO's own records rotate; a folder filled by anything else stops recording."""
+        self.ask()
+        folder = self.diagnostics / event_shapes.FOLDER
+        folder.mkdir(mode=0o700)
+        (folder / "owner-notes.txt").write_text("keep")
         with mock.patch.object(event_shapes, "MAX_FILES", 1):
             self.assertIsNone(self.record("claude", CLAUDE_FRAMES))
-        with mock.patch.object(event_shapes, "MAX_FOLDER_BYTES", 10):
-            self.assertIsNone(self.record("codex", CODEX_FRAMES, model="gpt-6-astra"))
-        self.assertEqual(1, len(self.runs()))
-        self.assertIsNotNone(self.record("codex", CODEX_FRAMES, model="gpt-6-astra"))
+        self.assertEqual(["owner-notes.txt"], [path.name for path in self.runs()])
 
     def test_the_bridge_records_every_frame_before_its_fences(self):
         self.ask()

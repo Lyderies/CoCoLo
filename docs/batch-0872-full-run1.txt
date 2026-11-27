@@ -1,0 +1,330 @@
+[60s] 26/572 units done, 0 failed; running: codex:tests.test_learning_cli#2 38s, codex:tests.test_learning_cli#1 33s, root:test_install_claude_upgrade#2 33s, root:test_install_claude_upgrade#0 30s, root:test_setup_sh#3 24s, codex:tests.test_project_start#4 22s, root:test_setup_straight#3 21s, root:test_setup_straight#2 20s, root:test_setup_straight#1 17s, root:test_setup_straight#0 17s, root:test_setup_update#0 13s, root:test_install#2 7s, codex:tests.test_write_merge#1 6s, codex:tests.test_providers#0 4s, root:test_setup_sh#2 3s, codex:tests.test_providers#1 2s
+[120s] 75/572 units done, 0 failed; running: codex:tests.test_write_merge#4 40s, root:test_install#1 26s, root:test_install#0 24s, codex:tests.test_project_driver#27 20s, codex:tests.test_host_commands#2 14s, codex:tests.test_host_commands#1 14s, codex:tests.test_s14e_custody#0 13s, codex:tests.test_s14b_upgrade_indexes 11s, codex:tests.test_e1a_evidence 10s, codex:tests.test_b4t_native_p69#0 9s, codex:tests.test_b4t_native 9s, codex:tests.test_project_host_open 7s, codex:tests.test_admission_history_growth 6s, codex:tests.test_project_start#8 6s, codex:tests.test_project_start#7 3s, codex:tests.test_container_stop 1s
+[180s] 124/572 units done, 0 failed; running: codex:tests.test_project_driver#4 22s, root:test_setup_update#4 16s, root:test_setup_update#3 15s, root:test_setup_update#2 15s, root:test_setup_update#1 14s, codex:tests.test_project_operational_qa 14s, codex:tests.test_account_claim_jobs#0 13s, codex:tests.test_account_claim_jobs#1 9s, codex:tests.test_s44a_usage_install 8s, codex:tests.test_account_settlement_recovery#1 7s, codex:tests.test_account_settlement_recovery#0 6s, codex:tests.test_cli_observation_runtime#0 6s, codex:tests.test_cli_billing_runtime 6s, codex:tests.test_lost_run_settlement#5 5s, codex:tests.test_lost_run_settlement#4 4s, codex:tests.test_cleanup_receipt_lifetime 3s
+[240s] 178/572 units done, 0 failed; running: codex:tests.test_container_runtime#1 20s, codex:tests.test_container_runtime#0 19s, codex:tests.test_cli_open_client_runtime#0 14s, codex:tests.test_project_qa_commit#1 13s, codex:tests.test_run_provenance 9s, codex:tests.test_claim_denial_recovery#1 8s, codex:tests.test_billing_probe_worker#1 7s, root:test_e2e_process_cleanup#1 6s, codex:tests.test_container_launch_journal 5s, codex:tests.test_billing_probe_worker#0 4s, codex:tests.test_ledger_lock_limits#1 3s, codex:tests.test_account_settlement_lifecycle#1 3s, codex:tests.test_account_settlement_lifecycle#0 1s, codex:tests.test_learning_migration#1 1s, codex:tests.test_b4t_native_p68 1s, codex:tests.test_learning_migration#0 0s
+[300s] 300/572 units done, 0 failed; running: root:test_test_framework_guards 11s, codex:tests.test_recovery_line 5s, codex:tests.test_publication_replay_driver 5s, codex:tests.test_open_withdrawal_successor 5s, codex:tests.test_open_withdrawal 5s
+[360s] 312/572 units done, 0 failed; running: codex:tests.test_merge_library_owners 3s
+[420s] 316/572 units done, 0 failed; running: codex:tests.test_merge_library_kills 23s
+[480s] 320/572 units done, 0 failed; running: codex:tests.test_merge_library_contract 25s
+[540s] 334/572 units done, 0 failed; running: codex:tests.test_e2a_wake_wire 6s, codex:tests.test_e2a_launch_record 6s, codex:tests.test_deadlines_retention 6s, codex:tests.test_crashed_settlement_socket 6s, codex:tests.test_core_api_talk_control 6s, codex:tests.test_core_api_round6 6s, codex:tests.test_core_api_round5 6s, codex:tests.test_core_api_round4 6s, codex:tests.test_core_api_round3 5s, codex:tests.test_core_api_reads 5s, codex:tests.test_core_api_hardening 5s, codex:tests.test_collector_first_response 4s, codex:tests.test_billing_rejudge 3s, codex:tests.test_billing_gate 1s, codex:tests.test_batch4_crashed_replay 0s, codex:tests.test_batch2_b4s_integration 0s
+[600s] 570/572 units done, 0 failed; running: codex:tests.test_billing_gate 61s, codex:tests.test_b2_service_outcome_paths 58s
+BUDGET DEBT: codex:tests.test_b2_service_outcome_paths ceiling=69.160s measured seconds=59.73300695908256
+BUDGET DEBT: codex:tests.test_billing_gate ceiling=78.580s measured seconds=68.40332462498918
+BUDGET DEBT: codex:tests.test_bridge ceiling=368.250s measured seconds=274.5425619999878
+BUDGET DEBT: codex:tests.test_container_stop ceiling=72.230s measured seconds=58.692689209012315
+BUDGET DEBT: codex:tests.test_host_commands ceiling=119.560s measured seconds=100.86213766690344
+BUDGET DEBT: codex:tests.test_learning_cli ceiling=112.560s measured seconds=95.0513708749786
+BUDGET DEBT: codex:tests.test_lost_run_settlement ceiling=119.750s measured seconds=92.93850487400778
+BUDGET DEBT: codex:tests.test_project_driver ceiling=520.370s measured seconds=397.01573966571596
+BUDGET DEBT: codex:tests.test_project_start ceiling=183.400s measured seconds=146.47022641578224
+BUDGET DEBT: codex:tests.test_session_guard ceiling=7.230s measured seconds=3.9387520839227363
+BUDGET DEBT: codex:tests.test_trial_run_driver_bugs ceiling=103.340s measured seconds=72.35804395901505
+BUDGET DEBT: codex:tests.test_write_merge ceiling=247.710s measured seconds=173.4285885412246
+BUDGET DEBT: root:test_install ceiling=113.540s measured seconds=85.01187358412426
+BUDGET DEBT: root:test_install_claude_upgrade ceiling=135.450s measured seconds=100.85327249998227
+BUDGET DEBT: root:test_setup_sh ceiling=203.640s measured seconds=155.3061595839681
+BUDGET DEBT: root:test_setup_straight ceiling=293.120s measured seconds=144.69146295706742
+BUDGET DEBT: root:test_setup_update ceiling=275.000s measured seconds=233.32293125009164
+BUDGET DEBT: root:test_setup_wizard_direct ceiling=282.080s measured seconds=219.73739758203737
+RETIRE BUDGET DEBT: codex:tests.test_b2_service_outcome_paths is now within its layer budget
+RETIRE BUDGET DEBT: codex:tests.test_container_stop is now within its layer budget
+RETIRE BUDGET DEBT: codex:tests.test_session_guard is now within its layer budget
+RUN RECORD: docs/batch-0872-full-run1-timings.json.run.json
+{
+ "elapsed_seconds": 607.4,
+ "jobs": 16,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 5934.553,
+ "over_budget": [
+  {
+   "module": "codex:tests.test_billing_gate",
+   "seconds": 68.40332462498918,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 1
+  },
+  {
+   "module": "codex:tests.test_bridge",
+   "seconds": 274.5425619999878,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 9
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "seconds": 100.86213766690344,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 3
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "seconds": 95.0513708749786,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 3
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "seconds": 92.93850487400778,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 6
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "seconds": 397.01573966571596,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 29
+  },
+  {
+   "module": "codex:tests.test_project_start",
+   "seconds": 146.47022641578224,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 11
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "seconds": 72.35804395901505,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 2
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "seconds": 173.4285885412246,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 10
+  },
+  {
+   "module": "root:test_install",
+   "seconds": 85.01187358412426,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "e2e",
+   "fragments": 3
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "seconds": 100.85327249998227,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "e2e",
+   "fragments": 3
+  },
+  {
+   "module": "root:test_setup_sh",
+   "seconds": 155.3061595839681,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "e2e",
+   "fragments": 5
+  },
+  {
+   "module": "root:test_setup_straight",
+   "seconds": 144.69146295706742,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 5
+  },
+  {
+   "module": "root:test_setup_update",
+   "seconds": 233.32293125009164,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 5
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "seconds": 219.73739758203737,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 8
+  }
+ ],
+ "budget_failures": [],
+ "budget_warnings": [
+  {
+   "module": "codex:tests.test_b2_service_outcome_paths",
+   "ceiling": 69.16,
+   "seconds": 59.73300695908256,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_billing_gate",
+   "ceiling": 78.58,
+   "seconds": 68.40332462498918,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_bridge",
+   "ceiling": 368.25,
+   "seconds": 274.5425619999878,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_container_stop",
+   "ceiling": 72.23,
+   "seconds": 58.692689209012315,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "ceiling": 119.56,
+   "seconds": 100.86213766690344,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "ceiling": 112.56,
+   "seconds": 95.0513708749786,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "ceiling": 119.75,
+   "seconds": 92.93850487400778,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "ceiling": 520.37,
+   "seconds": 397.01573966571596,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_project_start",
+   "ceiling": 183.4,
+   "seconds": 146.47022641578224,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_session_guard",
+   "ceiling": 7.23,
+   "seconds": 3.9387520839227363,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "ceiling": 103.34,
+   "seconds": 72.35804395901505,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "ceiling": 247.71,
+   "seconds": 173.4285885412246,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_install",
+   "ceiling": 113.54,
+   "seconds": 85.01187358412426,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "ceiling": 135.45,
+   "seconds": 100.85327249998227,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_sh",
+   "ceiling": 203.64,
+   "seconds": 155.3061595839681,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_straight",
+   "ceiling": 293.12,
+   "seconds": 144.69146295706742,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_update",
+   "ceiling": 275,
+   "seconds": 233.32293125009164,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "ceiling": 282.08,
+   "seconds": 219.73739758203737,
+   "status": "measured"
+  }
+ ],
+ "debt_retirement_required": [
+  "codex:tests.test_b2_service_outcome_paths",
+  "codex:tests.test_container_stop",
+  "codex:tests.test_session_guard"
+ ],
+ "discovery_seconds": 2.7673740830505267,
+ "preflight_seconds": 8.071205749874935,
+ "metadata_errors": [],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [],
+ "units": 572,
+ "tests": {
+  "claude": 134,
+  "codex": 7083,
+  "root": 1225
+ },
+ "failed_units": [],
+ "slowest_units": [
+  [
+   "codex:tests.test_billing_gate",
+   68.4
+  ],
+  [
+   "root:test_setup_update#3",
+   61.8
+  ],
+  [
+   "codex:tests.test_b2_service_outcome_paths",
+   59.7
+  ],
+  [
+   "codex:tests.test_container_stop",
+   58.7
+  ],
+  [
+   "codex:tests.test_host_commands#2",
+   57.6
+  ],
+  [
+   "codex:tests.test_write_merge#4",
+   54.1
+  ],
+  [
+   "codex:tests.test_merge_library_adversarial",
+   53.3
+  ],
+  [
+   "codex:tests.test_b2_service_outcome_round2",
+   49.2
+  ]
+ ],
+ "logs": "/private/tmp/ptx02iy5rh"
+}
+Unchecked requirements (88): API-1, API-10, API-11, API-12, API-13, API-14, API-15, API-16, API-17, API-18, API-19, API-2, API-20, API-21, API-22, API-23, API-24, API-25, API-26, API-27, API-3, API-4, API-5, API-6, API-7, API-8, API-9, G1, G2, G3, G4, G5, G6, G7, G8, G9, L1.1, L1.2, L10.1, L10.2, L10.3, L11.1, L11.2, L12.1, L12.2, L12.3, L12.4, L12.5, L12.6a, L12.6b, L12.7, L13.1, L13.2, L16.1, L16.2, L16.3, L2.1, L2.2, L3.1, L3.2, L3.3, L4.1, L4.2, L5.1, L5.2, L5.3, L6.1, L6.2, L7.1, L7.2, L7.3, L8.1, L8.2, L9.1, L9.2, L9.3, O0C-U4-3, P4-REPORT, RS-B-B6-6, TERM-13, TERM-17, TERM-5, TERM-6, TERM-7, TF-23, TF-25, TF-26, TF-27
+Requirements proved only by skipped checks here (3): LEGACY-HOLD-LIFECYCLE-B0-2, ML-12, ML-4

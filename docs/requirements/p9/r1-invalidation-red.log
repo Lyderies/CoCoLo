@@ -1,0 +1,17 @@
+F
+======================================================================
+FAIL: test_P9_projection_invalidates_mutations_and_rebuilds_after_restart (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 271, in test_P9_projection_invalidates_mutations_and_rebuilds_after_restart
+    self.assert_capture_error('signature_capture_limit', lambda: self.capture(limits=limits))
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 114, in assert_capture_error
+    with self.assertRaises(SignatureCaptureError) as caught:
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: SignatureCaptureError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.289s
+
+FAILED (failures=1)

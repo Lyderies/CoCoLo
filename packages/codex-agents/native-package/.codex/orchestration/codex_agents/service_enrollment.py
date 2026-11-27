@@ -82,9 +82,115 @@ def capability_path(state, project_root, role):
         raise EnrollmentError('enrollment_unavailable') from None
 
 
+def wake_capability_path(state, project_root):
+    """RS-E E2a-5: a project's wake key, which the collector issues per active project; it signs only that
+    project's wake publications (the verifier picks it by the preamble's subject)."""
+    if type(state) is not CollectorPaths or project_root is None:
+        raise EnrollmentError('enrollment_invalid')
+    try:
+        root = _canonical_project_root(Path(project_root))
+        return state.root / 'client-runtimes' / (keyed_digest(state.digest_key(), str(root)) + '.wake.cap')
+    except (StateError, OSError, ValueError):
+        raise EnrollmentError('enrollment_unavailable') from None
+
+
+def issue_wake_capability(state, project_root, project_id=None):
+    """Issue the project's wake key; with its project id, this process's verifier also learns it (E2a-5)."""
+    key = _issue_key(wake_capability_path(state, project_root))
+    if project_id is not None:
+        try:
+            subject = str(_canonical_project_root(Path(project_root)))
+        except (StateError, OSError, ValueError):
+            raise EnrollmentError('enrollment_unavailable') from None
+        wake_keys(state).remember(subject, project_id, key)
+    return key
+
+
+def keep_wake_capability(state, project_root, project_id):
+    """UPDFIX-5 (L1.2): the project's wake key as it is when it is a valid one (the file, owner-only, of the right size), so
+    registering a project again on a running collector changes nothing; the collector's verifier learns the same key. Only a
+    missing or invalid key is issued. A collector that starts issues a fresh key per active project (`issue_wake_capability`)."""
+    try:
+        key = _read_key(wake_capability_path(state, project_root))
+    except EnrollmentError:
+        return issue_wake_capability(state, project_root, project_id)
+    try:
+        subject = str(_canonical_project_root(Path(project_root)))
+    except (StateError, OSError, ValueError):
+        raise EnrollmentError('enrollment_unavailable') from None
+    wake_keys(state).remember(subject, project_id, key)
+    return key
+
+
+class WakeKeys:
+    """RS-E E2a-5 (review round 1): the wake keys this process issued, in memory, each bound to the immutable id of
+    the project it was issued for. A lookup never touches the filesystem: a subject with no key gets a dummy key, so
+    a known and an unknown subject cost the verifier the same one lookup and one MAC."""
+
+    def __init__(self):
+        self._keys, self._lock = {}, threading.Lock()
+        self._dummy = secrets.token_bytes(KEY_BYTES)
+
+    def remember(self, subject, project_id, key):
+        if type(subject) is not str or type(project_id) is not str or type(key) is not bytes or len(key) != KEY_BYTES:
+            raise EnrollmentError('enrollment_invalid')
+        with self._lock:
+            self._keys[subject] = (project_id, key)
+
+    def lookup(self, subject):
+        """(project id or None, key) for this subject; a miss is (None, the dummy key)."""
+        with self._lock:
+            found = self._keys.get(subject) if type(subject) is str else None
+        return found if found is not None else (None, self._dummy)
+
+
+_WAKE_KEYS = {}
+_WAKE_KEYS_LOCK = threading.Lock()
+
+
+def wake_keys(state):
+    """The process's WakeKeys for this state root (shared by the collector's registration and the account host)."""
+    if type(state) is not CollectorPaths:
+        raise EnrollmentError('enrollment_invalid')
+    with _WAKE_KEYS_LOCK:
+        return _WAKE_KEYS.setdefault(str(state.root), WakeKeys())
+
+
+# RS-E E2a-3/11 (review round 1): the owner's credential for the collector's setup operations (`record_launch`,
+# `launch_status`). The collector issues a fresh key at each start; a request is the owner's only with an
+# `owner-cli-v1` preamble under it whose proof was written in the owner-only proof folder (the same trust level as
+# the account services' owner enrollment), naming exactly this request and its project root as the subject.
+def collector_owner_paths(state):
+    if type(state) is not CollectorPaths:
+        raise EnrollmentError('enrollment_invalid')
+    folder = state.root / 'collector-owner'
+    return folder / 'owner.cap', folder / 'proofs'
+
+
+def issue_collector_owner(state):
+    """Collector side: a fresh key and an empty proof folder; the verifier for this collector's life."""
+    key_path, proofs = collector_owner_paths(state)
+    key = _issue_key(key_path)
+    prepare_proof_directory(proofs)
+    return EnrollmentVerifier(key, 'account', 1, proofs)
+
+
+def collector_owner_preamble(state, message, subject):
+    """Owner side: the preamble for one collector setup request (`message`, its canonical bytes)."""
+    key_path, proofs = collector_owner_paths(state)
+    return enrollment_preamble(_read_key(key_path), 'account', OWNER_CLIENT, 1, message, proofs, subject=subject)
+
+
+def read_wake_capability(state, project_root):
+    return _read_key(wake_capability_path(state, project_root))
+
+
 def issue_capability(state, project_root, role):
     """Host side: replace any earlier generation's key with a fresh exclusive file."""
-    path = capability_path(state, project_root, role)
+    return _issue_key(capability_path(state, project_root, role))
+
+
+def _issue_key(path):
     descriptor = None
     try:
         path.parent.mkdir(mode=0o700, exist_ok=True)
@@ -122,7 +228,10 @@ def revoke_capability(state, project_root, role):
 
 def read_capability(state, project_root, role):
     """Client side: one checked read of the current key; never creates state."""
-    path = capability_path(state, project_root, role)
+    return _read_key(capability_path(state, project_root, role))
+
+
+def _read_key(path):
     descriptor = None
     try:
         _assert_no_symlink_components(path)
@@ -315,13 +424,20 @@ class Enrolled:
     request_digest: str
     subject: str | None = None
     context: bytes | None = None
+    # RS-E E2a-5: the MAC verified only under the subject's own wake key, so the project is the verifier's (the
+    # immutable id the key was issued for), not the sender's: the credential is bound to that one project.
+    bound_project: str | None = None
+
+    @property
+    def project_bound(self):
+        return self.bound_project is not None
 
 
 class EnrollmentVerifier:
     """Host side: verify one preamble against this generation's key, once."""
 
     def __init__(self, key, role, generation, proofs, *, window_ms=30_000, max_nonces=4_096,
-                 clock_ms=lambda: time.time_ns() // 1_000_000):
+                 clock_ms=lambda: time.time_ns() // 1_000_000, subject_keys=None):
         roles = frozenset({role}) if type(role) is str else role
         if (type(key) is not bytes or len(key) != KEY_BYTES or type(roles) is not frozenset or not roles
                 or not roles <= ROLES or not _integer(generation, minimum=1)
@@ -333,6 +449,9 @@ class EnrollmentVerifier:
         self._window_ms, self._max_nonces, self._clock_ms = window_ms, max_nonces, clock_ms
         self._seen, self._latest_ms, self._pruned_ms = {}, 0, 0
         self._lock = threading.Lock()
+        if subject_keys is not None and not callable(subject_keys):
+            raise EnrollmentError('enrollment_invalid')
+        self._subject_keys = subject_keys  # RS-E E2a-5: subject -> (project id or None, key); never the filesystem
 
     def verify(self, line):
         if type(line) is not bytes or not 0 < len(line) < MAX_PREAMBLE_BYTES:
@@ -354,8 +473,21 @@ class EnrollmentVerifier:
                 or canonical_json(value) != line):
             raise EnrollmentError('enrollment_invalid')
         # Authenticate before any role, generation or freshness decision is disclosed.
+        bound = None
         if not hmac.compare_digest(_mac(self._key, value), value['mac']):
-            raise EnrollmentError('enrollment_invalid')
+            # E2a-5: a project preamble may instead be signed with its subject's own wake key; any failure here
+            # (no such project, no key, another project's key) is the same refusal as a bad MAC. The lookup is
+            # in memory and a miss is checked against a dummy key, so no subject is probed on disk or timed apart.
+            project, other = None, None
+            if self._subject_keys is not None and value['role'] == 'project' and value['subject'] is not None:
+                try:
+                    project, other = self._subject_keys(value['subject'])
+                except Exception:
+                    project, other = None, None
+            if (type(other) is not bytes or len(other) != KEY_BYTES
+                    or not hmac.compare_digest(_mac(other, value), value['mac']) or type(project) is not str):
+                raise EnrollmentError('enrollment_invalid')
+            bound = project
         if value['role'] not in self._roles or value['generation'] != self._generation:
             raise EnrollmentError('enrollment_stale')
         now = self._clock_ms()
@@ -384,4 +516,4 @@ class EnrollmentVerifier:
             # Retained for twice the window, so a clock step cannot reopen it.
             self._seen[value['nonce']] = max(now, value['issued_at_ms'])
         return Enrolled(value['role'], value['host_client'], value['generation'], value['request_digest'],
-                        value['subject'], context)
+                        value['subject'], context, bound)

@@ -16,6 +16,18 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "setup.sh"
+
+# Retired by mapping when setup.sh became a launcher for the Python wizard (S5, 2026-11-19): these read
+# setup.sh's bash source; each property is now checked on the wizard's source in
+# tests/test_setup_wizard_source.py. SetupScriptTests.<name> -> WizardSourceTests.<name>:
+#   test_commands_and_commit_screens_say_what_the_rule_and_commit_do
+#   test_every_git_call_uses_the_trusted_binary_with_helpers_off
+#   test_every_git_call_with_paths_is_literal
+#   test_every_python_the_wizard_starts_is_isolated
+#   test_header_and_welcome_name_the_product
+#   test_provider_clients_are_never_run_by_name
+#   test_wizard_messages_for_the_polished_screens
+# tests/test_setup_progress.py (bash run_cmd and terminal_width) -> tests/test_setup_wizard_progress.py.
 ORCHESTRATION = ROOT / "packages" / "codex-agents" / "native-package" / ".codex" / "orchestration"
 POLICY = ORCHESTRATION / "config" / "routing-policy.json"
 
@@ -499,30 +511,6 @@ class SetupScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, b".codex/ok\0")
 
-    def test_every_git_call_uses_the_trusted_binary_with_helpers_off(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
-        # No git is ever run by name from PATH: only "$GIT", through g() for the project.
-        for line in code:
-            stripped = line.strip()
-            if re.search(r'(^|[;&|]\s*|run_cmd "[^"]*" |\$\()git\s', stripped):
-                self.fail(f"git run from PATH: {stripped}")
-        self.assertIn("xcrun_nocache=1 GIT_ALLOW_PROTOCOL='' GIT_NO_LAZY_FETCH=1 "
-                      '"$GIT" -C "$project" "${GIT_SAFE[@]}" "$@"', text)
-        uses = [line for line in code if re.search(r'\bg "\$', line)]
-        self.assertGreaterEqual(len(uses), 4)
-        # No porcelain: status, add and commit go through the installer's plumbing.
-        for line in uses:
-            self.assertIsNone(re.search(r'\bg "\$[^"]*"( --?[a-z-]+)* (status|add|commit|diff)\b', line), line)
-        self.assertIn('owner_git commit "$PROJECT"', text)
-        self.assertIn('owner_git changes "$1" .codex .agents .claude', text)
-        safe = re.search(r"^GIT_SAFE=\((.*)\)$", text, re.M).group(1).split()
-        self.assertEqual(safe, ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-                                "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false",
-                                "-c", "gc.auto=0", "-c", "maintenance.auto=false"])
-        # The helper's own git call is the trusted binary too.
-        self.assertIn('[git, "-C", project, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",', text)
-
     def test_the_helper_pattern_matches_the_installer(self) -> None:
         import importlib.util
         spec = importlib.util.spec_from_file_location("install_for_pattern", ROOT / "scripts" / "install.py")
@@ -543,29 +531,6 @@ class SetupScriptTests(unittest.TestCase):
             self.assertTrue(os.path.isabs(found))
             if sys.platform == "darwin":
                 self.assertNotEqual(os.path.dirname(found), "/usr/bin")  # the xcrun shim
-
-    def test_provider_clients_are_never_run_by_name(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        # The shell code only: not comments, and not the embedded Python helper.
-        shell = re.sub(r"<<'PY'\n.*?\nPY\n", "\n", text, flags=re.S)
-        self.assertNotIn("data.get(", shell)
-        code = [line for line in shell.splitlines() if not line.lstrip().startswith("#")]
-        for line in code:
-            stripped = line.strip()
-            # A client in command position: at the start, after a separator or in $( ... ).
-            if re.search(r'(^|[;&|]\s*|\$\(|\bthen\s+|\bdo\s+)(codex|claude)\s', stripped):
-                self.fail(f"client run by name: {stripped}")
-            self.assertNotRegex(stripped, r"command -v (codex|claude)")
-        self.assertNotIn("run_identity", text)
-        self.assertIn('owner_tool client-status "$1"', text)
-        # The message naming where the orchestrator runs clients from is the runtime's list.
-        sys.path.insert(0, str(ORCHESTRATION))
-        try:
-            from codex_agents.providers import TRUSTED_SEARCH_DIRECTORIES
-        finally:
-            sys.path.remove(str(ORCHESTRATION))
-        message = re.search(r"The orchestrator runs \$1 only from ([^\"]*)\.\"", text).group(1)
-        self.assertEqual(re.split(r", | or ", message), list(TRUSTED_SEARCH_DIRECTORIES))
 
     def test_the_shell_and_basic_tools_never_come_from_an_earlier_path_entry(self) -> None:
         self.assertTrue(SETUP.read_text(encoding="utf-8").startswith("#!/bin/bash\n"))
@@ -631,37 +596,6 @@ class SetupScriptTests(unittest.TestCase):
                 result = subprocess.run(["bash", str(SETUP), *hook], capture_output=True, env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(marker.exists())
-
-    def test_every_python_the_wizard_starts_is_isolated(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
-        # Every use of "$PY" either launches it isolated or only inspects the path.
-        inspecting = ("inside_temp ", "inside_dir ", "dirname -- ", "[ -n ", "printf '%s\\n' ",
-                      "python_location_problem ")
-        launches = 0
-        for line in code:
-            for match in re.finditer(r'"\$PY"', line):
-                before, after = line[:match.start()], line[match.end():]
-                if before.endswith(inspecting):
-                    continue
-                launches += 1
-                with self.subTest(line=line.strip()):
-                    self.assertTrue(after.startswith(' "${PYF[@]}" '), line.strip())
-        self.assertGreaterEqual(launches, 12)
-        self.assertIn("PYF=(-I -B -S -X pycache_prefix=/dev/null)", text)
-        # The commands shown to the owner carry the same flags.
-        for line in code:
-            if "python3 -I" in line:
-                self.assertIn("python3 -I -B -S -X pycache_prefix=/dev/null", line)
-        # No bare python3 is ever run: only the resolved, checked "$PY".
-        for line in code:
-            stripped = line.strip()
-            if re.match(r'^(run_cmd "[^"]*" )?python3\b', stripped) or re.search(r'\$\(python3\b', stripped):
-                self.fail(f"bare python3 launch: {stripped}")
-        # Owner commands run this repository's CLI, never the project's copy.
-        self.assertIn('run_cmd "$label" "$PY" "${PYF[@]}" "$CLONE_CLI" "$@"', text)
-        self.assertIn('CLONE_CLI="$ORCH_DIR/cli.py"', text)
-        self.assertNotIn('"$PROJECT/.codex/orchestration/cli.py" "$@"', text)
 
     def python_for(self, path_entry: Path, home: str = "/nonexistent-home-for-tests",
                    cwd: Path | None = None) -> str:
@@ -767,16 +701,6 @@ class SetupScriptTests(unittest.TestCase):
                         report.write_text(json.dumps(sample))
                         result = self.helper("verifyclass", str(report))
                         self.assertEqual(result.stdout.decode().strip(), expected)
-
-    def test_every_git_call_with_paths_is_literal(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        for needle in (" add -A -- ", " commit -m ", '"ls-files"'):
-            lines = [line for line in text.splitlines()
-                     if needle in line and not line.lstrip().startswith("#")]
-            self.assertTrue(lines, needle)
-            for line in lines:
-                with self.subTest(line=line.strip()):
-                    self.assertIn("--literal-pathspecs", line)
 
     def test_changed_paths_lists_only_paths_with_real_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -892,41 +816,6 @@ class SetupScriptTests(unittest.TestCase):
         self.assertEqual(self.profile_compare(padded), "unreadable")
         self.assertEqual(self.profile_compare(good + "# pad\n" * 100), "same")
 
-    def test_commands_and_commit_screens_say_what_the_rule_and_commit_do(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        self.assertIn("Every Codex session on this machine loads this rule from $RULE_FILE (mode 0600). "
-                      "It runs a protected copy of the orchestrator in ~/.codex that sessions opened on a "
-                      "project cannot change. Never open Codex on the orchestrator clone, a folder that "
-                      "contains a set-up project, your home folder, its parent or / while the rule exists.", text)
-        self.assertNotIn("It applies to Codex sessions started in this project's root folder", text)
-        self.assertIn("Setup commits with Git's plumbing commands only (hash-object, update-index, write-tree, "
-                      "commit-tree, update-ref), which start no hook, filter, signing program, pager or "
-                      "maintenance whatever the project's Git settings say", text)
-        self.assertNotIn("no script in the project runs as you", text)
-        self.assertNotIn("or a commit hook stopped it", text)
-        self.assertIn("Keep this setup folder outside every folder you open in Codex", text)
-        self.assertIn("including the Codex commands rule", text)
-
-    def test_header_and_welcome_name_the_product(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        self.assertIn("printf '%s%s COCOLO setup %s'", text)
-        self.assertNotIn("Agent orchestration setup %s", text)
-        self.assertIn('body "Welcome to COCOLO\nClaude Orchestrator, Codex Orchestrator, Local Orchestrator"', text)
-
-    def test_wizard_messages_for_the_polished_screens(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        self.assertIn("Nothing to commit: the project already has these files committed", text)
-        self.assertIn("The install can be updated.", text)
-        self.assertIn("A fresh install is possible.", text)
-        self.assertIn("Profile: exists with the same settings", text)
-        self.assertIn("network_access is off", text)
-        self.assertIn('"Change the owner key passphrase"', text)
-        self.assertIn('"Replace a lost owner key"', text)
-        self.assertIn('attest.py" --target "$PROJECT" --replace-owner-key', text)
-        self.assertIn("attest.py\" --change-passphrase", text)
-        self.assertIn('"$HOME/agent-orchestration-setup-summary.txt"', text)
-        self.assertNotIn('"$PWD/agent-orchestration-setup-summary.txt"', text)
-
     def test_refuses_without_a_terminal(self) -> None:
         result = subprocess.run(["bash", str(SETUP)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
         self.assertEqual(result.returncode, 2)
@@ -1016,9 +905,41 @@ class SetupScriptTests(unittest.TestCase):
             self.assertIn("claude-haiku-5-5", (target / "provider-routing.json").read_text())
 
 
+# T8h: the wizard terminal tests that stay real terminal runs, because what they prove needs a real
+# process, terminal or signal: the launcher, the full run's isolation and clean-up, a slow child stopped
+# by SIGTERM, PATH-planted programs and a module planted in the orchestration folder (fresh
+# interpreters), the real attest.py hand-off (passphrase, and ordinary billing back to the menu), the
+# failure summary's process isolation, the client runtime-folder rule, the first screen's quit, a
+# summary path written by a real process, reads split into 16-byte pieces, updates installed by real
+# processes (nothing changed; an obsolete wildcard file), the collector through the real wrapper
+# (still starting; move and upgrade) and a typed project path through the real terminal. The rest run
+# in-process with the same bodies (test_setup_wizard_direct).
+KEPT_TERMINAL_RUNS = frozenset({
+    "test_changing_the_passphrase_hands_over_retries_and_backing_out_runs_nothing",
+    "test_clients_outside_the_runtimes_folders_are_refused_and_never_run",
+    "test_failure_summary_is_an_allowlist_and_never_echoes_output",
+    "test_full_run_leaves_no_bytecode_quotes_commands_and_cleans_up",
+    "test_planted_clients_and_tools_earlier_on_path_never_run",
+    "test_quit_on_the_first_screen_changes_nothing",
+    "test_sigterm_during_a_slow_command_leaves_no_child",
+    "test_summary_path_with_a_control_character_is_refused",
+    "test_a_helper_planted_during_the_run_stops_git_and_the_commit",
+    "test_commit_stages_updated_files_and_provider_routing",
+    "test_an_update_that_changes_nothing_offers_no_commit",
+    "test_wildcard_named_obsolete_file_is_removed_without_touching_its_neighbour",
+    "test_a_file_planted_in_the_orchestration_folder_stops_the_install",
+    "test_C6_setup_waits_for_a_collector_that_is_still_starting",
+    "test_old_records_that_also_need_the_upgrade_get_both_questions_before_anything_moves",
+    "test_back_to_the_main_menu_after_a_failure_then_another_option_works",
+    "test_a_lost_tilde_is_reported_exactly_and_offered_back",
+})
+
+
 @unittest.skipUnless(sys.platform != "win32", "needs a pseudo-terminal")
 class WizardTerminalTests(unittest.TestCase):
     def setUp(self) -> None:
+        if type(self) is WizardTerminalTests and self._testMethodName not in KEPT_TERMINAL_RUNS:
+            self.skipTest("runs in-process with the same body (test_setup_wizard_direct)")
         if TRUSTED_PY is None:
             self.skipTest("no Python in a trusted installation folder")
         self._tmp = tempfile.TemporaryDirectory()
@@ -1085,9 +1006,21 @@ class WizardTerminalTests(unittest.TestCase):
             ' echo \'{"ready": false, "reason_code": "ledger_upgrade_required", "ledger_schema_version": 6,'
             ' "state_moved": null}\'; exit 2;;'
             ' *"cli.py learning-status "*)'
-            ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
+            ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;;'
+            ' *"cli.py learning-start-project-service "*)'
+            ' echo \'{"ready": true, "serving": true}\'; exit 0;; esac; fi\n'
             'if [ -n "$FAKE_REGISTER" ]; then case "$*" in *"cli.py learning-register "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_REGISTER"; exit 0;;'
+            # S1-U8: the project's service, started after the collector is ready; FAKE_START replaces the reply.
+            # S4-3: provider-observe is refused unless FAKE_OBSERVE gives its reply.
+            ' *"cli.py provider-observe "*)'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}";'
+            ' if [ -z "${FAKE_OBSERVE:-}" ]; then echo \'{"ready": false, "reason_code": "provider_unavailable"}\';'
+            ' exit 2; fi; echo "$FAKE_OBSERVE"; exit 0;;'
+            ' *"cli.py learning-start-project-service "*)'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}";'
+            ' echo "${FAKE_START:-{\\"ready\\": true, \\"serving\\": true\\}}";'
+            ' case "${FAKE_START:-}" in *\'"ready": false\'*) exit 2;; esac; exit 0;;'
             # FAKE_STATUS_STARTING=N: the collector answers with a start-up reason N times first,
             # as a collector just restarted by registering does (C6); FAKE_STATUS_REASON names it.
             ' *"cli.py learning-status "*)'
@@ -1096,6 +1029,10 @@ class WizardTerminalTests(unittest.TestCase):
             ' if [ "$n" -le "${FAKE_STATUS_STARTING:-0}" ]; then'
             ' echo "{\\"ready\\": false, \\"reason_code\\": \\"${FAKE_STATUS_REASON:-status_collector_transport_unavailable}\\"}";'
             ' exit 2; fi;'
+            # S4-3: FAKE_STATUS_REPLY replaces the ready reply (its provider_attestations).
+            # From call FAKE_STATUS_REPLY_FROM on (default the first), so the collector can be ready first.
+            ' if [ -n "${FAKE_STATUS_REPLY:-}" ] && [ "$n" -ge "${FAKE_STATUS_REPLY_FROM:-1}" ]; then'
+            ' echo "$FAKE_STATUS_REPLY"; exit 0; fi;'
             ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
             'case "$*" in *"attest.py scratch setup-"*)'
             f' out=$("{TRUSTED_PY}" "$@"); rc=$?; printf "%s\\n" "$out" >> "{self.scratch_log}";'
@@ -1213,6 +1150,16 @@ class WizardTerminalTests(unittest.TestCase):
                     time.sleep(0.01)  # Nothing read (or end of output): do not spin.
             except OSError:
                 time.sleep(0.05)
+
+    def wait_for_line_editor(self, timeout: float = 25.0) -> None:
+        """Wait until the wizard's line editor reads keys itself (the terminal is out of line mode),
+        so keys typed next are never handled by the terminal first (Linux load failure, 0.4.0 O3)."""
+        import termios
+
+        end = time.monotonic() + timeout
+        while termios.tcgetattr(self.fd)[3] & termios.ICANON:
+            self.assertLess(time.monotonic(), end, "the line editor never started")
+            time.sleep(0.02)
 
     def expect(self, text: str, timeout: float = 25.0) -> None:
         import select
@@ -1634,6 +1581,19 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertEqual("4", (self.base / "status.count").read_text().strip())
         self.assertNotIn("not ready", self.screen)
 
+    def test_H1a_6c_setup_waits_for_a_collector_whose_ledger_is_busy(self) -> None:
+        project, checks = self.make_project()
+        self.drive_to_commit_menu(project, checks, {"FAKE_REGISTER": '{"ready": true, "state_moved": null}',
+                                                    "FAKE_STATUS_STARTING": "2",
+                                                    "FAKE_STATUS_REASON": "status_ledger_busy"})
+        self.send("\r")
+        self.expect("Continue")
+        self.send("\r")
+        self.expect("Register now")
+        self.send("\r")
+        self.expect("Collector status: ready")
+        self.assertEqual("3", (self.base / "status.count").read_text().strip())
+
     def test_C6_any_other_reason_still_fails_at_once(self) -> None:
         project, checks = self.make_project()
         self.drive_to_commit_menu(project, checks, {"FAKE_REGISTER": '{"ready": true, "state_moved": null}',
@@ -1698,7 +1658,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         self.expect("fresh install is possible")
-        self.send("\r")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
         self.expect("Codex children")
         self.send("\r")
         self.expect("Looks right")
@@ -1772,7 +1732,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("The install failed")
@@ -1820,8 +1782,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
-        self.send("\r")
+        self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Keep the existing configuration", "Install now"):
             self.expect(wait)
             self.send("\r")
@@ -1895,8 +1859,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
-        self.send("\r")
+        self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
@@ -1921,7 +1887,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("Continue to the summary")
@@ -1965,6 +1933,7 @@ class WizardTerminalTests(unittest.TestCase):
         project, checks = self.make_project()
         self.failed_install_to_summary_menu(project, checks)
         destination = self.base / "summary-bad.txt"
+        self.wait_for_line_editor()  # Ctrl-V must reach the line editor, not the terminal's line mode.
         self.send(f"{self.base}/sum\x16\x01mary.txt\r")  # Ctrl-V Ctrl-A types a control character
         self.expect("control character")
         self.assertFalse(any(self.base.glob("sum*mary.txt")))
@@ -2005,9 +1974,11 @@ class WizardTerminalTests(unittest.TestCase):
         self.to_failed_billing(1)
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")  # the existing-install menu, not the summary
         self.assertNotIn("Exit", self.screen)
-        self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
+        self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
         self.send("\r")
         self.expect("attest stub run 2")
@@ -2023,8 +1994,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.to_failed_billing(2)
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
+        self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
         self.send("\r")
         self.expect("attest stub run 2")
@@ -2035,10 +2008,12 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertNotIn("Skip for now", self.screen)  # attestation-only has nothing to skip to
         self.send("\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.settle()
         self.assertGreater(self.pid, 0)  # still running: a failure never ended the wizard
-        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
         self.assertEqual(self.finish(), 0)
 
@@ -2050,7 +2025,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("Back to the main menu")
@@ -2058,7 +2035,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("Continue to the summary")
@@ -2088,16 +2067,69 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Replace a lost owner key")
-        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")
         self.expect("Use this only if you can no longer unlock your owner key")
         self.expect("Replace the owner key")
         self.send("\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
         self.assertEqual(self.finish(), 0)
+
+    def test_changing_the_passphrase_hands_over_retries_and_backing_out_runs_nothing(self) -> None:
+        """W7.4 (S5): the menu's passphrase change hands the terminal to attest.py --change-passphrase;
+        backing out runs nothing; a failed change offers Try again; a finished one says so. (attest.py
+        finds the key in the account's real ~/.ssh, so the passphrase itself is tested in test_attest.)"""
+        import json
+        project, checks = self.make_project(base=self.non_temporary_base())
+        routing_in = self.base / "par.json"
+        routing_in.write_text(json.dumps({"version": 1, "roles": {}, "verifiers": {}}))
+        subprocess.run(
+            [TRUSTED_PY, str(ROOT / "scripts" / "install.py"), "install", "--target", str(project),
+             "--project-agent-routing", str(routing_in), "--operational-checks", str(checks), "--apply"],
+            check=True, capture_output=True, env=self.env)
+        count = self.base / "attest.count"
+        self.start(project, {"FAKE_ATTEST": str(count), "FAKE_ATTEST_FAILS": "1"})
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
+        self.expect("Change the owner key passphrase")
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
+        self.expect("this wizard never sees them")
+        self.send("\x1b[B\r")  # Back to the main menu: attest.py never ran
+        self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
+        self.expect("Change the owner key passphrase")
+        self.assertFalse(count.exists())
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
+        self.expect("Change the passphrase")
+        self.send("\r")
+        self.expect("attest stub run 1")
+        self.expect("Press Enter to continue")
+        self.send("\r")
+        self.expect("did not finish cleanly (exit code 1")
+        self.expect("Try again")
+        self.send("\r")
+        self.expect("attest stub run 2")
+        self.expect("Press Enter to continue")
+        self.send("\r")
+        self.expect("The owner key passphrase was changed.")
+        self.send("\r")  # Continue
+        self.expect("Back to the main menu")
+        self.send("\r")  # Exit
+        self.assertEqual(self.finish(), 0)
+        handoffs = [line for line in self.py_full.read_text().splitlines() if "attest.py --" in line]
+        self.assertEqual(2, len(handoffs))
+        self.assertTrue(all(line.endswith("scripts/attest.py --change-passphrase") for line in handoffs), handoffs)
 
     @unittest.skipUnless(sys.platform == "darwin",
                          "operational checks use the macOS sandbox, so verify is not ready elsewhere")
@@ -2114,8 +2146,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Verify the install only")
-        self.send("\x1b[B\r")
+        self.send("\x1b[B\x1b[B\r")
         self.expect("Try again")
         self.send("\r")  # Try again: still failing, so the menu comes back
         self.expect("Try again")
@@ -2124,8 +2158,10 @@ class WizardTerminalTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(project), "add", "-A"], check=True, env=self.env)
         subprocess.run(["git", "-C", str(project), "commit", "-qm", "install"], check=True, env=self.env)
         self.send("\r")
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Verify the install only")
-        self.send("\x1b[B\r")
+        self.send("\x1b[B\x1b[B\r")
         self.expect("Codex commands rule: missing")
         self.expect("Continue")
         self.send("\r")
@@ -2134,8 +2170,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertNotIn("Save a summary of what failed", self.screen)  # the old failures are gone
         self.send("\x1b[B\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
         self.assertEqual(self.finish(), 0)
 
@@ -2148,7 +2186,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         self.expect("fresh install is possible")
-        self.send("\r")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
         self.expect("Codex children")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B \r")  # also turn on bridging to Claude
         self.expect("Looks right")
@@ -2169,8 +2207,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Try again")
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\r")  # a different mode: attestation only
+        self.send("\x1b[B\x1b[B\x1b[B\r")  # a different mode: attestation only
         self.expect("Start the attestation")
         self.send("\r")
         self.expect("Press Enter to continue")
@@ -2325,7 +2365,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("Commit now")
@@ -2377,7 +2419,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right"):
             self.expect(wait)
             self.send("\r")
         self.expect("Close every Codex session in this project first.")
@@ -2418,7 +2462,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("commit failed: no paths to commit")
@@ -2455,8 +2501,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
-        self.send("\r")
+        self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
@@ -2517,8 +2565,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
+        self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
         self.send("\r")
         self.expect("does not match this setup")
@@ -2597,8 +2647,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Verify the install only")
-        self.send("\x1b[B\r")
+        self.send("\x1b[B\x1b[B\r")
         self.expect("Codex commands rule: missing")
         self.expect("Continue")
         self.send("\r")
@@ -2631,8 +2683,10 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Verify the install only")
-        self.send("\x1b[B\r")
+        self.send("\x1b[B\x1b[B\r")
         self.expect("cannot be used with this Codex setup")
         self.expect("Continue")
         plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen))

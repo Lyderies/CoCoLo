@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/s14g.md",
+ "requirements": [
+  {
+   "id": "S14G-1",
+   "statement": "Audit account and project hold reads against the real current schemas; identity lookups with an available complete key must search (project_id,kind,identity), and takeover adoption must select every processed kind through the live index.",
+   "source": "tests/requirements/s14g.json#S14G-1"
+  },
+  {
+   "id": "S14G-2",
+   "statement": "Pin account identity lookups, including both handle kinds, to full-key searches and inventory intentional live-register, evidence-validation and maintenance scans with real-schema EXPLAIN plans.",
+   "source": "tests/requirements/s14g.json#S14G-2"
+  },
+  {
+   "id": "S14G-3",
+   "statement": "Preserve takeover lookup answers for both lease and reservation identities and across hold states; project-scoped predicates use the store unique history identity.",
+   "source": "tests/requirements/s14g.json#S14G-3"
+  },
+  {
+   "id": "S14G-4",
+   "statement": "Takeover's finished-custody scan and next_hold_due's held/releasing deadline reads carry the live-index predicate state<>'released' so they use project_holds_kind_due, selecting exactly the same rows as before.",
+   "source": "tests/requirements/s14g.json#S14G-4"
+  }
+ ]
+}

@@ -191,6 +191,7 @@ def result() -> dict:
     return {
         "assignment_id": "assignment-1",
         "status": "completed",
+        "semantic_verdict": "pass",
         "summary": "sensitive result text",
         "artifacts": ["private/path"],
         "evidence": [
@@ -528,6 +529,15 @@ def child(directory, name):
         if "sleep" in frame:
             time.sleep(frame["sleep"])
             continue
+        if "wait_for" in frame:  # Hold until the test creates this file (at most 60 s).
+            deadline = time.monotonic() + 60
+            while not os.path.exists(frame["wait_for"]) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not os.path.exists(frame["wait_for"]):
+                # Never carry on past a gate the test did not open: the order it guards is not met.
+                sys.stderr.write("fake client: wait_for gate never opened\\n")
+                sys.exit(97)
+            continue
         print(frame["raw"] if "raw" in frame else json.dumps(frame), flush=True)
     last = os.path.join(directory, name + "-last-message.json")
     if "-o" in sys.argv and os.path.exists(last):
@@ -546,7 +556,8 @@ arguments = sys.argv[3:]
 if arguments == ["--version"]:
     # Answers from <name>-version.txt, or a version inside the reviewed range.
     version = os.path.join(directory, name + "-version.txt")
-    default = {"claude": "2.1.200 (Claude Code)", "codex": "codex-cli 0.164.0"}[name]
+    # Corrected for O10 VF-6 (requirement): the fake Claude client is one that holds results to the schema.
+    default = {"claude": "2.1.311 (Claude Code)", "codex": "codex-cli 0.164.0"}[name]
     sys.stdout.write(open(version).read() if os.path.exists(version) else default + "\\n")
 elif name == "claude" and arguments[:2] == ["auth", "status"]:
     sys.stdout.write(open(os.path.join(directory, "claude-status.json")).read())
@@ -580,6 +591,49 @@ else:
 """
 
 
+_LAUNCHER_FOLDER = None
+_LAUNCHER_CONTENT = None
+
+
+def _launcher() -> str:
+    """The one launcher script every fake client is a link to, made once per test process.
+
+    On macOS the first run of an executable file whose content is new costs 70-280 ms (the system's
+    security scan), and each test used to write launchers naming its own folder, so every test paid it
+    for `codex` and `claude`. This launcher names no folder: it takes the folder and the client's name
+    from the path it was started by (`$0`), so it is the same file for every test, and each test's
+    `codex` and `claude` are hard links to it (a link is not scanned again)."""
+    global _LAUNCHER_FOLDER, _LAUNCHER_CONTENT
+    if _LAUNCHER_FOLDER is None:
+        import atexit
+        import shutil
+        import tempfile
+        _LAUNCHER_FOLDER = tempfile.mkdtemp(prefix="fake-client-launcher-")
+        atexit.register(shutil.rmtree, _LAUNCHER_FOLDER, ignore_errors=True)
+        path = os.path.join(_LAUNCHER_FOLDER, "launcher")
+        with open(path, "w") as handle:
+            handle.write(f"#!/bin/sh\nexec {sys.executable} \"${{0%/*}}/fake_child.py\" "
+                         "\"${0%/*}\" \"${0##*/}\" \"$@\"\n")
+        os.chmod(path, 0o555)  # Read-only: every test's link shares this one file.
+        _LAUNCHER_CONTENT = open(path).read()
+    path = os.path.join(_LAUNCHER_FOLDER, "launcher")
+    # Guard: a write or chmod through any link changes them all, so fail loudly instead of leaking.
+    if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+        raise RuntimeError("the shared fake-client launcher was modified by a test; "
+                           "copy it to an independent file before changing it")
+    return path
+
+
+def replace_fake_client(path, data, mode: int = 0o700) -> None:
+    """Give one test its own fake client at `path`: unlink the shared hard link, write a fresh file.
+
+    Writing through the link would change the shared read-only launcher for every test."""
+    path = Path(path)
+    path.unlink(missing_ok=True)
+    path.write_bytes(data if isinstance(data, bytes) else data.encode())
+    path.chmod(mode)
+
+
 def fake_provider_tools(directory: Path) -> dict[str, str]:
     """Install fake `codex` and `claude` clients; return an environment using them.
 
@@ -591,13 +645,14 @@ def fake_provider_tools(directory: Path) -> dict[str, str]:
     (directory / "codex-result.json").write_bytes(provider_fixture("codex-rate-limits.json"))
     (directory / "claude-status.json").write_bytes(provider_fixture("claude-auth-status.json"))
     (directory / "fake_child.py").write_text(FAKE_CHILD)
+    launcher = _launcher()
     for name in ("codex", "claude"):
-        script = directory / name
-        script.write_text(
-            f"#!/bin/sh\nexec {sys.executable} {directory / 'fake_child.py'} "
-            f"{directory} {name} \"$@\"\n"
-        )
-        script.chmod(0o755)
+        (directory / name).unlink(missing_ok=True)  # Repeatable for one folder.
+        try:
+            os.link(launcher, directory / name)
+        except OSError:  # Another file system: a copy still works, only without the saving.
+            import shutil
+            shutil.copy2(launcher, directory / name)
     return {"PATH": str(directory)}
 
 

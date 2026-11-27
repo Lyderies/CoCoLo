@@ -1,0 +1,30 @@
+{
+ "authority": "docs/requirements/e1b-queue.md",
+ "requirements": [
+  {
+   "id": "E1b-3",
+   "statement": "The standalone ledger owner queue bounds queued and running custody through completion, including abandonment and expiry, schedules projects fairly, and immediately returns named, counted existing busy refusals on overflow. Queue limits are configurable; decision 304 fixes measured defaults at 12 retained requests, 8 projects, 6 per project and an 800 ms wait.",
+   "source": "tests/requirements/e1b-queue.json#E1b-3"
+  },
+  {
+   "id": "E1b-4",
+   "statement": "A caller waits only until the earlier of its absolute deadline and the configured maximum of 800 ms. Expired queued work is skipped; running work completes whole, retains custody until handled, and answers busy after its deadline.",
+   "source": "tests/requirements/e1b-queue.json#E1b-4"
+  },
+  {
+   "id": "E1b-7",
+   "statement": "Accepted requests provide a handled acknowledgement after owner execution or skipping, outcome publication and custody release. Unit tests coordinate on events and controlled clocks without sleeps or timed polling.",
+   "source": "tests/requirements/e1b-queue.json#E1b-7"
+  },
+  {
+   "id": "E1b-5",
+   "statement": "Operation Exceptions become plain operation_rejected error results without sharing exception objects or tracebacks; the owner continues serving. KeyboardInterrupt and SystemExit remain on the owner thread and requests are acknowledged.",
+   "source": "tests/requirements/e1b-queue.json#E1b-5"
+  },
+  {
+   "id": "E1b-6",
+   "statement": "Close stops admission immediately with a counted closed cause and an existing caller busy reason, finishes running work whole, then refuses and acknowledges queued work and releases custody. Close is idempotent and nonblocking; drain has a finite timeout.",
+   "source": "tests/requirements/e1b-queue.json#E1b-6"
+  }
+ ]
+}

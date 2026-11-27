@@ -77,6 +77,36 @@ class PreparedDispatchTests(unittest.TestCase):
         self.assertEqual({}, service._jobs)
         self.assert_unlaunched()
 
+    def test_or4_a_published_report_may_carry_any_readable_diagnostic_reason(self):
+        """OR-4: bridge.py gives a result with no typed reason `contract_validation_failed`, and ledgers
+        written before 0.8.43 carry `inconsistent_axes`; the client must read both, and still refuse others."""
+        from dataclasses import asdict
+        from codex_agents.contracts import RESULT_DIAGNOSTIC_REASON_CODES
+        from codex_agents.history_contracts import TerminalDelivery
+        from codex_agents.learning_contracts import canonical_json
+        request = self.request()
+        binding = self.context.binding
+
+        def reply(code):
+            report = {'provider': 'codex', 'requested_model': 'gpt-6.1-sol', 'observed_model': None, 'effort': 'high',
+                      'wall_seconds': 1, 'read_containment': 'advisory', 'rerouted': False, 'outcome': 'invalid_result',
+                      'usage': None, 'result_validation_reason_code': code, 'bridge_run_id': binding.claim_id,
+                      'reviewed': True, 'terminal_state': 'failed', 'capacity_state': 'retained',
+                      'export_file_count': 1, 'export_commit': '0' * 40, 'export_manifest_digest': 'b' * 64}
+            delivery = TerminalDelivery(1, binding, 'record-1', 'c' * 64, 'd' * 64)
+            result = {'state': 'published', 'known': True, 'binding': asdict(binding), 'delivery': asdict(delivery),
+                      'report': report, 'inputs_digest': request.inputs_digest}
+            return canonical_json({'protocol_version': 1, 'request_id': request.request_id,
+                                   'request_digest': dispatch_request_digest(request), 'ready': True,
+                                   'result': result, 'reason_code': None})
+        for code in (None, 'missing_evidence'):
+            self.assertEqual('published', decode_dispatch_response(reply(code), request)['state'])
+        for code in sorted(RESULT_DIAGNOSTIC_REASON_CODES):
+            with self.subTest(code=code):
+                self.assertEqual(code, decode_dispatch_response(reply(code), request)['report']['result_validation_reason_code'])
+        with self.assertRaisesRegex(DispatchError, 'dispatch_invalid_response'):
+            decode_dispatch_response(reply('free text from a child'), request)
+
     def test_unconfigured_control_facade_refuses_dispatch_before_any_execution(self):
         request = self.request()
         raw = self.fixture.service.handle(encode_dispatch_request(request), self.marker)

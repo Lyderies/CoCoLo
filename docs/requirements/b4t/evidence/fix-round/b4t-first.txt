@@ -1,0 +1,54 @@
+.................................................F........................................F........................F
+======================================================================
+FAIL: test_J6a_adds_a_late_settled_entry_but_not_an_older_tombstone_after_restart (tests.test_b4t_takeover.OwnerIntegrationTests.test_J6a_adds_a_late_settled_entry_but_not_an_older_tombstone_after_restart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2248, in test_J6a_adds_a_late_settled_entry_but_not_an_older_tombstone_after_restart
+    self.assertEqual([run_entry(2), run_entry(3)], restarted.reconcile_runs(document, late=True)['runs'])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'run_handle': 'hrn_00000000000000000000000[237 chars]03'}] != [{'attempt': 1, 'bridge_run_id': 'brg_000000[94 chars]02'}]
+
+First list contains 1 additional elements.
+First extra element 1:
+{'run_handle': 'hrn_000000000000000000000000000000000000000000000003', 'attempt': 1, 'bridge_run_id': 'brg_00000000000000000000000000000003'}
+
+  [{'attempt': 1,
+    'bridge_run_id': 'brg_00000000000000000000000000000002',
+-   'run_handle': 'hrn_000000000000000000000000000000000000000000000002'},
+?                                                                        ^
+
++   'run_handle': 'hrn_000000000000000000000000000000000000000000000002'}]
+?                                                                        ^
+
+-  {'attempt': 1,
+-   'bridge_run_id': 'brg_00000000000000000000000000000003',
+-   'run_handle': 'hrn_000000000000000000000000000000000000000000000003'}]
+
+======================================================================
+FAIL: test_B4t_2_a_result_committed_during_the_stop_is_judged_on_the_final_store (tests.test_b4t_takeover.StoreTests.test_B4t_2_a_result_committed_during_the_stop_is_judged_on_the_final_store)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 612, in test_B4t_2_a_result_committed_during_the_stop_is_judged_on_the_final_store
+    self.assertEqual(0,done.returncode,done.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1 : Traceback (most recent call last):
+  File "<string>", line 7, in <module>
+    from codex_agents.project_results import result_digest
+ModuleNotFoundError: No module named 'codex_agents.project_results'
+
+
+======================================================================
+FAIL: test_the_successor_completes_its_adopted_record_after_recovery_and_reports_only_metadata (tests.test_b4t_takeover.StoreTests.test_the_successor_completes_its_adopted_record_after_recovery_and_reports_only_metadata)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 918, in test_the_successor_completes_its_adopted_record_after_recovery_and_reports_only_metadata
+    self.assertEqual({'predecessor_version', 'successor_version', 'state'}, set(report['records'][0]))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Items in the second set but not the first:
+'runs_listed'
+'runs_unlisted'
+
+----------------------------------------------------------------------
+Ran 116 tests in 19.291s
+
+FAILED (failures=3)

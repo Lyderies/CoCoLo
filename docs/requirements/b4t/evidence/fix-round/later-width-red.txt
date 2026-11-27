@@ -1,0 +1,23 @@
+EF
+======================================================================
+ERROR: test_later_stop_generation_and_stopped_count_have_fixed_integer_widths (tests.test_b4t_takeover.AmendmentA1Tests.test_later_stop_generation_and_stopped_count_have_fixed_integer_widths) (field='future generation')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 3088, in test_later_stop_generation_and_stopped_count_have_fixed_integer_widths
+    self.assertEqual(MAX_INTEGER,json.loads(journal.widest(document))['predecessor_service']['service_generation'])
+                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'service_generation'
+
+======================================================================
+FAIL: test_later_stop_generation_and_stopped_count_have_fixed_integer_widths (tests.test_b4t_takeover.AmendmentA1Tests.test_later_stop_generation_and_stopped_count_have_fixed_integer_widths) (field='stopped count')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 3091, in test_later_stop_generation_and_stopped_count_have_fixed_integer_widths
+    with self.assertRaises(JournalError):journal.write(document)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+AssertionError: JournalError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.014s
+
+FAILED (failures=1, errors=1)

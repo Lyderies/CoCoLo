@@ -104,6 +104,10 @@ messages and their fixes are in [troubleshooting](troubleshooting.md); nearly ev
 
 ## Keeping it working
 
+- `./setup.sh --update <project>` updates an installed project in one step: it reuses the project's
+  earlier answers and asks only for your owner-key passphrase (for the billing attestation). It stops,
+  changing nothing, if a check fails, a client is not signed in, managed files have uncommitted changes,
+  or earlier records need your choice to move or upgrade them.
 - Run `./setup.sh` again to update the install, verify it, re-run the billing attestation or change the
   owner key passphrase.
 - Re-attest whenever your billing settings change.
@@ -216,8 +220,22 @@ whatever the feature switches say). Codex still gives every child its built-in M
 (`list_mcp_resources` and two more), which no setting removes on the admitted builds; the child is
 told not to call them, and a call is stopped as `codex_tool_not_allowed:mcp_tool_call`, with no result.
 Raw child results must leave admission `unverified` and cannot attest their own timeout.
-Those claims are fenced with `inconsistent_axes` before result binding; actual bridge-observed
-timeouts keep their authoritative timed-out outcome.
+Those claims are fenced before result binding, each with its own fixed reason:
+`child_set_admission` and `child_set_timeout`, and for the other axis rules
+`axes_status_verdict_mismatch`, `axes_verdict_without_completion`,
+`axes_admission_without_completion` and `axes_retry_lineage` (older ledgers may still show
+`inconsistent_axes`). Actual bridge-observed timeouts keep their authoritative timed-out outcome.
+A verifier (verification worker) reports its verdict and findings only: the host sets its
+admission to `unverified` and its status from its execution state and verdict, and lists each
+value it replaced in the dispatch report (`host_set_fields`). It never fills in a verdict or
+repairs a timeout claim, and no other role's result is repaired. The verifier's output schema
+offers only `unverified` admission and no `timed_out` execution state.
+The bridge keeps each child's raw final answer (credential-shaped text removed) owner-only in the
+project's artifact folder, named by its SHA-256 and recorded in the report as `raw_answer`; it
+expires with worker results (7 days). A Codex child's model turns, command count and peak
+per-turn input tokens are in the report (`codex_turns`, `codex_commands`,
+`peak_turn_input_tokens`), and a run that starts more commands than its nominal `max_tool_calls`
+is stopped as `tool_call_limit_exceeded`.
 
 Bridge prompts carry the same allowed values and consistency rules as `result-preflight`,
 with the literal result shape and its string-array types. A finished review can use completed

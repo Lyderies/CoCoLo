@@ -58,10 +58,32 @@ WATCHDOG_INTERVAL_SECONDS = 0.5
 WATCHDOG_IDENTIFY_SECONDS = 5
 WATCHDOG_READY_SECONDS = 10
 WATCHDOG_READY = b"ready\n"
+# C3 (decision 49): the detached watchdog is a thin dead man's switch. Only when the service that started it has
+# died, it calls the container stop tool (`container_runtime.ContainerRuntime.stop`, which owns every cleanup of
+# the processes it starts) ONCE, in this process and thread, under one fixed monotonic clock for the whole
+# failure path: WATCHDOG_STOP_TOTAL_SECONDS from the moment the service is found dead. The stop gets the time up
+# to that clock less WATCHDOG_TERMINATE_RESERVE_SECONDS (it caps its own grace by the time it has, see the stop
+# tool); the tree is then ended inside what is left. There is no retry loop, no helper process and no thread: what
+# is not gone afterwards is finished by the restarted service's recovery, which asks the OS again. The result is
+# written (`write_json_record`) and the exit status tells what happened.
+WATCHDOG_STOP_TOTAL_SECONDS = 17.0
+WATCHDOG_TERMINATE_RESERVE_SECONDS = 2.0
+# Exit statuses of a watchdog that found its service dead (1 stays "could not take the container on": an
+# exception before it watched anything). 0: the container proven gone and the tree ended.
+WATCHDOG_EXIT_GONE = 0
+WATCHDOG_EXIT_NOT_TAKEN = 1  # container mode: the child could not be identified, so the container is not taken on
+WATCHDOG_EXIT_NOT_GONE = 2  # the stop answered but the container is not proven gone (or its call failed)
+WATCHDOG_EXIT_TREE_UNCONFIRMED = 3  # the container is gone but the tree's end is not confirmed
+WATCHDOG_EXIT_DEADLINE = 4  # the total ran out first
 # Kill rounds: each takes a fresh snapshot, adopts what the tree started since and
 # kills every live tracked process, until a round finds none left alive.
 MAX_KILL_ROUNDS = 5
+# Identities not yet proven stopped that cleanup evidence holds at once; one proven stopped
+# is dropped (except the root's), so a long run that starts many short processes never reaches it.
 MAX_CLEANUP_IDENTITIES = 4096
+# A failed process listing is retried this often, this far apart, before cleanup is refused.
+SNAPSHOT_RETRY_ATTEMPTS = 5
+SNAPSHOT_RETRY_PAUSE_SECONDS = 0.1
 KILL_ROUND_PAUSE_SECONDS = 0.05
 
 # macOS: sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid) fills one 648-byte
@@ -102,8 +124,9 @@ Table = dict[int, int]
 Record = tuple[int, int, str, bool]
 
 
-def process_table() -> Table | None:
-    """This user's pids and their listed parents from a fixed-path `ps`; None when unavailable."""
+def process_table(timeout: float | None = None) -> Table | None:
+    """This user's pids and their listed parents from a fixed-path `ps`; None when unavailable.
+    `timeout` (default SNAPSHOT_TIMEOUT_SECONDS) is how long the listing may take."""
 
     path = next((candidate for candidate in PS_PATHS if os.path.isfile(candidate)), None)
     if path is None:
@@ -118,7 +141,7 @@ def process_table() -> Table | None:
             env=PS_ENVIRONMENT,
         ) as lister:
             try:
-                output, _ = lister.communicate(timeout=SNAPSHOT_TIMEOUT_SECONDS)
+                output, _ = lister.communicate(timeout=SNAPSHOT_TIMEOUT_SECONDS if timeout is None else timeout)
             except subprocess.TimeoutExpired:
                 lister.kill()
                 lister.communicate()
@@ -270,6 +293,88 @@ def process_gone(pid: int) -> bool:
     except (OSError, ValueError, AttributeError):
         return False
     return False
+
+
+def create_child(factory, arguments, options):
+    """O0c review M2: run the process factory (a `subprocess.Popen` class) and say what a failure left.
+
+    Returns (process, error, child_left). On success: (process, None, True). On failure, `child_left`
+    is False only when no child can exist: the factory raised an ordinary error before it created one
+    (refused before the fork, or the fork itself failed), or it created one and reaped it itself
+    (CPython's Popen waits for a child whose exec failed before raising). A child it created and did
+    not reap is returned with the error, so the caller can stop and reap it. An interruption with no
+    child recorded, a factory that is not a class (what it left cannot be read), or any doubt, leaves
+    `child_left` True. Never raises.
+    """
+
+    if not isinstance(factory, type):
+        try:
+            return factory(arguments, **options), None, True
+        except BaseException as error:  # noqa: BLE001 - reported to the caller, which re-raises it
+            return None, error, True
+    try:
+        process = factory.__new__(factory)
+        process.__init__(arguments, **options)
+    except BaseException as error:  # noqa: BLE001 - reported to the caller, which re-raises it
+        process = locals().get("process")
+        created = getattr(process, "_child_created", False) is True
+        if created and getattr(process, "returncode", None) is None:
+            return process, error, True
+        return None, error, not (created or isinstance(error, Exception))
+    return process, None, True
+
+
+def group_empty(group: int) -> bool:
+    """No process (of any user) is in this process group: the kernel answers ESRCH."""
+
+    if type(group) is not int or group <= 1:
+        return False
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def end_child(process, *, wait_s: float, end_group_after_reap: bool = False) -> str | None:
+    """O0c review M4: end one child started in a session of its own; None once it is proven gone.
+
+    Proof: the child is this process's own, reaped by its wait, and no process is left in its group
+    (the group it led; any descendant that did not change group is in it). While the child is not
+    reaped its pid, and so its group id, cannot belong to anyone else, so the whole group is killed
+    first. `end_group_after_reap` (only right after the child was reaped, where its group cannot yet
+    have been replaced) also kills what is left in the group and waits up to `wait_s` for it to empty.
+    Otherwise the reason it is not proven: `not_reaped` or `group_not_empty`. Never raises.
+    """
+
+    try:
+        pid = process.pid
+        if process.returncode is None:
+            with contextlib.suppress(OSError):
+                os.killpg(pid, signal.SIGKILL)
+            with contextlib.suppress(OSError):
+                process.kill()
+            try:
+                process.wait(timeout=wait_s)
+            except subprocess.TimeoutExpired:
+                return "not_reaped"
+            end_group_after_reap = True  # reaped just now, after its group was killed
+        if group_empty(pid):
+            return None
+        if not end_group_after_reap:
+            return "group_not_empty"
+        with contextlib.suppress(OSError):
+            os.killpg(pid, signal.SIGKILL)
+        end = time.monotonic() + wait_s
+        while not group_empty(pid):
+            if time.monotonic() >= end:
+                return "group_not_empty"
+            time.sleep(0.01)
+        return None
+    except Exception:  # noqa: BLE001 - nothing proven
+        return "unchecked"
 
 
 def new_run_tag() -> str:
@@ -615,23 +720,57 @@ class ProcessTree:
         self.identified = False
         # Unlike the signalling set, cleanup evidence never forgets an
         # unreadable identity. None is not proof that a process has stopped.
+        # An identity proven stopped is dropped (the root's stays, as the anchor of the
+        # evidence), so only identities not yet proven stopped count toward the limit.
         self._cleanup_seen: dict[tuple[int, str], bool] = {}
         self._cleanup_incomplete = False
+        # A process listing failed since the last good one. With a run marker a later good
+        # listing, or the marker scan, covers what the gap hid; without one it is permanent.
+        self._snapshot_missed = False
+
+    def snapshot_failed(self) -> None:
+        """A process listing failed: cleanup is unproven until a later listing succeeds."""
+        if self.run_tag is None:
+            self._cleanup_incomplete = True
+        else:
+            self._snapshot_missed = True
+
+    def _retry_snapshot(self) -> bool:
+        """After a failed listing, bounded fresh attempts; True once a listing succeeded."""
+        for attempt in range(SNAPSHOT_RETRY_ATTEMPTS):
+            if attempt:
+                time.sleep(SNAPSHOT_RETRY_PAUSE_SECONDS)
+            table = process_table()
+            if table is not None:
+                self.update(table)
+                return True
+        return False
+
+    def _snapshot_covered(self) -> bool:
+        return not self._snapshot_missed or self._retry_snapshot() and not self._snapshot_missed
+
+    def _mark_stopped(self, identity: tuple[int, str]) -> None:
+        if identity == (self.root, self.root_birth):
+            self._cleanup_seen[identity] = True
+        else:
+            self._cleanup_seen.pop(identity, None)
 
     def _remember_cleanup(self, pid: int, birth: str, record: Record | None) -> None:
         identity = (pid, birth)
+        if record is not None and (record[2] != birth or record[3]):
+            self._mark_stopped(identity)
+            return
         if identity not in self._cleanup_seen:
-            if len(self._cleanup_seen) >= MAX_CLEANUP_IDENTITIES:
+            unproven = sum(1 for stopped in self._cleanup_seen.values() if not stopped)
+            if unproven >= MAX_CLEANUP_IDENTITIES:
                 self._cleanup_incomplete = True
                 return
             self._cleanup_seen[identity] = False
-        if record is not None and (record[2] != birth or record[3]):
-            self._cleanup_seen[identity] = True
-        elif record is None and not self._cleanup_seen[identity]:
+        if record is None and not self._cleanup_seen[identity]:
             # Gone means it exited and its parent reaped it (a child's quick shell command,
             # say); anything else unreadable stays unproven.
             if process_gone(pid):
-                self._cleanup_seen[identity] = True
+                self._mark_stopped(identity)
             else:
                 self._cleanup_incomplete = True
 
@@ -645,7 +784,8 @@ class ProcessTree:
         """
         root = (self.root, self.root_birth)
         if (not self.identified or self._cleanup_incomplete or root not in self._cleanup_seen
-                or process.pid != self.root or type(process.returncode) is not int):
+                or process.pid != self.root or type(process.returncode) is not int
+                or not self._snapshot_covered()):
             return False
         for (pid, birth), stopped in tuple(self._cleanup_seen.items()):
             if not stopped and (pid, birth) != root:
@@ -653,6 +793,24 @@ class ProcessTree:
         return not self._cleanup_incomplete and all(
             stopped or identity == root for identity, stopped in self._cleanup_seen.items()
         ) and self._no_tagged_process()
+
+    def ended_after_reap(self, process) -> bool:
+        """Fresh, read-only proof for an owned root reaped on an earlier pass.
+
+        Earlier snapshots can be inconclusive. Reuse normal tracked-tree cleanup
+        proof and additionally prove its group and session empty now. No signal
+        is sent: the reaped PID may already identify someone else's process.
+        An untagged or unidentified tree cannot recover lost tracking this way.
+        The registry must still check its original Popen/tree custody and birth.
+        """
+        if (not self.identified or type(self.root_birth) is not str
+                or type(self.run_tag) is not str or RUN_TAG.fullmatch(self.run_tag) is None
+                or process.pid != self.root or type(process.returncode) is not int
+                or not group_empty(self.root)):
+            return False
+        from .launch_journal import _session_members
+        members = _session_members({self.root}, {self.root: self.root_birth})
+        return members is not None and not members and self.cleanup_after_owned_wait(process)
 
     def _no_tagged_process(self) -> bool:
         """No process outside the tracked tree still carries this run's marker.
@@ -672,7 +830,8 @@ class ProcessTree:
         root, so the root must also be seen stopped (a zombie, reaped, or its
         pid reborn). An unreadable record, a lost snapshot or overflow is unknown.
         """
-        if not self.identified or self._cleanup_incomplete or (self.root, self.root_birth) not in self._cleanup_seen:
+        if (not self.identified or self._cleanup_incomplete or (self.root, self.root_birth) not in self._cleanup_seen
+                or not self._snapshot_covered()):
             return False
         for (pid, birth), stopped in tuple(self._cleanup_seen.items()):
             if not stopped:
@@ -687,7 +846,7 @@ class ProcessTree:
         """
 
         if table is None:
-            self._cleanup_incomplete = True
+            self.snapshot_failed()
             return False
         record = process_record(self.root)
         if record is None or (birth is not None and record[2] != birth):
@@ -742,6 +901,7 @@ class ProcessTree:
                 grew = True
         # Exited processes are forgotten; their pids may belong to anything later.
         self.tracked = {pid: self.tracked[pid] for pid in live}
+        self._snapshot_missed = False  # A listing succeeded and what it showed is adopted.
         return live
 
     def root_exited(self) -> bool:
@@ -750,28 +910,56 @@ class ProcessTree:
         record = self._record(self.root)
         return record is None or record[3]
 
-    def terminate(self) -> None:
+    def _listing(self, deadline: float | None) -> Table | None:
+        """A process listing. With a deadline (the container watchdog's) a failed one is asked again, within it:
+        the answer is None only when it could not be had in time (CS-6)."""
+        if deadline is None:
+            return process_table()
+        for attempt in range(SNAPSHOT_RETRY_ATTEMPTS):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return None
+            if attempt:
+                time.sleep(min(SNAPSHOT_RETRY_PAUSE_SECONDS, left))
+                left = deadline - time.monotonic()  # the pause used some of it
+                if left <= 0:
+                    return None
+            table = process_table(min(SNAPSHOT_TIMEOUT_SECONDS, left))
+            if table is not None:
+                return table
+        return None
+
+    def terminate(self, deadline: float | None = None) -> bool:
         """Kill every tracked process in rounds, each verified just before its signal.
 
         A group is killed only through a verified leader whose record shows it
         leads that group: the root, whose group is its own for life, or another
         tracked process. Nothing is stopped, so nothing is ever left stopped.
+
+        True only when a round after the first signals found nothing alive from a listing that
+        succeeded; a failed listing, rounds used up, or a `deadline` (monotonic) reached first
+        is False, never "tree empty".
         """
 
         if not self.identified:
-            return
+            return False
         for round_number in range(MAX_KILL_ROUNDS):
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
             if round_number:
-                time.sleep(KILL_ROUND_PAUSE_SECONDS)
-            table = process_table()
+                time.sleep(KILL_ROUND_PAUSE_SECONDS if deadline is None
+                           else max(0.0, min(KILL_ROUND_PAUSE_SECONDS, deadline - time.monotonic())))
+                if deadline is not None and time.monotonic() >= deadline:
+                    return False
+            table = self._listing(deadline)
             if table is not None:
                 self.update(table)
             else:
-                self._cleanup_incomplete = True
+                self.snapshot_failed()
             records = {pid: self._record(pid) for pid in sorted(self.tracked)}
             running = [pid for pid, record in records.items() if record and not record[3]]
             if round_number and not running:
-                return
+                return table is not None
             for group, record in records.items():
                 if record is None or record[1] != group or _excluded_group(group):
                     continue
@@ -785,7 +973,8 @@ class ProcessTree:
                         os.kill(pid, signal.SIGKILL)
             # Without a snapshot nothing new can be adopted.
             if table is None:
-                return
+                return False
+        return False
 
 
 def await_ready(stream, seconds: float) -> bool:
@@ -806,20 +995,17 @@ def await_ready(stream, seconds: float) -> bool:
     return received == WATCHDOG_READY
 
 
-def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) -> bool:
-    """Record, owner-only and atomically, that the watched tree of this child is confirmed empty.
+def write_json_record(path: str, body: dict) -> bool:
+    """Write `body` as one owner-only JSON file, atomically and flushed (the file, then its folder).
 
-    A project service's launch journal reads it before it settles a run whose
-    service was lost. Any failure leaves no marker, which is never evidence.
-    """
+    False on any failure, leaving no file (and no temporary one)."""
     directory, name = os.path.split(path)
-    body = json.dumps({"version": 1, "bridge_run_id": bridge_run_id, "pid": pid, "birth": birth,
-                       "confirmed": True}, sort_keys=True, separators=(",", ":")).encode("ascii")
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("ascii")
     temporary = os.path.join(directory, ".%s.%d.tmp" % (name, os.getpid()))
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
-            os.write(descriptor, body)
+            os.write(descriptor, encoded)
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
@@ -836,8 +1022,110 @@ def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) ->
     return True
 
 
+def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) -> bool:
+    """Record, owner-only and atomically, that the watched tree of this child is confirmed empty.
+
+    A project service's launch journal reads it before it settles a run whose
+    service was lost. Any failure leaves no marker, which is never evidence.
+    """
+    return write_json_record(path, {"version": 1, "bridge_run_id": bridge_run_id, "pid": pid, "birth": birth,
+                                    "confirmed": True})
+
+
+class _ContainerWatch:
+    """C3: the run's container, as the detached watchdog sees it (container mode)."""
+
+    def __init__(self, runtime, name: str, grace: int, cgroup: str | None, parent: int, labels: dict,
+                 record: str | None) -> None:
+        self.runtime, self.name, self.grace, self.cgroup, self.parent = runtime, name, grace, cgroup, parent
+        self.labels = labels  # the run's own: the stop leaves a container under this name that lacks them
+        self.record = record  # where the result is written, or None
+
+    def parent_alive(self) -> bool:
+        # The service that started this watchdog is its parent; once it dies the watchdog is
+        # reparented, so its parent pid changes and can never be the service's again.
+        return os.getppid() == self.parent
+
+    def stop(self, deadline: float):
+        """The ONE call of the stop tool: stop and remove the container, its run's labels checked first, with the
+        configured grace (the tool cuts it to the time `deadline` leaves) and `deadline` (monotonic) as its
+        absolute time limit."""
+        return self.runtime.stop(self.name, grace_seconds=self.grace, cgroup_path=self.cgroup, labels=self.labels,
+                                 deadline=deadline)
+
+
+_CONTAINER_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}-[0-9a-f]{32}")
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
+
+
+def container_watcher(argument: str) -> _ContainerWatch:
+    """C3: the container this watchdog stops through the container primitive (`container_runtime`,
+    loaded from this file's own folder: the watchdog runs this file as a script). ValueError when
+    the bridge's argument is not exactly what `container_launch.watchdog_config` writes."""
+    try:
+        config = json.loads(argument)
+    except (TypeError, ValueError, RecursionError):
+        raise ValueError("the container argument is not JSON") from None
+    keys = {"project", "prefix", "podman", "global", "name", "grace", "cgroup", "parent", "run", "record"}
+    if (type(config) is not dict or config.keys() != keys or type(config["podman"]) is not str
+            or not os.path.isabs(config["podman"]) or type(config["global"]) is not list
+            or not all(type(item) is str for item in config["global"])
+            or type(config["name"]) is not str or _CONTAINER_NAME.fullmatch(config["name"]) is None
+            or type(config["grace"]) is not int or not 0 <= config["grace"] <= 3600
+            or (config["cgroup"] is not None and type(config["cgroup"]) is not str)
+            or type(config["parent"]) is not int or config["parent"] <= 1
+            or type(config["run"]) is not str or _RUN_ID.fullmatch(config["run"]) is None
+            or (config["record"] is not None
+                and (type(config["record"]) is not str or not os.path.isabs(config["record"])))
+            or type(config["project"]) is not str or type(config["prefix"]) is not str):
+        raise ValueError("the container argument is invalid")
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "container_runtime.py")
+    spec = importlib.util.spec_from_file_location("cocolo_watchdog_container_runtime", path)
+    if spec is None or spec.loader is None:
+        raise ValueError("the container primitive is missing")
+    module = sys.modules.get(spec.name)
+    if module is None:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    runner = module.SubprocessPodman(config["podman"], global_args=config["global"])
+    runtime = module.ContainerRuntime(config["project"], name_prefix=config["prefix"], runner=runner)
+    labels = {module.PROJECT_LABEL: config["project"], module.RUN_LABEL: config["run"]}
+    return _ContainerWatch(runtime, config["name"], config["grace"], config["cgroup"], config["parent"], labels,
+                           config["record"])
+
+
+def _stop_and_end(container, tree) -> int:
+    """The failure path of a watchdog whose service died: the stop tool once, then the tree, both inside
+    WATCHDOG_STOP_TOTAL_SECONDS; the result written; the exit status. Nothing is retried and nothing is
+    swallowed: an exception from the stop is an "error" outcome, in the record and in the status."""
+    begun = time.monotonic()
+    end = begun + WATCHDOG_STOP_TOTAL_SECONDS
+    try:
+        answer = container.stop(end - WATCHDOG_TERMINATE_RESERVE_SECONDS)
+        outcome, detail, gone = str(answer.outcome), str(answer.detail), bool(answer.gone)
+    except Exception as error:  # noqa: BLE001 - reported, never swallowed
+        outcome, detail, gone = "error", f"{type(error).__name__}: {error}", False
+    ended = tree.terminate(end)  # Nothing records the stop here: the restarted service asks the OS again.
+    if outcome == "deadline" or time.monotonic() >= end:  # the one deadline decides first, whatever else is true
+        status = WATCHDOG_EXIT_DEADLINE
+    elif gone and ended:
+        status = WATCHDOG_EXIT_GONE
+    elif gone:
+        status = WATCHDOG_EXIT_TREE_UNCONFIRMED
+    else:
+        status = WATCHDOG_EXIT_NOT_GONE
+    if container.record is not None:
+        write_json_record(container.record, {"version": 1, "name": container.name, "outcome": outcome,
+                                             "detail": detail[:300], "tree_ended": ended, "exit": status,
+                                             "seconds": round(time.monotonic() - begun, 1),
+                                             "at": int(time.time())})
+    return status
+
+
 def watch(root: int, birth: str, deadline: float, announce, marker: str | None = None,
-          bridge_run_id: str | None = None, run_tag: str | None = None) -> None:
+          bridge_run_id: str | None = None, run_tag: str | None = None, *, container=None) -> int:
     """The detached deadline watchdog for one bridged child.
 
     It verifies the child's identity from the bridge, which keeps the child
@@ -849,24 +1137,35 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
     With `marker`, once the tree it tracked is confirmed empty (and, with
     `run_tag`, no process still carries the run's marker) it records that there
     before exiting (`write_cleanup_marker`).
+
+    C3 (decision 49), with `container` (container mode: the child streams a container's output):
+    once the service that started it has died, the container is stopped by ONE call of the stop
+    tool and the tree is ended, inside WATCHDOG_STOP_TOTAL_SECONDS (see `_stop_and_end`). While the
+    service lives it stops its own runs' containers, so the watchdog leaves them to it. Returns
+    the exit status: WATCHDOG_EXIT_GONE (0) unless that failure path ended otherwise.
     """
 
     tree = ProcessTree(root, run_tag)
     give_up = time.monotonic() + WATCHDOG_IDENTIFY_SECONDS
     while not tree.identify(process_table(), birth):
         if time.monotonic() >= give_up:
-            return
+            return WATCHDOG_EXIT_GONE if container is None else WATCHDOG_EXIT_NOT_TAKEN
         time.sleep(0.1)
     announce()
     while True:
         table = process_table()
         if table is not None:
             tree.update(table)
-        if tree.root_exited() or time.monotonic() >= deadline:
-            tree.terminate()
+        orphaned = container is not None and not container.parent_alive()
+        if orphaned or tree.root_exited() or time.monotonic() >= deadline:
+            status = WATCHDOG_EXIT_GONE
+            if orphaned:
+                status = _stop_and_end(container, tree)
+            else:
+                tree.terminate()
             if marker is not None and bridge_run_id is not None and tree.cleanup_confirmed():
                 write_cleanup_marker(marker, bridge_run_id, root, tree.root_birth)
-            return
+            return status
         time.sleep(WATCHDOG_INTERVAL_SECONDS)
 
 
@@ -881,6 +1180,12 @@ def _announce() -> None:
 
 
 if __name__ == "__main__":
-    # root birth deadline [marker bridge_run_id [run_tag]]
-    watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
-          *(sys.argv[4:7] if len(sys.argv) in (6, 7) else ()))
+    # root birth deadline [marker bridge_run_id [run_tag]] | root birth deadline --container <json>
+    if len(sys.argv) == 6 and sys.argv[4] == "--container":
+        # A container it cannot take on is never left unguarded quietly: it exits without
+        # acknowledging, so the bridge refuses the run. Otherwise the exit status is `watch`'s.
+        sys.exit(watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
+                       container=container_watcher(sys.argv[5])))
+    else:
+        watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
+              *(sys.argv[4:7] if len(sys.argv) in (6, 7) else ()))

@@ -1,0 +1,10 @@
+{
+ "authority": "docs/requirements/rsb-memory-holds.md",
+ "requirements": [
+  {
+   "id": "RS-B-4",
+   "statement": "Instance-bound driver and preparation rows commit before their effects, retire only after memory retirement, and recover only from positive stopped-instance evidence; preserve withdrawal and handoff custody (M1-M8, I1, L4, L6, L7).",
+   "source": "tests/requirements/rsb-memory-holds.json#RS-B-4"
+  }
+ ]
+}

@@ -13,7 +13,7 @@ import unittest
 
 import tests.support  # noqa: F401
 from tests import test_account_claim_storage as fixtures
-from tests.learning_support import admit_provider
+from tests.learning_support import admit_provider, replace_fake_client
 from tests.test_bridge import CLEAN
 
 from codex_agents.account_api import AccountRequest, account_request_digest
@@ -129,7 +129,7 @@ time.sleep(30)
             # One inert fixture client serves metadata/help and the
             # actual slow child. Preparation resolves this same original file.
             wrapper = self.bridge.tools/'codex'
-            wrapper.write_text('#!'+sys.executable+'\n'+f'''
+            replace_fake_client(wrapper, '#!'+sys.executable+'\n'+f'''
 import json, os, sys, time
 from pathlib import Path
 if sys.argv[1:2] == ['exec'] and '-m' in sys.argv:
@@ -540,7 +540,7 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
         self.service.close()
         self.jobs = AccountClaimJobs(self.base.views, SignatureIntakeLimits(2, 2, 512, 262_144, 2),
             SignatureWorkerLimits(2, 4*1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000),
-            SQLReadLimits(100_000, 1000, 2*1_048_576), open_limits=OpenOwnerLimits(4, 16, 1_048_576))
+            SQLReadLimits(100_000, 1000, 2*1_048_576), open_limits=OpenOwnerLimits(4, 1_048_576))  # OP-1: no cap on finished requests
         self.jobs.bootstrap()
         self.addCleanup(self.drain_jobs)
         self.service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.base.views, authorizer=self.authorize,

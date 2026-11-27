@@ -1,0 +1,38 @@
+FFF
+======================================================================
+FAIL: test_S14G_1_source_driven_joins_use_full_key (tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_source_driven_joins_use_full_key) (sql="SELECT MAX(t) FROM (SELECT MAX(created_at_ms) AS t FROM result_reservations WHERE project_id=:project AND orchestration_handle=:handle UNION ALL SELECT MAX(h.taken_at_ms) FROM result_reservations s JOIN project_holds h ON h.project_id=s.project_id AND h.kind='reservation' AND h.identity=s.claim_id WHERE s.project_id=:project AND s.orchestration_handle=:handle UNION ALL SELECT MAX(created_at_ms) FROM result_leases WHERE project_id=:project AND json_extract(CAST(binding AS TEXT),'$.orchestration_handle')=:handle UNION ALL SELECT MAX(h.taken_at_ms) FROM result_leases JOIN project_holds h ON h.project_id=result_leases.project_id AND h.kind='lease' AND h.identity=result_leases.run_handle||':'||result_leases.attempt WHERE result_leases.project_id=:project AND json_extract(CAST(binding AS TEXT),'$.orchestration_handle')=:handle)")
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 88, in test_S14G_1_source_driven_joins_use_full_key
+    self.assert_full_key(sql, params, 'h' if 'project_holds h' in sql else 'r')
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 57, in assert_full_key
+    self.assertIn(FULL_KEY, step, steps)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'project_id=? AND kind=? AND identity=?' not found in 'SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=?)' : ['CO-ROUTINE (subquery-4)', 'COMPOUND QUERY', 'LEFT-MOST SUBQUERY', 'SEARCH result_reservations USING INDEX result_reservations_orchestration (project_id=? AND orchestration_handle=?)', 'UNION ALL', 'SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=?)', 'SEARCH s USING INDEX sqlite_autoindex_result_reservations_1 (project_id=? AND claim_id=?)', 'UNION ALL', 'SEARCH result_leases USING INDEX result_leases_orchestration (project_id=? AND <expr>=?)', 'UNION ALL', 'SEARCH result_leases USING INDEX result_leases_orchestration (project_id=? AND <expr>=?)', 'SEARCH h USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)', 'SEARCH (subquery-4)']
+
+======================================================================
+FAIL: test_S14G_1_source_driven_joins_use_full_key (tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_source_driven_joins_use_full_key) (sql="SELECT 1 FROM result_reservations s JOIN project_holds r ON r.project_id=s.project_id AND r.kind='reservation' AND r.identity=s.claim_id WHERE r.state='released' AND ((r.release_kind='completed' AND (s.state='reserved' OR NOT EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a WHERE a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt))) OR (r.release_kind IN ('lost','crashed','released_unacknowledged') AND NOT EXISTS(SELECT 1 FROM project_account_settlements t WHERE t.project_id=s.project_id AND t.run_handle=s.run_handle AND t.attempt=s.attempt AND t.release_kind=r.release_kind AND t.claim_id IS s.claim_id))) LIMIT 1")
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 88, in test_S14G_1_source_driven_joins_use_full_key
+    self.assert_full_key(sql, params, 'h' if 'project_holds h' in sql else 'r')
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 56, in assert_full_key
+    self.assertTrue(step.startswith('SEARCH'), steps)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : ['SCAN r', 'SEARCH s USING INDEX sqlite_autoindex_result_reservations_1 (project_id=? AND claim_id=?)', 'CORRELATED SCALAR SUBQUERY 1', 'SEARCH a USING COVERING INDEX sqlite_autoindex_project_cleanup_acknowledgements_1 (project_id=? AND run_handle=? AND attempt=?)', 'CORRELATED SCALAR SUBQUERY 2', 'SEARCH t USING INDEX sqlite_autoindex_project_account_settlements_1 (project_id=? AND run_handle=? AND attempt=?)']
+
+======================================================================
+FAIL: test_S14G_1_takeover_adoption_reads_only_the_processed_kinds_via_live_index (tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_takeover_adoption_reads_only_the_processed_kinds_via_live_index)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 94, in test_S14G_1_takeover_adoption_reads_only_the_processed_kinds_via_live_index
+    self.assertTrue(any('project_holds_kind_due (kind=? AND state=?)' in step for step in steps), steps)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : ['SCAN project_holds']
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.017s
+
+FAILED (failures=3)

@@ -25,9 +25,13 @@ details. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
    kept in the installer folder of your orchestrator records. A project
    that has never been set up needs a prepared `operational-checks.json` (see the
    [recipe](manual-setup.md#operational-checks)); the wizard asks for its path and works from a private
-   snapshot of it. An existing install offers: update the install and walk through every step, verify the
-   install only, re-run the billing attestation only, change the owner key passphrase, replace a lost
-   owner key, choose another path, or quit. The menu warns if the owner key file does not match its record,
+   snapshot of it. A project with no install offers: set up (recommended: every step with only your
+   own choices asked: providers, committing, earlier records, the Codex profile and the commands rule),
+   configure step by step (every question, as before), or quit. An existing install offers: update this
+   project (recommended: every step with no menu, as `./setup.sh --update`), configure, or quit.
+   Configure opens the full menu: update this project, update the install and walk through every step,
+   verify the install only, re-run the billing attestation only, change the owner key passphrase,
+   replace a lost owner key, choose another path, or quit. The menu warns if the owner key file does not match its record,
    and says when the key was last replaced.
 3. **Providers.** Codex children, Claude children and which Claude models, and "Let Codex sessions
    orchestrate Claude children". An existing `provider-routing.json` can be kept.
@@ -69,7 +73,10 @@ details. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
      projects on the machine stop working with the orchestrator until you run setup for each of them.
      Do it while no child is running in any project. "No" changes nothing and skips registration: this
      project cannot use the orchestrator until you upgrade, or install the earlier version here again.
-6. **Billing.** Hands the terminal to `scripts/attest.py`; the wizard never touches its screens.
+6. **Billing.** Hands the terminal to `scripts/attest.py`; the wizard never touches its screens. An update
+   (`--update`, or "Update this project") skips it when every enabled provider, observed again first, has
+   an attestation for its current account, so no passphrase is asked; an answers file and "Re-run the
+   billing attestation only" always run it.
 7. **Profile.** Only when Codex sessions may orchestrate Claude children: creates
    `~/.codex/orchestrator.config.toml` with network on, for sessions started with `codex -p orchestrator`.
    An existing profile is compared by its effective settings and never overwritten.
@@ -122,7 +129,9 @@ or a folder above it (a nested project's tree, `.git` and `.claude` included).
   `~/.local`), so a sibling install like `/srv/work/tools` is refused. Owner tools and the runtime use
   one list. It runs with `-I -B -S -X pycache_prefix=/dev/null`, so nothing in the working folder, the
   environment, site-packages or a bytecode cache loads.
-- **Clients and basic tools.** The wizard runs with `/bin/bash` and finds its basic tools only in the
+- **Clients and basic tools.** `./setup.sh` is a short launcher run by `/bin/bash`: it checks the
+  interpreter as above, then starts the wizard itself, which is Python (`scripts/setup-wizard.py` and
+  `scripts/setup_wizard/`), with those isolation flags. Both find basic tools only in the
   system folders, so a program planted in an earlier `PATH` entry (say `~/Work/tools/bin`, which a session
   opened on `~/Work` could write) never runs; your `PATH` is used only to find `python3`, which is checked
   as above. The Codex and Claude sign-in checks go through the runtime's own client lookup: the client is
@@ -169,3 +178,33 @@ or a folder above it (a nested project's tree, `.git` and `.claude` included).
   on Claude Code's tools, not a sandbox: a command spelled another way (for example through `bash -c` or a
   script that starts the CLI itself) is not matched, so do not give a Claude primary more trust because of
   them.
+
+## Scripted setup: `./setup.sh --answers FILE`
+
+Installs a project with no menu, every answer coming from a JSON file; attest.py still asks for your
+owner-key passphrase. The file is checked before anything changes, and a missing, unknown or invalid
+answer is refused by name (exit 2).
+
+```json
+{
+  "project": "/path/to/project",
+  "operational_checks": "/path/to/operational-checks.json",
+  "providers": {"codex": "on", "claude": "on", "claude_models": "claude-sonnet-5-5", "bridge": "off"},
+  "commit": true,
+  "commands_rule": false,
+  "move_records": false,
+  "upgrade_records": false
+}
+```
+
+- `operational_checks` is needed only when the project has none yet.
+- `codex_profile` (`"create"` or `"skip"`) is needed when `bridge` is `"on"`.
+- `billing_sign_again` (true or false, optional): a re-run skips signing the billing statements when this
+  project's attestation is already signed and current; `true` signs again.
+- `move_records` and `upgrade_records` (true or false) are always required, so every consent is stated
+  before anything changes; they are used only if setup finds earlier records to move or upgrade.
+- The run stops at the first step that fails, with that step's reason and the summary; nothing after
+  it runs. `./setup.sh --update` does the same.
+- `commit: false` leaves the install for you to commit; it cannot be verified until you do, so the
+  run ends with exit status 1 and says so.
+

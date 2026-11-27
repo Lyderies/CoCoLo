@@ -1792,6 +1792,30 @@ os.kill(os.getpid(), signal.SIGKILL)
         self.assertEqual("missing", report()["codex"]["state"])
         self.assertNotIn(identity["account_fingerprint"], json.dumps(report()))
 
+    def test_attestation_status_is_not_present_for_a_changed_statement(self) -> None:
+        # Review 040-screens-r1 MED-1 (owner decision 37): the wizard skips signing only on "present", so a
+        # stored statement that differs from what the owner signed must not say "present". (A replaced key and
+        # another account are the sibling test above; the attestation has no expiry field, so none to test.)
+        def state():
+            return self.ledger.provider_attestation_status(self.project_id)["codex"]["state"]
+        identity = self.observe()[0]
+        self.attest("codex", identity["account_fingerprint"])
+        self.assertEqual("present", state())
+        connection = self.ledger._connection
+        row = connection.execute(
+            "SELECT record_id,content FROM records WHERE record_type='billing_attestation'").fetchone()
+        original = bytes(row["content"])
+        altered = json.loads(original)
+        altered["issued_at"] += 1
+        altered["observed_at_ms"] += 1
+        for (trigger,) in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='records'").fetchall():
+            connection.execute(f'DROP TRIGGER "{trigger}"')
+        connection.execute("UPDATE records SET content=? WHERE record_id=?", (json.dumps(altered).encode(), row["record_id"]))
+        self.assertEqual("missing", state())
+        connection.execute("UPDATE records SET content=? WHERE record_id=?", (original, row["record_id"]))
+        self.assertEqual("present", state())
+
     def test_attestations_require_an_owner_signature(self) -> None:
         identity = self.observe()[0]
         record = billing_attestation_record({
@@ -2604,13 +2628,13 @@ os.kill(os.getpid(), signal.SIGKILL)
                       if record["phase"] == "during"][-1]
         self.assertEqual("rejected", merged["status"])
         # The reset-less rejection lasts its day, not the allowed readings' hour.
-        self.assertEqual(rejected_at + 24 * 3_600_000 + 1, merged["windows"][0]["resets_at"])
+        self.assertEqual(rejected_at + 5 * 3_600_000 + 1, merged["windows"][0]["resets_at"])
         after_reset = reset * 1000 + 1
         self.clean_claude_billing(after_reset)
         self.assert_denied("provider_exhausted", "claude", now_ms=after_reset + 1)
 
     def test_later_aggregate_and_resetless_restrictions_are_not_discarded(self) -> None:
-        horizon = providers.EVIDENCE_HORIZON_MS
+        horizon = providers.FIVE_HOURS_MS
         quiet = {"isUsingOverage": False, "overageStatus": "rejected",
                  "overageDisabledReason": "org_level_disabled"}
         for status in ("rejected", "allowed_warning"):
@@ -2644,7 +2668,7 @@ os.kill(os.getpid(), signal.SIGKILL)
                     self.clock = last_observed + horizon + 1
 
     def test_billing_probe_merge_preserves_aggregate_and_resetless_expiry(self) -> None:
-        horizon = providers.EVIDENCE_HORIZON_MS
+        horizon = providers.FIVE_HOURS_MS
         quiet = {"isUsingOverage": False, "overageStatus": "rejected",
                  "overageDisabledReason": "org_level_disabled"}
         for status in ("rejected", "allowed_warning"):
@@ -2699,9 +2723,9 @@ os.kill(os.getpid(), signal.SIGKILL)
                            utilization=step / 1000, resetsAt=reset, **quiet)
         with self.ledger.repository(self.project_id) as repository:
             merged = [item for item in repository.records("provider_headroom") if item["phase"] == "during"][-1]
-        for at in (reset * 1000 + 1, rejected_at + providers.EVIDENCE_HORIZON_MS):
+        for at in (reset * 1000 + 1, rejected_at + providers.FIVE_HOURS_MS):
             self.assertEqual("exhausted", providers._headroom_state("claude", merged, at))
-        self.assertIsNone(providers._headroom_state("claude", merged, rejected_at + providers.EVIDENCE_HORIZON_MS + 1))
+        self.assertIsNone(providers._headroom_state("claude", merged, rejected_at + providers.FIVE_HOURS_MS + 1))
 
     def test_run_cap_keeps_another_projects_future_reset_after_clock_rollback(self) -> None:
         self.limit("codex", max_admissions_per_window=1)

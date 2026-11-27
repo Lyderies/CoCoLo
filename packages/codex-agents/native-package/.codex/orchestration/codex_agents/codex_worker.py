@@ -23,8 +23,9 @@ import time
 import weakref
 
 from . import bridge
-from .contracts import RESULT_VALIDATION_REASON_CODES, ContractError, validate_assignment
+from .contracts import RESULT_DIAGNOSTIC_REASON_CODES, ContractError, validate_assignment
 from .learning_contracts import (
+    CLIENT_TOOL_NAMES,
     SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
 )
 from .owned_execution import ExecutionCustodyError, ExecutionTicket, OwnedExecutionRegistry
@@ -46,8 +47,9 @@ _OUTCOMES = frozenset({
 CLAUDE_OUTCOMES = frozenset({
     "claude_activity_invalid", "claude_tool_not_allowed", "missing_init_frame", "paid_usage_observed",
     "provider_rejected", "rate_limit_event_invalid",
-    *("init_" + name for name in ("api_key_source", "model_mismatch", "plugin_loaded", "mcp_server_loaded",
-                                  "tool_not_allowed")),
+    *("init_" + name for name in ("api_key_source", "model_mismatch", "plugin_not_allowed", "mcp_server_loaded",
+                                  "tool_not_allowed", "client_unsupported", "permission_mode_mismatch",
+                                  "additional_directories_present", "plugin_not_disabled")),
 })
 _CLAUDE_USAGE = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 _CODEX_USAGE = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
@@ -99,6 +101,7 @@ class _Job:
     state: str = "prepared"
     packet: CodexWorkerPacket | None = None
     recorder: object = None
+    keeper: object = None
     client_sha256: str | None = None
 
 
@@ -127,7 +130,6 @@ def _decode_input(payload):
             or permissions.get("mcps") or any(not item.endswith(":read") for item in permissions.get("filesystem", []))
             or route.get("model") not in SUPPORTED_MODELS
             or not route["model"].startswith("gpt-" if provider == "codex" else "claude-")
-            or (data["schema"] is None) != (provider == "claude")
             or type(environment) is not dict or len(environment) > 256
             or any(type(k) is not str or type(v) is not str or len(k) > 256 or len(v) > 16_384
                    for k, v in environment.items()) or bridge.api_keys_present(environment)):
@@ -136,8 +138,7 @@ def _decode_input(payload):
     for name in ("export", "control", "executable"):
         if type(data[name]) is not str or not 0 < len(data[name]) <= 8192 or not Path(data[name]).is_absolute():
             raise CodexWorkerError()
-    if ((provider == "codex" and (type(data["schema"]) is not str
-                                   or len(data["schema"].encode("utf-8")) > MAX_RESULT_BODY_BYTES))
+    if ((type(data["schema"]) is not str or len(data["schema"].encode("utf-8")) > MAX_RESULT_BODY_BYTES)  # O10 VF-1
             or type(data["role_prompt"]) is not str or len(data["role_prompt"].encode("utf-8")) > MAX_INPUT_BYTES
             or (data["worker_result_path"] is not None and type(data["worker_result_path"]) is not str)):
         raise CodexWorkerError()
@@ -167,7 +168,7 @@ def _safe_report(report, provider):
         for name in names) else None)
     code = report.get("result_validation_reason_code")
     if code is not None:
-        if type(code) is not str or code not in RESULT_VALIDATION_REASON_CODES:
+        if type(code) is not str or code not in RESULT_DIAGNOSTIC_REASON_CODES:
             raise CodexWorkerError()
         result["result_validation_reason_code"] = code
     if claude:
@@ -180,10 +181,37 @@ def _safe_report(report, provider):
         # The client's own exit code, result subtype and error label: fixed safe values only.
         if report.get("client_diagnostics") is not None:
             result["client_diagnostics"] = validate_client_diagnostics(report["client_diagnostics"])
+        denials = report.get("permission_denials")
+        if denials is not None:
+            # L6.1: the client's own refusals, as a count and fixed tool names only (never the inputs).
+            if (type(denials) is not dict or set(denials) != {"count", "tools"} or type(denials["count"]) is not int
+                    or not 0 <= denials["count"] <= 1_000_000 or type(denials["tools"]) is not list
+                    or any(type(t) is not str for t in denials["tools"])):
+                raise CodexWorkerError()
+            # A name that is not a known client tool is reported as "other", never passed on.
+            names = sorted({t if t in CLIENT_TOOL_NAMES else "other" for t in denials["tools"]})
+            result["permission_denials"] = {"count": denials["count"], "tools": names}
+    if "raw_answer" in report:
+        result["raw_answer"] = _safe_raw_answer(report["raw_answer"])
     body = canonical_json(result)
     if len(body) > MAX_REPORT_BYTES:
         raise CodexWorkerError()
     return body
+
+
+def _safe_raw_answer(kept):
+    """What the host recorded of the child's kept answer (VF-INV-a): fixed fields only, or nothing kept."""
+    if kept is None:
+        return None
+    if type(kept) is dict and kept == {"kept": False, "reason": "keep_failed"}:
+        return dict(kept)
+    if (type(kept) is dict and set(kept) == {"kept", "sha256", "bytes", "truncated", "scrubbed"}
+            and kept["kept"] is True and type(kept["sha256"]) is str and len(kept["sha256"]) == 64
+            and all(c in "0123456789abcdef" for c in kept["sha256"])
+            and type(kept["bytes"]) is int and 0 <= kept["bytes"] <= MAX_RESULT_BODY_BYTES
+            and type(kept["truncated"]) is bool and type(kept["scrubbed"]) is bool):
+        return {name: kept[name] for name in ("kept", "sha256", "bytes", "truncated", "scrubbed")}
+    raise CodexWorkerError()
 
 
 def _client_digest(path):
@@ -194,26 +222,35 @@ def _client_digest(path):
     return digest.hexdigest()
 
 
-def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client_sha256=None):
+def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client_sha256=None, keeper=None):
     try:
         data, assignment = _decode_input(payload)
         # The prepared client, re-read just before launch, is still the one the account observed.
         if client_sha256 is not None and _client_digest(data["executable"]) != client_sha256:
             raise CodexWorkerError()
         provider = data["route"]["provider"]
+        # VF-INV-c: a verifier's child is held to the schema the host would accept.
+        child_schema = bridge.result_schema_for(data["schema"].encode("utf-8"), assignment)
+        # VF-INV-a (decision 26, "original kept"): the runners offer the child's raw final answer here.
+        raw_answer = {}
         deadline = max(0, (ticket.deadline_ns() - time.monotonic_ns()) / 1_000_000_000)
         common = dict(project_id=project_id, route=data["route"], assignment=assignment,
                       export=Path(data["export"]), control=Path(data["control"]), environ=data["environ"],
                       role_prompt=data["role_prompt"], executable=data["executable"],
-                      worker_result_path=data["worker_result_path"], deadline_seconds=deadline, _execution=ticket)
+                      worker_result_path=data["worker_result_path"], deadline_seconds=deadline, _execution=ticket,
+                      raw_answer=raw_answer)
         if provider == "claude":
             # Without its recorder a Claude child could not report a restriction: never launch it.
             if recorder is None or type(run_handle) is not str or client_sha256 is None:
                 raise CodexWorkerError()
             _, max_turns = bridge.effective_dispatch_limits(data["route"], assignment)
-            result, report = _RUN_CLAUDE(ledger=recorder, run_handle=run_handle, max_turns=max_turns, **common)
+            result, report = _RUN_CLAUDE(ledger=recorder, run_handle=run_handle, max_turns=max_turns,
+                                         schema=child_schema, **common)
         else:
-            result, report = _RUN_CODEX(ledger=object(), schema=data["schema"].encode("utf-8"), **common)
+            result, report = _RUN_CODEX(ledger=object(), schema=child_schema, **common)
+        if keeper is not None:
+            # Kept before validation can fence the answer, as on the bridge path; best effort.
+            report["raw_answer"] = bridge._keep_raw_answer(keeper, project_id, raw_answer, data["environ"])
         result, report, fenced, reviewed, terminal, reason = _PREPARE_RESULT(assignment, result, report)
         body = canonical_json(result)
         if len(body) > MAX_RESULT_BODY_BYTES:
@@ -342,6 +379,20 @@ class CodexWorkerPool:
                 raise CodexWorkerError()
             job.recorder = recorder
 
+    def attach_answer_keeper(self, handle, keeper):
+        """Before submission: where the child's raw final answer is kept (VF-INV-a).
+
+        `keeper.keep_child_answer(project_id, content)` is the ledger's call of the same name; the
+        project process holds no ledger of its own, so a host that has one attaches it here. Without
+        a keeper nothing is kept and the report says nothing about it.
+        """
+        with self._registry._lock:
+            job = self._job(handle)
+            if (job.state not in {"prepared", "reserved"} or job.keeper is not None or keeper is None
+                    or not callable(getattr(keeper, "keep_child_answer", None))):
+                raise CodexWorkerError()
+            job.keeper = keeper
+
     def submit(self, handle):
         self._owner()
         with self._registry._lock:
@@ -397,6 +448,8 @@ class CodexWorkerPool:
             if self._closed:
                 return
             self._closed = True
+            # C3: the service is closing, so each run's container is stopped as `service_close`.
+            self._registry.closing()
             for slot in self._slots:
                 if slot.current is not None:
                     job = self._jobs.get(slot.current)
@@ -427,8 +480,9 @@ class CodexWorkerPool:
                     payload, job.payload = job.payload, None
                     ticket, project_id = job.ticket, entry.key.project_id
                     run_handle, recorder, client = entry.run_handle, job.recorder, job.client_sha256
-                packet = _execute(payload, ticket, project_id, run_handle, recorder, client)
-                payload = ticket = recorder = None
+                    keeper = job.keeper
+                packet = _execute(payload, ticket, project_id, run_handle, recorder, client, keeper)
+                payload = ticket = recorder = keeper = None
                 with self._registry._lock:
                     job.packet, job.state = packet, "finishing"
                     self._registry._complete_worker(self, handle)

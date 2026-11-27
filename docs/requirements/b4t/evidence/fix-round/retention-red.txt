@@ -1,0 +1,43 @@
+EEEE
+======================================================================
+ERROR: test_B4t_A1_overflow_count_survives_the_journal (tests.test_b4t_takeover.RetentionA1Tests.test_B4t_A1_overflow_count_survives_the_journal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2822, in test_B4t_A1_overflow_count_survives_the_journal
+    self.records(db,1)
+    ~~~~~~~~~~~~^^^^^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2745, in records
+    db.execute("INSERT INTO takeover_record VALUES(?,?,?,?,?,'complete',?,?,?)",
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               (identity, format(i+1,'064x'), '0.8.1', format(i+2,'064x'), '0.8.2', 1, int(runs), 0))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: table takeover_record has 6 columns but 9 values were supplied
+
+======================================================================
+ERROR: test_B4t_A1_takeover_tables_have_retention_and_caps (tests.test_b4t_takeover.RetentionA1Tests.test_B4t_A1_takeover_tables_have_retention_and_caps)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2755, in test_B4t_A1_takeover_tables_have_retention_and_caps
+    from codex_agents.project_takeover import purge_takeover
+ImportError: cannot import name 'purge_takeover' from 'codex_agents.project_takeover' (~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/project_takeover.py). Did you mean: 'project_takeover'?
+
+======================================================================
+ERROR: test_lineage_retention_keeps_65_live_branches_and_18_successive_links (tests.test_b4t_takeover.RetentionA1Tests.test_lineage_retention_keeps_65_live_branches_and_18_successive_links)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2795, in test_lineage_retention_keeps_65_live_branches_and_18_successive_links
+    from codex_agents.runtime_lineage import prune_lineage, successor_custody
+ImportError: cannot import name 'prune_lineage' from 'codex_agents.runtime_lineage' (~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/runtime_lineage.py). Did you mean: 'runtime_lineage'?
+
+======================================================================
+ERROR: test_retention_keeps_refused_obligations_and_rolls_back_a_failed_pass (tests.test_b4t_takeover.RetentionA1Tests.test_retention_keeps_refused_obligations_and_rolls_back_a_failed_pass)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2770, in test_retention_keeps_refused_obligations_and_rolls_back_a_failed_pass
+    from codex_agents.project_takeover import purge_takeover
+ImportError: cannot import name 'purge_takeover' from 'codex_agents.project_takeover' (~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/project_takeover.py). Did you mean: 'project_takeover'?
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.049s
+
+FAILED (errors=4)

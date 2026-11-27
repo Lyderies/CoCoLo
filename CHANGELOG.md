@@ -2,6 +2,487 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
+## 0.4.0 (in progress)
+
+- Package 0.8.74: custody scan and next hold due use the live hold index (S14i, S14g-4), and the account hold status profile is linear in held rows only (S14h); builds 0.8.73 and older refuse a store this build wrote (decisions 399, 400).
+
+- Package 0.8.73: hold queries use the full key (S14g), the test metadata generator is deterministic, and the preparation test follows the single folders finding (IP-G; decisions 395, 396); builds 0.8.72 and older refuse a store this build wrote.
+
+- Package 0.8.72: owner-bound limits on the scan, advance and drain paths (S14f) and tighter test budgets for project start and run retention (S13g); builds 0.8.71 and older refuse a store this build wrote (IP-F; decisions 391, 392).
+
+- Package 0.8.71: custody lookups search run holds by their full key (S14e), and the fault-matrix batch (S15) pins what happens to every counted limit once a run is past it; builds 0.8.70 and older refuse a store this build wrote (IP-E; decisions 380, 381, 383, 384).
+
+- Package 0.8.70: a run the last update could not re-verify is recorded as unverified at hand-over, reported as its own harmless finding instead of an overdue hold, and its settlement is no longer retried against the account (IP-D; decisions 366, 367, 370).
+
+- Package 0.8.69: usage partial reasons now reach reply history, due holds drain at production cadence, low disk refuses new runs and run checks fail closed (IP-C).
+
+- Package 0.8.68: batch of health holds, workspace checks, run retention (indexes in schema 18), usage install and test-speed changes (IP-B).
+
+- Package 0.8.67: one thread now owns all account-records access, fair and bounded; a child's temp folder that will not delete is retried in the background with a warning in status, and never blocks an update; long sessions roll over to a new orchestration automatically, staying paused if paused.
+
+- Package 0.8.66: the records cleanup no longer holds the account records lock for seconds when a backlog builds up (it works in small batches), and status, project health and open admission checks stay fast as history grows (LOCKHOLD).
+
+- Package 0.8.65: database reads stay fast as history grows (U3; malformed duplicate-guard records now refuse instead of being skipped); probe capacity past its limits proven (U4, tests); a standalone ledger owner queue (E1b, not yet wired); faster, steadier tests (TESTSPEED-2).
+
+- Package 0.8.64: RS-B memory holds: driver entries and preparation slots are recorded holds, released only after retirement and kept on an unproven stop; a run opened during service start-up now registers. TESTSPEED: three slow test modules run 3x faster (tests only).
+
+- Package 0.8.63: RS-F S6: project classification of old records (orchestration, open duty, settlement, result custody; late publications of old runs refused). 3.8 E1a: contention evidence tests. AP5: candidate evidence looked up by index (first open of a 286 MiB ledger 0.2 s).
+
+- Package 0.8.62: RS-F S3: an interrupted hold-store upgrade resumes class by class from its saved cursor (bounded batches, published only after validation).
+
+- Package 0.8.61: release batch.
+  - RECOV: the status line shows recovery state correctly.
+  - RS-B B7b: recovery reasons and measured budgets.
+  - P9, P9b: attestation capture.
+  - M11: dispatch admission.
+  - RS-F S2: the store-owner fence, on store schemas 17 and 22.
+  - UPDFIX: a refused update changes nothing, and a second setup is stable.
+  - T7 S4, S5, S6: lifecycle end-to-end checks.
+  - Test budgets raised per owner decision 238.
+
+- Package 0.8.60: release batch.
+  - RS-E E2a: a setup-bound launch record, copy pinning, and authenticated wake publishing and reconcile.
+  - RS-E E2c: the collector starts a stopped project service that has due holds, with budgets and backoff,
+    and parks after a 1-hour failure streak (owner decision 143); an owner-only status line shows it.
+
+- Package 0.8.59: release batch.
+  - RS-B B6: an orchestration left idle closes unattended, on store schema 21.
+  - RS-F S7: settlement replies replay across the store migration and attempt pruning, with bounded evidence.
+  - RS-B B5a: a crashed run is settled once its process is proven gone.
+  - Product fixes: backup replies carry no file paths, and learning-expire keeps the event summaries.
+  - T7 S3: learning, backup and guard checks in the lifecycle e2e.
+- Package 0.8.58: release batch.
+  - RS-F S4: M4 and R3 run-slot rules, with the owner confirm command shown for a held slot.
+  - RS-F S5: a named probe state in account status.
+  - T7 S2: recovery, status and deletion checks in the lifecycle e2e.
+  - Product fixes: an orchestration closes after a lost run, status counts agree, and delete stops the
+    service and removes history, leaving a pending-cleanup marker.
+- Package 0.8.57: release batch.
+  - B4s lost-run settlement: a run whose process is gone is settled from its recorded launch, with a
+    write-ahead intent written before the settlement so a crash between the two steps is finished on restart.
+  - T7 S1: run-control lifecycle checks (L6, L7, L9) run the installed CLI in the lifecycle e2e.
+  - L6.1: a concurrent stop never overwrites a denial, and a clean frame reports zero denials.
+  - L6.2: a refusal names the resolved route.
+- Package 0.8.56: release batch.
+  - RS-D S2 changed-runtime closure: an orchestration whose close was not recorded across an update is
+    counted once across restart; one without a verified release stays open, with custody, to its deadline.
+  - RS-E S6 login entry: status reports the login entry as on, off or stale; an update keeps the entry
+    current (a failed systemd refresh puts a stopped or not-enabled unit back, and never recreates a
+    vanished entry); the entry command passes the runtime check.
+  - T7 S0: lifecycle e2e base (checks L1-L5, G1-G4, G8, G9) runs the installed CLI, split into groups with
+    `--jobs`, plus a non-required CI lifecycle job.
+  - RS-B B7a: holds report (`history.holds_report`) for open holds, with a capped page walk.
+  - RS-F S1 (RSF-S1-1/2, owner decision 129.3): every mutating collector/account request
+    must name the serving runtime's digest. Old-format repair requests and missing or
+    different runtime identities are refused before any write with `runtime_upgrade_required`
+    and a plain instruction to run `./setup.sh --update`. Before 1.0, older clients and
+    runtimes have no compatibility path; update each project to the serving runtime.
+  - B4m (LR-1): compatibility refusals name the version holding the state and print an update
+    command from the local install record. Already-installed 0.3.x clients may still report
+    `status_collector_unavailable` or `runtime_newer`: in a plain terminal, substitute your paths
+    in `cd /path/to/CoCoLo && ./setup.sh /path/to/project`, choose Configure, then
+    "Update the install and walk through every step". Existing account/history reply fields are
+    frozen against the previous-release catalogue; new reply data requires a new operation.
+- Package 0.8.55: an installed CLI reads the live provider state from its default state root (0.8.54 installed
+  still routed "not_checked", with no reason: the checked default `--state-root` became "no state root"); a
+  not_checked route always says why.
+- Package 0.8.54: routing reads the live provider state on a real install (0.8.53 always routed "not_checked":
+  the runtime hint is written before the account socket exists); a not_checked route says why.
+- Package 0.8.53: routes around a used-up provider (RT-ROUTE-EXHAUSTED, decision 124). Routing and admission share
+  one availability classifier; a provider at 90% or exhausted is skipped for workers and verifiers, in policy order;
+  a "rejected" reading with no reset time lasts five hours and a newer good reading clears it; a verifier on the
+  same provider as its worker is never independent; the verifier is chosen again when it opens; one re-route at
+  open; when no provider has allowance the route says so with the next reset time. Test framework reset (decisions
+  125/126): no fingerprint/approval machinery, affected tests by coverage, full run about 8 minutes.
+- Package 0.8.52: D4 recovers a stored result after a crash: a publication interrupted between
+  its prepare and commit is replayed from the kept packet or settled lost, and only a held reservation may
+  publish.
+- Package 0.8.51: B3 withdraws unclaimed opens (schema 19); D2 applies deadlines and retention;
+  B2 lets CoCoLo record a finished helper's result (schema 20), with D3's retirement sweep clearing
+  retired run state. E1 offers start at login during Set up. TF-26 keeps product fixes independent
+  of test-owned legacy proof fingerprints. RS-A step 3 handles late owner preparation after a sweep,
+  restores crashed slots, verifies the intended late-completion behavior, and indexes release-batch queries.
+- Package 0.8.47 (container_stop, owner decision 49): the container stop tool owns all cleanup and the detached
+  watchdog is a thin dead man's switch. The stop tool (`container_runtime`, used by the supervisor's stop action,
+  C4's recovery, the HM-1 health check and the watchdog) now guarantees: every podman command runs in a process
+  group of its own under a small guard that kills the group when the stop tool's process dies (SIGKILL
+  included), and the stop tool kills and reaps the group when the command ends, so a podman child that outlives
+  its leader no longer survives; one absolute deadline covers every command, wait and reap of a stop and a stop
+  that runs out of time answers `deadline` (a gone container is still only the OS's word); the grace is capped by
+  the time left (less a 4 s margin for the kill, the removal and asking the OS); a group that cannot be killed or
+  reaped (`podman_cleanup_failed`) or a removal podman refuses is reported, never swallowed. The watchdog
+  (`process_tree.py --container`), only when its service has died, makes ONE call of the stop tool (the run's
+  labels checked first) inside one fixed total of 17 s (2 s of it kept for ending the tree), writes its result
+  (`<token>.watchdog` beside the run's journal entry: owner-only, flushed, removed with the entry) and exits 0
+  (gone, tree ended), 2 (not gone), 3 (tree end not confirmed: a failed `ps` is retried, then reported, never
+  "empty") or 4 (the total ran out). The round-3 machinery is gone (per-try processes, retries, back-offs, the
+  last try, `--stop-container`). Backstop: the run's deadline is also podman's own `create --timeout`, set only
+  when `podman version` shows a client and server of at least 4.0 (an unverified minimum); otherwise the launch
+  goes without it and its checks say why (`StartedContainer.timeout_backstop`). Containers stay off as shipped.
+  Hung-stop worst case measured with the real watchdog over a podman-shaped script: exit 4 after 14.3 s.
+- Package 0.8.47 (screens and re-sign): Owner decisions 36 and 37 (screens and billing re-runs). Screens show the owner what is needed to proceed or
+  troubleshoot (the owner key shown while signing, the rule file path and the remove command), but nothing saved,
+  logged, reported or read by an AI helper carries a private value: `learning-status` and the owner-key
+  replacement report no longer include the owner key fingerprint (they say whether a key is configured and how
+  often it was replaced). An answers-file re-run (`./setup.sh --answers`) now skips signing the billing
+  statements when this project's attestation is already signed and current, as an update does; the new answer
+  `"billing_sign_again": true` signs again, and the step-by-step menu offers "Keep the current signature" (the
+  default, so a bare Enter never signs) or "Sign again" when the signature is current, and an update without an answers file says how to sign again.
+  Also in 0.8.47 (screens and re-sign): Keep is the default when a signature is current; a straight Set up keeps a current
+  signature; the replace-key report has exact fields. Known LOWs (screens r3): the multiline private-key scan in
+  test_learning_cli (lines 583-596) can miss a leak; already_attested fails open to signing on transient errors
+  (flow.py 1293-1305); billing_sign_again on fresh full runs is unverified; the register.log test is vacuous if the log is absent.
+- Package 0.8.46 (billing admission safety fix): a billing probe that is answered from a recent probe record
+  ("probe: reused") is now judged again before it is answered. Before, any recent probe record skipped the
+  judgment, so a probe that had seen paid usage (overage in use) was answered "reused" instead of being refused
+  with paid_usage_usable, and an unreviewed client version or a missing billing attestation was not noticed
+  either. Now a reuse skips only the provider call: paid usage, the client version and the attestation are
+  checked on every reuse and refused with their own reason. A provider API key in the environment was already
+  stopped before admission; it is now refused with its own reason (provider_api_key_present) and the denial is
+  recorded. A stored "reused" answer is replayed only inside its own request window (the time it was
+  judged in); after that a retry of the same request is refused with probe_conflict, as a replay cannot judge
+  again; stored denials still replay. A clean reuse still answers
+  "reused" and starts no new probe.
+  Owner decision 40 (a): when a probe is refused while the five-minute cooldown also applies, the refusal now
+  names the real problem first (API key, paid usage, client version, attestation); a plain cooldown still says
+  probe_cooldown.
+  Review round 2: a stored "reused" answer is replayed only inside its request window and only while no newer
+  billing or headroom evidence exists for the account; newer evidence (paid usage above all) refuses the replay
+  with probe_conflict so the caller asks again and is judged afresh (stored denials still replay). The ledger's
+  own probe path (LearningLedger.observe_claude_billing) now judges before it answers "reused", so a recent
+  paid-usage record is refused with paid_usage_usable, not reused. A repeat admit() on an admitted request
+  re-checks the API key. Accurate scope of the API-key fix: a key present when admit() judges is refused with
+  provider_api_key_present and recorded; a key already present at reserve or prepare is refused as
+  probe_not_authorized and is not recorded.
+  Decision 47 (billing round 4, tests first): a "yes" that is ready but not yet taken is judged again if the
+  inputs it judged have changed (a new reservation, identity observation and signature work; never a new provider
+  call), and after two such new judgments it is refused as probe_replay_stale; a completed run's answer is judged
+  again before it is first delivered. No authorization callback runs after the last input comparison: in the
+  owner's judgment the post-commit callback is gone, and the publication check captures the inputs just before and
+  just after its last callback and refuses a yes if they differ; the waivers are read after that last callback.
+  Publication is bound to the exact committed row and the reply digest of the judgment generation. Every
+  generation, a repeat's too, takes its own identity observation (the local client's login read, no model call,
+  nothing spent), and a repeat measures that reading's age against the judgment's time. The owner-key turn is held
+  until the transaction has committed. Known and accepted: `observed_at_ms` of every reply, a repeat's fresh yes
+  included, is the time of the request's origin (its row's created_at_ms), not the time of the judgment; and each
+  refused repeat still writes one probe_admission deny record (kept like any record, within the five-hour
+  admission input scope), so a client that repeats a refused request in a loop fills that scope until the records
+  age out; bounding it is an open owner choice.
+- Known gaps (0.8.46): Billing: a just-finished billing check's own reading is not re-checked for paid usage before its answer is used (owner decision 55: the signed attestation is the user's responsibility); moved to the release that adds paid usage (own keys / credits); two test clean-ups pending (BR-19 launch test masked; ClaudeHostReviewTests shared state).
+
+- Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
+  review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")
+  is removed by the money filter; id allocation and refusal-log rotation are locked across processes; a failed
+  connection audit, unencodable text and any unexpected handler failure are audited refusals; refusals keep a
+  bounded audit budget past the deadline; a cut (incomplete) read answers `unavailable`, never `not_found`, also
+  for every change it would feed; routing.json is flushed with its directory; writes that make no progress fail;
+  a blank token-store entry no longer crashes a revoke; the history answer says when lines were skipped; the
+  empty token store message names tokens.json and the delete step. Five tests that could pass on broken code now
+  prove their requirement. A revoked token is now removed from the token store (it stays refused as an unknown
+  token) and idle or revoked tokens leave the in-memory push windows, so neither fills up over time.
+
+- Package 0.8.44 (Phase 1 merges): three reviewed changes join the 0.8.43 base.
+  Review QA: operational QA judges a review, not the code (accepted when the verifier confirms the findings;
+  the expected 'tests not run' statement is ignored; a refuted finding still disagrees; other tasks stay strict)
+  (owner decision 32). O0c caps: lifetime caps on open requests and expired bindings, with their
+  tests and limits file. DR-3: extra dispatch-wait and result-lifetime tests (the RC-3 test stays skipped).
+  Identifier scan parity (Phase 1.3), below.
+
+- Package 0.8.44, identifier scan parity: the identifier guard scanned a different file set in QA than in CI, and QA could miss a real identifier. QA
+  and CI now scan one list that git produces (tracked files, even when an ignore rule names them, plus untracked
+  files no `.gitignore` ignores); the QA runner writes it before the sandbox starts, with a copy of the owner's
+  private denylist, and the shipped `scripts/qa-security.template` scans exactly that list. It refuses, rather
+  than scan fewer files, when git, the list or the denylist is unavailable. Tracked symbolic links are scanned
+  by name and target text, and a file name that is not valid UTF-8 is a finding. The placeholder exemption
+  (`/Users/x`, `/home/user`) is exact, lower-case and whole-component only: `User`, `User Smith` and a name that
+  merely starts with a placeholder now fail, and so does a placeholder followed by a character that can sit
+  inside an account name (`user'smith`), or by more punctuation and then more name (`user''smith`, `user')smith`);
+  file names get no prose exemption. `file:///Users/<name>` and `/System/Volumes/Data/Users/<name>` (and the
+  `/home` forms) are found. A file name that holds a value, is not valid UTF-8 or holds a control
+  character prints as `[redacted]`, and no error message names a file. QA diagnostics keep a path only if git
+  lists it and it holds no value; the line is always 0, since a wrapper could choose the number. The scan and
+  the runner now fail closed: the runner does not start a security check without the git file list and the
+  denylist, and the scan refuses a file it cannot read, a path below a symbolic link, a pipe, a work tree moved
+  by repository config, an oversize list, a run from a subdirectory, a denylist that was not provisioned, and a
+  scanner that differs from the digest the approved wrapper carries (the wrapper now has a second placeholder,
+  `@SCANNER_SHA256@`). Git lists files with ignore rules matched case-sensitively, whatever `core.ignorecase` says.
+
+- Package 0.8.43 (RT-21 Phase 0): low/medium coding and research judgment/exploration,
+  and planning synthesis, try GPT-6.1 Sol before Sonnet 5.5. Confirmed quality failures
+  advance one admitted ladder rung, then use the strongest admitted route on the second
+  failure; unadjudicated claims stay held. Low/medium coding, research and planning prefer an
+  independent verifier; when the other provider is not admitted the same-provider fallback is
+  kept and the route records `independent: false` (also on the verification route). Routes record
+  review phase, parent lineage, expanded scope and unknown observations/usage separately.
+  Policy v6 preserves v5 selectors for unopted cells, bounded coding choices and every
+  high/critical route; legacy policies still load. No learning promotion is enabled.
+  Verifier `invalid_result` fix (0.4.0 item 0.5): the bridge keeps each child's raw final answer
+  (credential-shaped text removed; owner-only file in the project's artifact folder named by its SHA-256;
+  digest, size and truncation in the report; expires after 7 days) before its private directory is
+  removed. `inconsistent_axes` is split into `axes_status_verdict_mismatch`, `axes_verdict_without_completion`,
+  `axes_admission_without_completion`, `axes_retry_lineage`, `child_set_admission` and `child_set_timeout`
+  (older ledgers still read `inconsistent_axes`). Owner decision 26: the host sets a verifier's admission
+  (`unverified`) and its status from its execution state and verdict, and records what it replaced in
+  `host_set_fields`; a missing verdict or a child's timeout claim still fails, and worker results are
+  unchanged. A verifier's output schema offers only `unverified` admission and no `timed_out` state.
+  A Codex child's turns, commands and peak per-turn input tokens are recorded, and a run above its nominal
+  `max_tool_calls` is stopped as `tool_call_limit_exceeded`.
+
+- Package 0.8.42 (O0d): low/medium-risk verifiers use Sonnet 5.5 (medium) for Codex work and
+  GPT-6.1 Sol (medium) for Claude work, including confirming reviews. Bounded coding at those
+  risks tries GPT-6 Sol (medium), then Sonnet 5.5 (medium). High/critical routes keep their
+  existing choices, including Opus for the first review of high-risk security code.
+
+- A collector started before its code changed kept running the old code (Python never reloads its modules), so a
+  fix merged afterwards did not take effect and a live check ran the old behaviour. The collector's health now
+  says whether its runtime files differ from the digest it loaded; `learning-status` shows
+  `collector_code_stale` with a plain note, and `provider-observe --billing-probe` refuses with
+  `collector_code_stale` until the collector is restarted. A command started after the files changed sees the
+  new digest, so a collector that loaded older code (or an older package version) is refused by the version
+  check before it can report staleness: status and the probe now treat that refusal itself as the stale
+  collector. A newer collector is not called stale; a collector that sent a malformed version, schema or digest is
+  named `collector_identity_invalid`, and another build of the same version whose own files are unchanged is named
+  `collector_build_conflict` (a restart would not fix it), and neither is refused as stale. Every remaining bare `probe_unavailable` now names its
+  cause in the billing lane's last failure, including a deadline (`probe_deadline_expired`), a caller's cancel
+  (`probe_cancelled`) and a close (`probe_closing`); a recognised observation reason is no longer labelled
+  unrecognised, and an earlier named cause is kept. A result for a security reviewer or verification worker
+  that completed (including a `blocked` one) with no `semantic_verdict` (missing or null) is refused
+  (`missing_required_fields`), never filled in. `learning-review` refuses an empty verdict before recording the
+  result, running `worker` again removes every file of the earlier run, and `verify`/`finish` refuse a stage
+  file the runner did not write: wrong mode or shape, a digest its own recorded reply does not hold, or a
+  provider, verdict, summary, route, assignment or result that does not match the keyed digest (HMAC) binding it.
+  The key is derived from the host's private digest key (its state folder, owner-only), never held in the work
+  folder, so a writer limited to the work folder cannot make a binding. The state folder is chosen once and given
+  to every host command, the key is read before any child starts, and a state folder that overlaps the work folder, the
+  packet or the project, either way round, is refused (`review_state_unavailable`); a rerun that stops there has
+  already removed its earlier markers. A process running as the same user can
+  read that key and is outside this check; the project host still checks both outcome digests and every
+  assignment and result body against its own records before checks or QA are committed.
+  Package 0.8.41.
+- A project with the 0.8.40 Claude package could not be upgraded: the installer refused it as `untrusted_manifest`,
+  because the Claude agent definitions changed after 0.8.40 (role model defaults). The package now records the
+  previous release's bundle (`previous-releases.json`) and accepts an installed copy that matches it exactly;
+  edited or unknown installs are still refused. The accepted release digests are pinned in the installer's code,
+  so the record cannot vouch for itself, and a record may name only the files the package installs: a forged or
+  altered record is refused (`previous_release_not_pinned`, `previous_release_path_refused`) and nothing changes.
+  The setup update stops with the installer's own reason, in plain words that say what to do next. When an
+  install, update or remove fails, setup undoes only what the packages themselves report they wrote in that run,
+  after checking the report against the saved paths and disk, each file only while it still holds the bytes
+  and mode the package wrote (checked on the open file, then moved or removed
+  only if it is still that same file), and each folder a package created only while it is that same, empty
+  folder. Anything else (a file you changed while setup ran, a folder you replaced or filled) is left as it is
+  and named. A package step that gives no usable account of its writes stops setup at once, and nothing of that
+  step is undone; one whose writes cannot be checked safely (the project folder changed, an unsafe path) also
+  stops setup at once, and its undo then acts only on the files it can still check one by one (none, when the
+  project folder changed). No later step runs, and setup says so. Nothing is undone for a package that reports a pending rollback, and its
+  markers stay. Completed installs also use their checked journal, keeping preexisting folders and retaining
+  Codex project configuration; a completed remove still uses the opposite operation. The setup
+  wizard says "Nothing was changed" only when every undo completed with nothing left over. The Done screen no
+  longer prints a remove command with an empty `--target`.
+  Remaining LOW limits: filesystem checks and rename/unlink/rmdir are separate operations, so a concurrent
+  writer can still change an entry between check and mutation (including folder creation and identity capture).
+  The project root is reopened and its identity compared rather than held open throughout the operation.
+  Parents recreated to restore a deleted file can remain unnamed if restoration fails. A partial Claude
+  control-file write can report the intended digest; it is preserved on mismatch. Reports do not authenticate
+  authorship against a deliberately dishonest package, which already has filesystem write authority; the
+  snapshot check detects omissions only among preview and installed-manifest paths. Codex update/remove report
+  completeness has no dedicated producer test. These limits are outside the install-first fixes above.
+- Two commands that came together on a project whose service was not running could leave one of them reporting
+  `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
+  held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.
+- A billing probe asked within five minutes after a Claude child finished was refused as "billing probe
+  unavailable": it reused the child's own rate-limit records (tagged with a run), which the reply contract rejects.
+  Reuse now takes only the probe's own records, and a newer run record that is more restrictive (overage in use,
+  paid usage usable, headroom not ample) stops reuse and re-evaluates
+  admission, so a probe launches only if admitted (otherwise a named denial). A reply that fails its own
+  contract is now `probe_reply_invalid` and is recorded in the billing lane's last failure.
+- Claude Code 2.1.323 lists one built-in plugin, `cc-plugin-privacy`, in its init frame even when no plugin is
+  installed (captured under COCOLO's own child settings), so the check that no plugin loads stopped every Claude
+  child and the billing probe. The check now accepts that one plugin, only with exactly the keys `name`,
+  `path` (`builtin`) and `source` (`cc-plugin-privacy@builtin`); its only effect is a hook that can restrict a
+  tool call. A built-in COCOLO's settings disable (`cc-plugin-agents-md`, `cc-plugin-telemetry`,
+  `cc-plugin-plugin-authoring`, `cc-plugin-easel`) that is listed means the settings did not apply and stops the
+  child (`init_plugin_not_disabled`); any other plugin stops it too (`init_plugin_not_allowed`, renamed from
+  `init_plugin_loaded`). Tools, MCP servers, the key source and the model are held as before, and a client that
+  reports a `permissionMode` other than the one COCOLO sets, or any `additional_directories`, is stopped
+  (`init_permission_mode_mismatch`, `init_additional_directories_present`). A billing probe stopped by the init
+  check now reports that reason (in `provider-observe --billing-probe`) instead of `probe_incomplete`, and a
+  probe records the client version its init frame reported (`client_version` in its reply). Package 0.8.40.
+- The router can now read a task's risk and its failed attempts, and the verifier can follow the worker's risk,
+  but only where the routing policy says so. Three optional policy entries do it: `risk_candidates` (a candidate
+  list per risk band; high and critical may never go below the cell's first choice), `escalation` (a retry after
+  a counted failure moves once to the next candidate up for work with an executable check, stays put for
+  judgment work, and goes to the strongest candidate from the third attempt) and per-risk verifier settings
+  (`by_risk`). A route that used one says so in `routing_basis`. The shipped policy has none of them, so every
+  route is unchanged.
+- A new read-only command, `learning-usage-report --project-root <root> --since <ISO> --until <ISO> [--limit N]`,
+  reports what a window of children used: per provider and model, the runs, the runs with complete usage and
+  the input, output, cache-creation and cache-read tokens, and per run an opaque run id, time, model, effort,
+  role, outcome and tokens. It reads the project's store and the old ledger read-only: it starts no service and
+  writes nothing, and names no task text, path or store identifier. It lists at most 500 runs (`--limit`, at
+  most 2,000) and says when a window had more.
+- A run's usage counted as unknown unless all eight usage fields were known, and a bridged child never reports
+  model calls, tool calls, latency or cost, so `learning-status` counted every run as `host_usage_unknown` and
+  `learning-orchestration-report` never said `child_attribution: complete`. A run is now complete when its
+  input, cached-input and output token counts are known. Runs already recorded keep the flag they had; the new
+  report decides each run from its own usage record.
+- A result can be recorded after its service stopped. What a record, a verifier and QA need of a run (its assignment,
+  task, route, client capability and host class) is now kept in the project's records with the run, from before
+  its claim, instead of only in the service's memory, so a restarted service records a result left on disk, opens
+  its verifier and runs QA on it. The record no longer has to come within an hour of the run's release, a service
+  no longer forgets workers after 64, and a service holding recorded workers stops after the ordinary 15 idle
+  minutes instead of 12 hours. A result kept from before this version is still kept to its deadline, but cannot be
+  recorded, verified or run through QA (`history_worker_context_unavailable`), as after a restart before.
+- Claims, opens and probes no longer stop machine-wide after two account executions end unconfirmed. An
+  unconfirmed signature execution, a billing job left unknown or a probe worker held unknown now faults its
+  account lane, so the account restarts itself at its next check; unknown work held in one lane no longer stops
+  another lane's restart. The restart first proves every child the account started is gone (each signature
+  helper reaped, each probe's process tree confirmed empty or never started) and waits, naming the lane, while
+  one may still run. An unknown probe whose child is proven gone has its admitted row settled at once, so it no
+  longer holds the machine's probe capacity. A claim, open or probe that could only wait for a stuck signature
+  lane is refused at once (`claim_unavailable`, `open_unavailable`, `probe_unavailable`).
+- The learning cycle and case review read the last 90 days, not all time. Before, every case and candidate a
+  project ever mined counted for good against 30,000 records (the project store) or 20,000 cases (the old
+  ledger), and a project that reached them got `learning_capacity` on every cycle; only the owner's
+  `learning-expire` removed any. Now unpromoted cases and candidates past 90 days are removed in small batches by
+  the project service's cleanup pass (the collector's sweep for a project still in the old ledger). Kept
+  however old: cases in a controlled corpus, candidates past `proposed`, and anything a later record names.
+  The 90 days is one setting (`LEARNING_RETENTION_MS`), the same window outcomes and operational QA already use.
+  another lane's restart. The restart first proves every process the account started is gone: each signature
+  helper reaped (inside the macOS sandbox that refuses every new process, or with its group and session empty
+  on Linux), each probe's process tree confirmed empty or never started, and each provider CLI the observation
+  lane started reaped with its process group empty (its group is killed first). A start that failed with no
+  process left is not in doubt. While one cannot be proven, `learning-status` names the process, the command
+  that checks it and the next step (restart the collector once nothing is listed). An unknown probe whose model
+  is proven gone is settled at once (retried while the records are busy): one that ran keeps its billing
+  records, so the next probe reuses them; one that never ran is settled as a denial. A claim, open or probe that
+  could only wait for a stuck signature lane is refused at once (`claim_unavailable`, `open_unavailable`,
+  `probe_unavailable`).
+- A project's run opens no longer stop for good after 256: the account counted every open request ever made
+  (and refused the next with `open_busy`), in every release since the open journal was added. Only opens in
+  progress count now (four at once), and a full limit says so (`open_capacity_full`, with its next step).
+  Finished opens are removed, with their run binding and receipt, a week after the run's expiry; replaying one
+  answers `open_expired`. `learning-status` shows `account_capacity.open_requests`.
+- The project's records keep a register of every result lease and reservation, written together with it: what is
+  held, what released it (withdrawn before its claim, denied, fenced, bound to its claim, completed) and when. A
+  project opened with a lease or reservation missing from the register is refused. A new service releases at once
+  the unarmed leases a stopped service left, instead of waiting for their deadline. A reservation the account never
+  released is no longer removed with the finished rows.
+- The project's records gain format 18: four empty tables for the run supervisor's project-side holds, kept
+  results' contexts, prepared publications and account settlements, with checks that run at every open and
+  inside the upgrade. The service upgrades a project when it starts, keeping a copy as it was
+  (`history.sqlite3.before-18.<time>`); a failed check leaves format 17 untouched. An earlier 0.4.0 build
+  refuses a format-18 project.
+- `learning-status` shows launches the service cannot settle (`unresolved_launches`: how many, the oldest's age, and
+  up to 16 by run and state), instead of keeping them out of sight. The launch journal now reads every entry however
+  many there are, and removes lock files a stopped service left behind.
+- `dispatch` refuses, plainly, a route the project service does not run (`dispatch refused`, exit 2); the old direct
+  path, which no route could reach, is removed.
+- A result whose publication fails while the service is running is retried until it is recorded or the run's
+  deadline passes, instead of waiting until the service stops.
+- Leases a stopped service left are released by the service's own regular pass; a restarted service recognises what
+  its predecessor left; leases that were never admitted no longer use up cleanup slots.
+- Claim and capacity lookups stay fast as a project's history grows.
+- A run the account settled as lost, or released as crashed, no longer keeps a cleanup receipt counted against
+  the project's limit of 4,096 (`learning-status` -> `account_capacity.cleanup_receipts`); before, each such run
+  counted for good, and at the limit every new run of the project was refused `claim_cleanup_unavailable`.
+  Runs lost or crashed before the update stop counting too. A late release for such a run is refused plainly
+  (`claim_cleanup_conflict`).
+- A collector's stop signal is never lost, whatever it was doing when the signal arrived.
+- The setup wizard is now Python. `./setup.sh` is a short launcher: it checks `python3` before it
+  runs, as before, then starts the wizard, which shows the same screens, asks the same questions and
+  keeps every safeguard. Path prompts take typing, Backspace, Ctrl-U, Ctrl-W, Ctrl-V and Tab to
+  complete a path; moving the cursor inside a typed path is no longer offered.
+- `./setup.sh --update <project>` (and the menu's first entry, "Update this project") updates an
+  installed project with no menu: providers, profile and commands rule stay as they were, the install
+  is committed, the collector registered, and attest.py asks for the passphrase. It stops plainly,
+  changing nothing, on a failed check, a client not signed in, uncommitted managed files, or earlier
+  records that need your choice.
+- After the project is chosen, setup offers the recommended way first. A new project: "Set up
+  (recommended)" runs every step and asks only your own choices (providers, committing, earlier
+  records, the Codex profile and the commands rule; attest.py still asks for the passphrase), with no
+  do-it-now menus or pauses; "Configure step by step" asks every question as before. An installed
+  project: "Update this project (recommended)", or "Configure" for the full menu as before.
+- An update skips the billing attestation, and so the passphrase, when every enabled provider is
+  observed again and already has an attestation for its current account. Anything else (a provider
+  that cannot be observed, a missing attestation, a status that cannot be read) runs it as before;
+  an answers file and "Re-run the billing attestation only" always run it.
+- `./setup.sh --answers FILE` installs a project with no menu from a JSON answers file
+  (docs/setup-wizard.md); a missing, unknown or invalid answer is refused by name before anything
+  changes.
+- Setup starts the project's own service once the collector is ready, so it closes what an earlier
+  service left at once, not when the next child runs. `learning-start-project-service` does the same
+  from the command line.
+- A service that will not take a connection now says why before closing it: too late, an enrolment
+  that did not verify, too busy, or unavailable (`service_refused_*`), instead of closing silently.
+- An orchestration opened under an earlier service or version is refused
+  `history_orchestration_other_scope`, no longer reported as `host_client_mismatch`.
+- A refused run open now says why instead of `open_unavailable`: the account is still starting
+  (`open_account_starting`) or closing (`open_account_closing`), its database stayed busy
+  (`open_account_busy`), the project's service is not running (`open_service_not_running`), is an
+  earlier version's (`open_service_other_version`) or cannot be reached (`open_service_unreachable`), its
+  hint is not this account's private file (`open_service_hint_refused`), the
+  project is not active (`open_project_inactive`), stored open records disagree
+  (`open_state_inconsistent`), or something else failed (`open_failed`). Codex package 0.8.33.
+- `learning-status` shows how long each collector start-up phase took (`collector_startup_ms`).
+- When the account services are stuck (a part has failed, or the billing probe worker has been held for
+  over ten minutes) and nothing is running anywhere, the collector restarts them by itself, at most
+  once an hour, and its exit record says why (`account_restart`). While anything runs it never
+  restarts; `learning-status` says so and what is held.
+- `learning-review worker|verify|finish` runs one review (the worker, its verifier, then operational QA)
+  as a COCOLO command, saving each step's reply; it stops at a refused step, or when a child gave no
+  verdict.
+- Every refusal the command line prints now carries `next_step`: what to do next, in plain words, for its
+  reason code (`reason_code` and `error` are unchanged).
+- `learning-status` shows the account's own health (`account_health`): `ok`, `degraded` (work kept
+  after an error, a held probe worker, or a slot past its deadline), `faulted` (a lane that failed,
+  with its fixed cause and error type), or `unknown` with the reason, and an `attention` list in
+  plain words. It is read from notes each account lane publishes, so a stuck lane or a busy account
+  cannot stop it; `ready` keeps its meaning. While the account services start, status says
+  `status_account_starting`.
+- An orchestration report counts a run that failed before its open: `runs.admitted`,
+  `runs.failed_before_open` and `failed_before_open_reasons` (fixed reasons only), and such a run is
+  `abandoned`, no longer missing. `runs.opened` still counts real opens. The project's records gain
+  schema 17 (one small reporting table); setup upgrades them as before.
+- Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
+  `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
+  process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.
+- A setup step that runs a while shows how many seconds it has run, and after ten seconds says it can
+  take a few minutes, so an upgrade backing up large records no longer looks stuck.
+- That step also shows what it is doing, such as `backing up project 2 of 5` and then `upgrading the
+  records`. Setup asks the commands it runs for these lines (`COCOLO_PHASES=1`); they are fixed text
+  with counts only, never paths or names. A phase line that cannot be written is dropped, and the
+  upgrade carries on as before; the progress line fits the terminal's width. Codex package 0.8.23.
+- CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
+  `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
+- A wait for the account's records is bounded: at most 750 ms each, 800 ms for one whole request. A
+  request that cannot get them in time is answered `account_busy` (or `open_account_busy` for a run open)
+  with a next step, never a hang or another failure; `learning-status` counts these refusals, even while
+  the records are busy (`ledger_waits`). Codex package 0.8.34 to 0.8.37.
+- Recording a hook event no longer reads all of the project's records (on a 418 MB ledger it took 889 ms;
+  now under a millisecond), and the collector's start-up check reads only the record types it needs. Both
+  come from indexes the ledger gains when it opens; nothing else in it changes.
+- The project's service upgrades its own records when it starts (format 16 to 17), under its own lock,
+  keeping a copy of the store as it was first (`history.sqlite3.before-17.<time>`, owner-only). A learning
+  move that fails while the service starts is kept, shown by `learning-status`, and cleared by the next
+  start that succeeds; a service that stops at once reports its own reason to setup.
+- A service started by setup from a clone prepares children from the project's own files, so Claude
+  children can be prepared again.
+- A run refused because running children hold the space for results is answered
+  `result_capacity_busy` (wait for them), no longer "the store is full"; `learning-status` shows the
+  results in flight (`results_in_flight`).
+- `dispatch` survives a slow service: a status check or result read the service did not answer in time is
+  tried again until the run's own wait ends; a service that is gone still ends the wait at once.
+- A Claude child's result is held to the result schema, as a Codex child's is (`--json-schema`), so an
+  extra field no longer loses the whole result; a run that gives no schema-valid result is refused
+  `structured_output_missing`. Claude Code 2.1.311 or later is needed.
+- The skills say what to do when a dispatch loses its reply: wait for the run to end, then close.
+- Expired run bookings and finished billing probes no longer count against their limits (4,096 each per
+  project), so neither can fill for good; `learning-status` shows both against their limits
+  (`account_capacity.pending_bindings`, `account_capacity.billing_probes`). Codex package 0.8.38.
+- A collector asked to stop always ends within 18 s: after 15 s its exit record names the step it was
+  stuck in (`cause: stop_forced`, `stalled_in`), and a kernel alarm ends it whatever it is doing.
+
 ## 0.3.4: no limit fills for good (Codex package 0.8.32)
 
 - A project could record only 64 results in its whole life. After that every child ended

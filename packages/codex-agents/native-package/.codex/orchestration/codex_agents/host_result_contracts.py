@@ -72,6 +72,36 @@ class HostResultContext:
         return raw, value
 
 
+@dataclass(frozen=True, repr=False)
+class RecordContext:
+    """D1 (RS-D-1): the inputs a later record of a run needs, besides its assignment, stored with its lease.
+
+    The project writer stores them in a private file before the lease can be armed, and every later reader
+    (admission, the run's own result read, a verifier's open, QA, routing evidence) reads them back from there,
+    checked against the consumed grant. The trusted driver supplies them from the run's own originals (the host
+    class that opened it, the client capability it was prepared with); never request JSON.
+    """
+    task: dict
+    route: dict
+    client_capability: dict
+    host_class: str
+    inputs_digest: str
+
+    def __post_init__(self):
+        from .hosts import HOST_CLIENTS
+        if (any(type(getattr(self, name)) is not dict for name in ("task", "route", "client_capability"))
+                or type(self.host_class) is not str or self.host_class not in HOST_CLIENTS
+                or not matches(self.inputs_digest, _DIGEST)):
+            raise HistoryError("history_invalid_input")
+
+    def content(self, assignment: dict) -> bytes:
+        """The stored file's exact bytes: the canonical assignment with these inputs."""
+        self.__post_init__()
+        return canonical_json({"assignment": assignment, "task": self.task, "route": self.route,
+                               "client_capability": self.client_capability, "host_class": self.host_class,
+                               "inputs_digest": self.inputs_digest})
+
+
 @dataclass(frozen=True)
 class HostResultReference:
     binding: AttemptBinding

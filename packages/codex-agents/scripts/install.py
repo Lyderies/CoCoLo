@@ -57,6 +57,43 @@ class TargetRoot:
 Target = Path | TargetRoot
 
 
+class _Ledger:
+    """Every write this run made, as the installer itself made it: per path, the sha256 before its first write and
+    after its last one; the folders it created (with their identity) and removed. The umbrella installer builds
+    its undo journal from this report (printed with every reply), never from reading files back."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, list[str | None]] = {}
+        self.modes: dict[str, int | None] = {}
+        self.before_modes: dict[str, int | None] = {}
+        self.created: list[dict] = []
+        self.removed: list[str] = []
+
+    def wrote(self, relative: str, before: bytes | None, after: bytes | None, mode: int | None = None,
+              before_mode: int | None = None) -> None:
+        digests = [None if content is None else hashlib.sha256(content).hexdigest() for content in (before, after)]
+        if relative in self.files:
+            self.files[relative][1] = digests[1]
+        else:
+            self.files[relative] = digests
+            self.before_modes[relative] = before_mode
+        self.modes[relative] = mode
+
+    def report(self) -> dict:
+        return {"writes": [{"path": path, "before": before, "after": after, "mode": self.modes[path]}
+                           for path, (before, after) in sorted(self.files.items())
+                           if before != after or self.before_modes[path] != self.modes[path]],
+                "folders_created": list(self.created), "folders_removed": list(self.removed)}
+
+
+_LEDGER = _Ledger()
+
+
+def _new_ledger() -> None:
+    global _LEDGER
+    _LEDGER = _Ledger()
+
+
 # The only path under .claude this package owns: the Claude orchestration skill.
 # Everything else under .claude belongs to the Claude package or the project.
 CLAUDE_SKILL_PREFIX = (".claude", "skills", "agent-orchestration")
@@ -103,10 +140,12 @@ def _open_parent_fd(
         else os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     )
     try:
-        for part in path.parent.parts:
+        for index, part in enumerate(path.parent.parts):
+            made = False
             if create:
                 try:
                     os.mkdir(part, mode=0o755, dir_fd=descriptor)
+                    made = True
                 except FileExistsError:
                     pass
             try:
@@ -123,13 +162,17 @@ def _open_parent_fd(
                 ) from exc
             os.close(descriptor)
             descriptor = next_descriptor
+            if made:
+                info = os.fstat(descriptor)
+                _LEDGER.created.append({"path": "/".join(path.parent.parts[: index + 1]),
+                                        "device": info.st_dev, "inode": info.st_ino})
         return descriptor, path.name
     except BaseException:
         os.close(descriptor)
         raise
 
 
-def _read_from_parent(parent_fd: int, name: str, relative: str) -> bytes | None:
+def _read_from_parent(parent_fd: int, name: str, relative: str, *, with_mode: bool = False):
     try:
         descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
     except FileNotFoundError:
@@ -137,10 +180,12 @@ def _read_from_parent(parent_fd: int, name: str, relative: str) -> bytes | None:
     except OSError as exc:
         raise InstallError(f"refusing symlinked install path: {relative}") from exc
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
             raise InstallError(f"managed path is not a regular file: {relative}")
         with os.fdopen(descriptor, "rb") as handle:
-            return handle.read()
+            content = handle.read()
+            return (content, stat.S_IMODE(info.st_mode)) if with_mode else content
     except BaseException:
         try:
             os.close(descriptor)
@@ -187,6 +232,7 @@ def _atomic_write_managed(
     )
     temporary_name = f".{name}.{secrets.token_hex(8)}.tmp"
     try:
+        before, before_mode = _read_from_parent(parent_fd, name, relative, with_mode=True) or (None, None)
         descriptor = os.open(
             temporary_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -198,6 +244,7 @@ def _atomic_write_managed(
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
+                written_mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
         except BaseException:
             try:
                 os.unlink(temporary_name, dir_fd=parent_fd)
@@ -210,6 +257,7 @@ def _atomic_write_managed(
             src_dir_fd=parent_fd,
             dst_dir_fd=parent_fd,
         )
+        _LEDGER.wrote(relative, before, content, written_mode, before_mode)
         os.fsync(parent_fd)
     finally:
         try:
@@ -233,10 +281,10 @@ def _unlink_managed(
     except FileNotFoundError:
         return False
     try:
+        content = _read_from_parent(parent_fd, name, relative)
+        if content is None:
+            return False
         if expected_digest is not None:
-            content = _read_from_parent(parent_fd, name, relative)
-            if content is None:
-                return False
             current = hashlib.sha256(content).hexdigest()
             if current != expected_digest:
                 raise InstallError(f"managed file changed before removal: {relative}")
@@ -246,6 +294,7 @@ def _unlink_managed(
             return False
         except IsADirectoryError as exc:
             raise InstallError(f"managed path is not a regular file: {relative}") from exc
+        _LEDGER.wrote(relative, content, None)
         os.fsync(parent_fd)
         return True
     finally:
@@ -260,6 +309,7 @@ def _rmdir_managed(target: Target, relative: str) -> None:
     try:
         try:
             os.rmdir(name, dir_fd=parent_fd)
+            _LEDGER.removed.append(relative)
         except OSError as exc:
             if exc.errno not in {errno.ENOENT, errno.ENOTEMPTY, errno.ENOTDIR}:
                 raise
@@ -304,7 +354,7 @@ def _load_manifest(target: Target) -> dict | None:
         return None
     try:
         manifest = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise InstallError(f"invalid install manifest: {exc}") from exc
     if (
         not isinstance(manifest, dict)
@@ -786,6 +836,7 @@ def main() -> int:
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--target", required=True, type=Path)
     args = parser.parse_args()
+    _new_ledger()
     try:
         if args.command == "install":
             report = install(
@@ -809,8 +860,11 @@ def main() -> int:
         else:
             report = verify(args.target)
     except (InstallError, OSError) as exc:
-        print(json.dumps({"ready": False, "error": str(exc)}, indent=2))
+        # Even a failure says what this run wrote, so the caller undoes exactly that and nothing else.
+        print(json.dumps({"ready": False, "error": str(exc), **_LEDGER.report()}, indent=2))
         return 2
+    if args.command != "verify" and getattr(args, "apply", False):
+        report.update(_LEDGER.report())
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report.get("ready", True) else 1
 

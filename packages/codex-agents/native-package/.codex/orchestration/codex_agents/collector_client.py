@@ -13,8 +13,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .compatibility_message import compatibility_message
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION,
+    COLLECTOR_MUTATING_OPERATIONS,
     LEDGER_SCHEMA_VERSION,
     MAX_REQUEST_BYTES,
     CollectorBuildConflictError,
@@ -22,6 +24,7 @@ from .collector_contracts import (
     CollectorTransportError,
     CollectorNewerVersionError,
     CollectorUpgradeRequired,
+    RUNTIME_UPGRADE_MESSAGE,
     _version_tuple,
 )
 from .learning_contracts import canonical_json
@@ -30,10 +33,10 @@ from .runtime_files import RUNTIME_FILES, runtime_digest
 from .service_transport import ServiceTransportError, exchange_frame
 
 
-def _collector_runtime_digest() -> str:
-    """The digest of every runtime file this process runs from (`RUNTIME_FILES`)."""
+def _collector_runtime_digest(root: Path | None = None) -> str:
+    """The digest of every runtime file this process runs from (`RUNTIME_FILES`), or of those under `root`."""
 
-    orchestration_root = Path(__file__).resolve().parent.parent
+    orchestration_root = Path(root) if root is not None else Path(__file__).resolve().parent.parent
     return runtime_digest(
         {relative: (orchestration_root / relative).read_bytes() for relative in RUNTIME_FILES}
     )
@@ -45,7 +48,7 @@ def _package_version() -> str:
     if manifest_path.is_file():
         try:
             manifest = json.loads(manifest_path.read_bytes())
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, json.JSONDecodeError, RecursionError) as exc:
             raise RuntimeError("installed package manifest is invalid") from exc
         value = manifest.get("version") if isinstance(manifest, dict) else None
     else:
@@ -60,7 +63,55 @@ def _package_version() -> str:
 
 
 COLLECTOR_RUNTIME_DIGEST = _collector_runtime_digest()
+
+
+def collector_code_stale(*, root: Path | None = None, loaded: str | None = None) -> bool:
+    """True when the runtime files now on disk differ from the digest this process loaded.
+
+    Python never reloads a module, so a collector started before its files changed keeps running the old
+    code; this says so. A file that cannot be read counts as changed. Never raises.
+    """
+    try:
+        return _collector_runtime_digest(root) != (COLLECTOR_RUNTIME_DIGEST if loaded is None else loaded)
+    except Exception:  # noqa: BLE001 - unreadable or missing files mean the loaded code cannot be confirmed
+        return True
 PACKAGE_VERSION = _package_version()
+
+
+def _with_loaded_digest(error: CollectorError, response: dict[str, Any], *, identity_valid: bool) -> CollectorError:
+    """Keep what the collector reported about the code it loaded on the refusal health() raises.
+
+    A client that starts after the runtime files changed hashes the new files, so an old collector's
+    digest differs from its own: health() then raises instead of returning `runtime_stale`. The error says
+    which code the collector loaded (when well formed), whether the identity fields it judged by were well
+    formed at all, and what the collector said about its own files, so callers can tell a collector that
+    runs old code from one that sent a malformed identity or runs another build.
+    """
+    digest = response.get("runtime_digest")
+    error.loaded_digest = digest if type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest) else None
+    error.identity_valid = identity_valid
+    reported = response.get("runtime_stale")
+    error.reported_stale = reported if type(reported) is bool else None
+    return error
+
+
+def collector_code_diagnosis(error: BaseException) -> str | None:
+    """What a health() refusal says about the collector's code, one of:
+
+    `stale`: it runs code other than this install's files and restarting it would load them (an older package
+    version or schema, or the same version with a digest this install does not have and a collector that
+    does not say its own files are unchanged); `conflict`: the same version, a well-formed other digest, and
+    the collector says its own files are unchanged: another build, which a restart would not change;
+    `invalid`: the identity fields it judged by (schema, version, digest) were malformed; None: any other
+    error (a newer collector included).
+    """
+    if not isinstance(error, (CollectorUpgradeRequired, CollectorBuildConflictError)):
+        return None
+    if getattr(error, "identity_valid", False) is not True:
+        return "invalid"
+    if isinstance(error, CollectorBuildConflictError) and getattr(error, "reported_stale", None) is False:
+        return "conflict"
+    return "stale"
 
 
 HOOK_EVENT_CODES = tuple(value[0] for value in HOOK_EVENTS.values())
@@ -119,7 +170,12 @@ class CollectorClient:
         self.socket_path = socket_path
         self.timeout = timeout
 
-    def _request(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _request(self, request: dict[str, Any], *, earlier_collector: bool = False,
+                 echo_digest: str | None = None) -> dict[str, Any]:
+        # `earlier_collector`: the hand-over stop to a collector of an older release (UPG-1), whose
+        # handler accepts only the bare shape. Never used for a same-build collector (decision 129.3).
+        if request.get("op") in COLLECTOR_MUTATING_OPERATIONS and not earlier_collector:
+            request = {**request, "runtime_digest": COLLECTOR_RUNTIME_DIGEST if echo_digest is None else echo_digest}
         reason = None
         try:
             raw = exchange_frame(
@@ -143,6 +199,8 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         if not isinstance(response, dict) or response.get("ok") is not True:
             code = response.get("code", "unknown") if isinstance(response, dict) else "unknown"
+            if code == "runtime_upgrade_required":
+                raise CollectorUpgradeRequired(RUNTIME_UPGRADE_MESSAGE, code=code)
             raise CollectorError(f"collector rejected request: {code}", code=code)
         return response
 
@@ -193,7 +251,7 @@ class CollectorClient:
             and server_schema > LEDGER_SCHEMA_VERSION
         ):
             raise CollectorNewerVersionError(
-                "a newer collector owns the shared learning state; update this project",
+                compatibility_message(response.get("runtime_version"), project_root=project_root),
                 code="runtime_newer",
             )
         if (
@@ -203,15 +261,18 @@ class CollectorClient:
             or server_version is None
             or server_version < client_version
         ):
-            raise CollectorUpgradeRequired(
-                "collector runtime is older than the installed package",
+            raise _with_loaded_digest(CollectorUpgradeRequired(
+                compatibility_message(response.get("runtime_version"), project_root=project_root),
                 code="runtime_upgrade_required",
-            )
+            ), response, identity_valid=(
+                isinstance(server_schema, int) and not isinstance(server_schema, bool)
+                and server_version is not None))
         if response.get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
-            raise CollectorBuildConflictError(
+            raise _with_loaded_digest(CollectorBuildConflictError(
                 "collector build conflicts with this package version",
                 code="runtime_conflict",
-            )
+            ), response, identity_valid=(type(response.get("runtime_digest")) is str and re.fullmatch(
+                r"[0-9a-f]{64}", response["runtime_digest"]) is not None))
         return response
 
     def project(self, project_root: Path) -> str:
@@ -236,6 +297,53 @@ class CollectorClient:
         if type(project_id) is not str or re.fullmatch(r"prj_[0-9a-f]{32}", project_id) is None:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return project_id
+
+    def _owner_signed(self, request: dict[str, Any]) -> dict[str, Any]:
+        """RS-E E2a-3/11 (review round 1): the request with the owner's proof for exactly its fields (subject: its
+        project root). Needs the owner's state folder: a caller who cannot write it cannot sign."""
+        from .collector_paths import CollectorPaths, StateError
+        from .service_enrollment import EnrollmentError, collector_owner_preamble
+        message = {key: value for key, value in request.items() if key != "protocol"}
+        try:
+            line = collector_owner_preamble(CollectorPaths(Path(self.socket_path).parent), canonical_json(message),
+                                            request["project_root"])
+        except (EnrollmentError, StateError, OSError):
+            raise CollectorError("the owner's collector credential is unavailable", code="operation_rejected") from None
+        return {**request, "owner": line.decode("ascii")}
+
+    def launch_recorded(self, project_root: Path) -> bool:
+        """RS-E E2a-11: whether setup's launch record exists for this registered root (the owner's read)."""
+        response = self._request(self._owner_signed({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "launch_status",
+                                                     "project_root": str(project_root.resolve())}))
+        if type(response.get("recorded")) is not bool:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return response["recorded"]
+
+    def start_status(self, project_root: Path) -> str | None:
+        """RS-E E2c-9: the collector starter's status line for this registered root (the owner's read), or None."""
+        response = self._request(self._owner_signed({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "start_status",
+                                                     "project_root": str(project_root.resolve())}))
+        line = response.get("recovery")
+        if line is not None and (type(line) is not str or len(line) > 4096):
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return line
+
+    def start_unpark(self, project_root: Path) -> None:
+        """RS-E E2c-4 (owner decision 143): the owner's start command ends this root's crash-loop park."""
+        response = self._request(self._owner_signed({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "start_unpark",
+                                                     "project_root": str(project_root.resolve())}))
+        if response.get("ok") is not True:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+
+    def record_launch(self, project_root: Path, launch_copy: str, launch_digest: str) -> None:
+        """RS-E E2a-3: record setup's validated launch target for this registered root (the owner's step; the
+        collector verifies the copy itself, so this may take longer than the default timeout)."""
+        response = self._request(self._owner_signed({
+            "protocol": COLLECTOR_PROTOCOL_VERSION, "op": "record_launch",
+            "project_root": str(project_root.resolve()), "launch_copy": str(launch_copy),
+            "launch_digest": launch_digest}))
+        if response.get("ok") is not True:
+            raise CollectorError("collector response is invalid", code="response_invalid")
 
     def owner_record_payload(self, project_root: Path, record: dict) -> bytes:
         response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "owner_record_payload",
@@ -263,6 +371,15 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return committed
 
+    def confirm_legacy_slot(self, project_root: Path, record: dict, signature: bytes) -> dict:
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "confirm_legacy_slot",
+                                  "project_root": str(project_root.resolve()), "record": record,
+                                  "signature_b64": base64.b64encode(signature).decode("ascii")})
+        committed = response.get("committed")
+        if type(committed) is not dict:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return committed
+
     def learning_migration(self, project_root: Path) -> dict:
         """Whether this project's learning history still has to move, and whether a move could start now.
 
@@ -282,7 +399,8 @@ class CollectorClient:
         if (type(earlier) is not dict or set(earlier) != {"holding", "finished_by_ms"}
                 or type(earlier["holding"]) is not int or earlier["holding"] < 0
                 or (earlier["finished_by_ms"] is not None if earlier["holding"] == 0
-                    else type(earlier["finished_by_ms"]) is not int or earlier["finished_by_ms"] < 0)):
+                    else earlier["finished_by_ms"] is not None and
+                    (type(earlier["finished_by_ms"]) is not int or earlier["finished_by_ms"] < 0))):
             raise CollectorError("collector response is invalid", code="response_invalid")
         return {**{name: response[name] for name in names}, "earlier_version_runs": dict(earlier)}
 
@@ -294,11 +412,16 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return response["moved"]
 
-    def shutdown(self, *, only_if_drained: bool = False) -> None:
-        """Stop the collector; with `only_if_drained` it refuses (`collector_busy`) while any run is active."""
+    def shutdown(self, *, only_if_drained: bool = False, earlier_collector: bool = False,
+                 echo_digest: str | None = None) -> None:
+        """Stop the collector; with `only_if_drained` it refuses (`collector_busy`) while any run is active.
+
+        `earlier_collector` sends the bare shape an older release accepts (UPG-1); only the maintenance
+        hand-over uses it, after the collector's own health reply showed it is older than this build."""
         self._request(
             {"protocol": COLLECTOR_PROTOCOL_VERSION,
-             "op": "shutdown_if_drained" if only_if_drained else "shutdown"}
+             "op": "shutdown_if_drained" if only_if_drained else "shutdown"},
+            earlier_collector=earlier_collector, echo_digest=echo_digest,
         )
 
     def issue_result_repair(

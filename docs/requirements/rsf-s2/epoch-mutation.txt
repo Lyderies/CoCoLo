@@ -1,0 +1,166 @@
+.F..FFFFFEFFFFFFEF.......
+======================================================================
+ERROR: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dc70>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 112, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    mutation()
+    ~~~~~~~~^^
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 107, in <lambda>
+    lambda: connection.execute('PRAGMA journal_mode=DELETE'),
+            ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/sql_read_budget.py", line 231, in execute
+    cursor = self._track(super().execute(sql, parameters))
+                         ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 212, in execute
+    return self._fenced(sql, lambda: super(FencedConnection, self).execute(sql, parameters))
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 201, in _fenced
+    result = operation()
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 212, in <lambda>
+    return self._fenced(sql, lambda: super(FencedConnection, self).execute(sql, parameters))
+                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: database is locked
+
+======================================================================
+ERROR: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e2a0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 112, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    mutation()
+    ~~~~~~~~^^
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 107, in <lambda>
+    lambda: connection.execute('PRAGMA journal_mode=DELETE'),
+            ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 212, in execute
+    return self._fenced(sql, lambda: super(FencedConnection, self).execute(sql, parameters))
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 201, in _fenced
+    result = operation()
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 212, in <lambda>
+    return self._fenced(sql, lambda: super(FencedConnection, self).execute(sql, parameters))
+                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: database is locked
+
+======================================================================
+FAIL: test_commit_rechecks_epoch_and_rolls_back (tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 127, in test_commit_rechecks_epoch_and_rolls_back
+    with self.assertRaises((LedgerError, HistoryError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770cd50>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770d900>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770db10>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770d9b0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770de80>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770da60>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dbc0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e140>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dd20>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dfe0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e1f0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e350>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 111, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+----------------------------------------------------------------------
+Ran 12 tests in 2.031s
+
+FAILED (failures=13, errors=2)
+EXPECTED MUTATION FAILURES: ['tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back', "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770cd50>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770d900>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770db10>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770d9b0>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770de80>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770da60>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dbc0>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e140>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dd20>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dfe0>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e1f0>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e350>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dc70>)", "tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e2a0>)"]

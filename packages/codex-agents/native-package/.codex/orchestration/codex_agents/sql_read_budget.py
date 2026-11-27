@@ -15,6 +15,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from .store_fence import FencedConnection
+
 SQL_READ_PROGRESS_INTERVAL = 256
 MAX_SQL_READ_CALLBACKS = 100_000
 MAX_SQL_READ_DURATION_MS = 1000
@@ -145,7 +147,7 @@ class _SQLReadView:
             self._cursor.close()
 
 
-class SQLReadConnection(sqlite3.Connection):
+class SQLReadConnection(FencedConnection):
     """Trusted fresh factory; ordinary legacy operations keep their contract.
 
     A read scope requires the actual construction process/thread, no transaction,
@@ -163,21 +165,41 @@ class SQLReadConnection(sqlite3.Connection):
         self._sql_foreign_progress = False
         self._sql_scope: _ReadScope | None = None
         self._sql_unusable = False
+        self._sql_sole_owner = False
         # The lock that keeps other threads off this connection (set by its owner).
         # A scope refuses every other thread's statement, so every scope holds it:
         # another thread's locked statement then waits instead of being refused.
         self._sql_owner_lock = None
+        self._sql_lock_waits = None  # M4b E1a-3: where a refused wait is counted
         super().__init__(*args, **kwargs)
 
-    def share_with_lock(self, lock) -> None:
-        """Every read scope then holds `lock` (reentrant) for its whole length."""
+    def share_with_lock(self, lock, *, waits=None) -> None:
+        """Every read scope then holds `lock` (reentrant) for its whole length; `waits` counts the
+        scopes refused for want of it (M4b E1a-3)."""
         if self._sql_owner_lock is not None or type(lock) is not type(threading.RLock()):
             raise SQLReadError("sql_read_unavailable")
         self._sql_owner_lock = lock
+        self._sql_lock_waits = waits
+
+    def require_owner(self) -> None:
+        """Opt the collector's existing connection into sole-thread ownership."""
+        self._read_owner()
+        self._sql_sole_owner = True
 
     def _usable(self) -> None:
+        if self._sql_sole_owner and (self._sql_origin[0] != os.getpid()
+                                    or self._sql_origin[1] is not threading.current_thread()):
+            raise SQLReadError("sql_read_wrong_owner")
         if self._sql_unusable:
             raise SQLReadError("sql_read_unavailable")
+
+    def interrupt(self) -> None:
+        """SQLite lets any thread interrupt; a sole-owner connection refuses it from another thread too, as
+        check_same_thread refuses every other native use (review 040-e1bw-r1 MED-1)."""
+        if self._sql_sole_owner and (self._sql_origin[0] != os.getpid()
+                                    or self._sql_origin[1] is not threading.current_thread()):
+            raise SQLReadError("sql_read_wrong_owner")
+        super().interrupt()
 
     def _read_owner(self) -> None:
         if self._sql_origin[0] != os.getpid() or self._sql_origin[1] is not threading.current_thread():
@@ -338,8 +360,12 @@ class SQLReadConnection(sqlite3.Connection):
         # inside the try, so an exception once it is held releases exactly this hold.
         acquired = False
         try:
-            acquired = lock.acquire(timeout=limits.max_duration_ms / 1000)
+            # M4b E1a-1: never longer than the ledger's own limit or the request's deadline either.
+            from .ledger_waits import wait_seconds
+            acquired = lock.acquire(timeout=wait_seconds(limits.max_duration_ms / 1000))
             if not acquired:
+                if self._sql_lock_waits is not None:
+                    self._sql_lock_waits.refused("read_call")
                 raise SQLReadError("sql_read_busy")
             mode = self.in_transaction if transaction is None else transaction
             return self._scoped_read(limits, operation, transaction=mode)

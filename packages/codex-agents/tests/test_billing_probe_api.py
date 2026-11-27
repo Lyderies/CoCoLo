@@ -7,7 +7,7 @@ from unittest import mock
 from tests.learning_support import provider_fixture
 from codex_agents import account_api
 from codex_agents.account_api import AccountClient, AccountError, AccountRequest, account_request_digest, decode_account_request
-from codex_agents.billing_probe_contracts import BillingProbeError, checked_billing_probe_reply
+from codex_agents.billing_probe_contracts import PROBE_INIT_REASONS, BillingProbeError, checked_billing_probe_reply
 from codex_agents.learning_contracts import canonical_json, content_digest
 from codex_agents.providers import claude_rate_limit_records, parse_claude_auth_status
 from codex_agents.service_transport import ServiceTransportError
@@ -88,6 +88,21 @@ class BillingProbeApiTests(unittest.TestCase):
                       {**self.value, 'probe': 'reused', 'reason_code': 'probe_incomplete'}):
             with self.assertRaises(BillingProbeError):
                 checked_billing_probe_reply(value)
+
+    def test_CI_3_every_init_reason_and_a_plain_client_version_are_accepted_and_nothing_else(self):
+        for reason in PROBE_INIT_REASONS:
+            value = {**self.value, 'reason_code': reason, 'records': [self.identity], 'client_version': '2.1.323'}
+            with self.subTest(reason=reason):
+                self.assertEqual(value, checked_billing_probe_reply(value))
+        base = {**self.value, 'reason_code': 'init_plugin_not_allowed', 'records': [self.identity]}
+        checked_billing_probe_reply({**base, 'client_version': None})
+        checked_billing_probe_reply(base)  # a row from before the version was kept
+        for bad in ('2.1', '2.1.323 (Claude Code)', 'x', '', 7, ['2.1.323'], '2.1.323\n'):
+            with self.subTest(version=bad), self.assertRaises(BillingProbeError):
+                checked_billing_probe_reply({**base, 'client_version': bad})
+        for reason in ('init_client_unsupported', 'init_other', 'PRIVATE text'):
+            with self.subTest(reason=reason), self.assertRaises(BillingProbeError):
+                checked_billing_probe_reply({**base, 'reason_code': reason})
 
     def test_malformed_reply_is_fenced_by_the_actual_account_client(self):
         changed = deepcopy(self.value)

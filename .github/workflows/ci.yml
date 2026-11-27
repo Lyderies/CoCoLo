@@ -1,24 +1,32 @@
 name: ci
 
 # A pull request is checked once, as a pull request; other branches are checked when a
-# pull request opens for them, and main and tags on every push.
+# pull request opens for them, and main and tags on every push. Every night the whole
+# suite runs on both systems.
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  schedule:
+    - cron: "17 3 * * *"
 
 # A newer push to the same pull request or branch replaces a run still in progress.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  COCOLO_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+
 permissions:
   contents: read
 
+# Test stages (scripts/test-stages.json): unit tests start no process, socket or sleep and
+# take seconds; integration tests run real services, children and sandboxes; e2e tests run
+# the setup wizard and the installer as programs. A pull request runs unit tests on both
+# systems and integration tests on Ubuntu; main, tags and the nightly run add the rest.
 jobs:
-  # The test suites run locally on macOS and Linux before a release; CI runs only these checks
-  # until 0.4.0 splits the tests into quick stages.
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -28,10 +36,405 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       - name: Identifier guard (files and commit identities)
         run: python scripts/check_identifiers.py --commits HEAD
       - name: Ruff
         run: |
           python -m pip install --disable-pip-version-check ruff==0.16.3
           ruff check .
+
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Private runtime folder (as a login session provides)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+      - name: Select trusted review base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          TRUSTED_BASE: b531844030fa619c1f62ddd6c092ebc2ea4fca38
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE" ;;
+            schedule) base="$TRUSTED_BASE" ;;
+            push)
+              case "$EVENT_REF" in
+                refs/tags/*) base="$TRUSTED_BASE" ;;
+                refs/heads/*) base="$PUSH_BASE" ;;
+                *) echo 'Unsupported trusted-base event ref' >&2; exit 1 ;;
+              esac ;;
+            *) echo 'Unsupported trusted-base event' >&2; exit 1 ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+            echo 'Missing trusted review base' >&2
+            exit 1
+          fi
+          git rev-parse --verify "$base^{commit}"
+          if [ -n "$PR_BASE" ]; then
+            base=$(git merge-base "$PR_BASE" HEAD)
+          fi
+          git rev-parse --verify "$base^{commit}"
+          echo "COCOLO_REVIEW_BASE=$base" >> "$GITHUB_ENV"
+      - name: Prepare pinned test-only tools
+        run: python -m pip install --require-hashes -r requirements-test.txt
+      - name: Unit tests
+        run: python scripts/parallel_tests.py --base "$COCOLO_REVIEW_BASE" --stage unit --save-timings "$RUNNER_TEMP/unit.json" --jobs "$(getconf _NPROCESSORS_ONLN)"
+
+      - name: Retain unit run evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gate-unit-${{ matrix.os }}
+          path: ${{ runner.temp }}/unit.json.run.json
+          if-no-files-found: error
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The main ruleset requires integration (1) to (6) by name: change it with this list.
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Private runtime folder (as a login session provides)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+      - name: Select trusted review base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          TRUSTED_BASE: b531844030fa619c1f62ddd6c092ebc2ea4fca38
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE" ;;
+            schedule) base="$TRUSTED_BASE" ;;
+            push)
+              case "$EVENT_REF" in
+                refs/tags/*) base="$TRUSTED_BASE" ;;
+                refs/heads/*) base="$PUSH_BASE" ;;
+                *) echo 'Unsupported trusted-base event ref' >&2; exit 1 ;;
+              esac ;;
+            *) echo 'Unsupported trusted-base event' >&2; exit 1 ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+            echo 'Missing trusted review base' >&2
+            exit 1
+          fi
+          git rev-parse --verify "$base^{commit}"
+          if [ -n "$PR_BASE" ]; then
+            base=$(git merge-base "$PR_BASE" HEAD)
+          fi
+          git rev-parse --verify "$base^{commit}"
+          echo "COCOLO_REVIEW_BASE=$base" >> "$GITHUB_ENV"
+      - name: Prepare pinned test-only tools
+        run: python -m pip install --require-hashes -r requirements-test.txt
+      - name: Integration tests, one of six shards
+        # bash, not the default shell: only `shell: bash` adds pipefail, so the tee keeps the exit status.
+        # One runner at two jobs per core took 8-9 minutes, and its tests that start real CLI
+        # processes ran into their time bounds under that load (PLAN T4). Six shards balanced by
+        # recorded time, at half the cores: each test runs several services and children.
+        shell: bash
+        run: python scripts/parallel_tests.py --base "$COCOLO_REVIEW_BASE" --stage integration --shard "${{ matrix.shard }}/6" --save-timings "$RUNNER_TEMP/shard-${{ matrix.shard }}.json" --jobs "$(( ($(getconf _NPROCESSORS_ONLN) + 1) / 2 ))" | tee "$RUNNER_TEMP/integration.txt"
+      - name: Keep shard measurements even on failure
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: integration-timings-${{ matrix.shard }}
+          path: ${{ runner.temp }}/shard-*.run.json
+          if-no-files-found: error
+      - name: Keep the failed modules' work
+        # A failure seen only on these runners can be read from the kept folders (PLAN T4c). Only
+        # synthetic fixtures and test keys are in them.
+        if: failure()
+        run: |
+          python - "$RUNNER_TEMP/integration.txt" > "$RUNNER_TEMP/failed.txt" <<'EOF'
+          import json, sys
+          text = open(sys.argv[1]).read()
+          report = json.JSONDecoder().raw_decode(text[text.rindex("\n{") + 1:])[0]
+          print("\n".join(sorted({unit.split("#")[0] for unit in report["failed_units"]})))
+          EOF
+          mkdir -p "$RUNNER_TEMP/kept/original"
+          # The failing run's own unit logs: the full test output, cut to the last lines in the job log.
+          original=$(python -c 'import json,sys; t=open(sys.argv[1]).read(); print(json.JSONDecoder().raw_decode(t[t.rindex("\n{")+1:])[0]["logs"])' "$RUNNER_TEMP/integration.txt" 2>/dev/null || true)
+          [ -n "$original" ] && cp "$original"/*.log "$RUNNER_TEMP/kept/original/" 2>/dev/null || true
+          while read -r module; do
+            [ -n "$module" ] || continue
+            python scripts/parallel_tests.py --base "$COCOLO_REVIEW_BASE" --keep --module "$module" --jobs "$(getconf _NPROCESSORS_ONLN)" > "$RUNNER_TEMP/kept/rerun-${module//[^A-Za-z0-9_.]/_}.txt" 2>&1 || true
+            logs=$(python -c 'import json,sys; t=open(sys.argv[1]).read(); print(json.JSONDecoder().raw_decode(t[t.rindex("\n{")+1:])[0]["logs"])' "$RUNNER_TEMP/kept/rerun-${module//[^A-Za-z0-9_.]/_}.txt" 2>/dev/null || true)
+            [ -n "$logs" ] && tar --warning=no-file-ignored -czf "$RUNNER_TEMP/kept/${module//[^A-Za-z0-9_.]/_}.tgz" -C "$logs" . 2>/dev/null || true
+          done < "$RUNNER_TEMP/failed.txt"
+      - name: Upload the kept work
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: integration-shard-${{ matrix.shard }}-kept
+          path: ${{ runner.temp }}/kept
+          retention-days: 7
+
+  full:
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # A stuck run should not hold a (costly) runner for hours.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Private runtime folder (as a login session provides)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+      - name: Select trusted review base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          TRUSTED_BASE: b531844030fa619c1f62ddd6c092ebc2ea4fca38
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE" ;;
+            schedule) base="$TRUSTED_BASE" ;;
+            push)
+              case "$EVENT_REF" in
+                refs/tags/*) base="$TRUSTED_BASE" ;;
+                refs/heads/*) base="$PUSH_BASE" ;;
+                *) echo 'Unsupported trusted-base event ref' >&2; exit 1 ;;
+              esac ;;
+            *) echo 'Unsupported trusted-base event' >&2; exit 1 ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+            echo 'Missing trusted review base' >&2
+            exit 1
+          fi
+          git rev-parse --verify "$base^{commit}"
+          if [ -n "$PR_BASE" ]; then
+            base=$(git merge-base "$PR_BASE" HEAD)
+          fi
+          git rev-parse --verify "$base^{commit}"
+          echo "COCOLO_REVIEW_BASE=$base" >> "$GITHUB_ENV"
+      - name: Prepare pinned test-only tools
+        run: python -m pip install --require-hashes -r requirements-test.txt
+      - name: End-to-end tests (and integration tests on macOS)
+        env:
+          MORE: ${{ matrix.os == 'macos-latest' && '--stage integration' || '' }}
+        run: python scripts/parallel_tests.py --base "$COCOLO_REVIEW_BASE" --stage e2e $MORE --save-timings "$RUNNER_TEMP/e2e.json" --jobs "$((2 * $(getconf _NPROCESSORS_ONLN)))"
+
+      - name: Retain end-to-end run evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gate-e2e-${{ matrix.os }}
+          path: ${{ runner.temp }}/e2e.json.run.json
+          if-no-files-found: error
+
+  release-replay:
+    # Decision 175: the live reply-shape replay (soak layer, ~10 minutes) is a release-gate proof, kept out of
+    # every local full run. Main, tags and the nightly run always run it; a failure fails the run.
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Prepare pinned test-only tools
+        run: python -m pip install --require-hashes -r requirements-test.txt
+      # Decision 420: one soak invocation over every soak-layer module, so its run record carries every soak-linked
+      # check. The soak requirement gate below needs all of them to have run and passed. This job's gate is REQUIRED
+      # for tags and main (it runs on both); branch protection is unchanged. Tags add --release, which also fails on
+      # any requirement still marked planned.
+      - name: Release-gate replays (soak profile, every soak module)
+        run: python scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live --module codex:tests.test_merge_library_soak --save-timings "$RUNNER_TEMP/soak.json"
+      - name: Enforce every soak-linked requirement check
+        env:
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '' }}
+        run: python scripts/parallel_tests.py --requirement-gate "$RUNNER_TEMP/soak.json.run.json" $RELEASE
+      - name: Retain soak run evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gate-soak-macos-latest
+          path: ${{ runner.temp }}/soak.json.run.json
+          if-no-files-found: error
+
+  integration-budget:
+    needs: integration
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v7.0.0
+        with:
+          pattern: integration-timings-*
+          path: timings
+          merge-multiple: true
+      - name: Enforce complete module budgets and outcomes across shards
+        run: python scripts/parallel_tests.py --combine-timings timings/*.run.json --budgets-only
+
+
+  pr-e2e:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Private runtime folder (as a login session provides)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+      - name: Validate trusted PR merge base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          TRUSTED_BASE: b531844030fa619c1f62ddd6c092ebc2ea4fca38
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          test -n "$PR_BASE" || exit 1
+          base=$(git merge-base "$PR_BASE" HEAD)
+          git rev-parse --verify "$base^{commit}"
+          echo "COCOLO_REVIEW_BASE=$base" >> "$GITHUB_ENV"
+      - run: python -m pip install --require-hashes -r requirements-test.txt
+      - run: python scripts/parallel_tests.py --base "$COCOLO_REVIEW_BASE" --stage e2e --save-timings "$RUNNER_TEMP/e2e.json"
+      - if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gate-e2e-ubuntu-latest
+          path: ${{ runner.temp }}/e2e.json.run.json
+          if-no-files-found: error
+
+  lifecycle-e2e:
+    # PLAN T7 (G9): the strict lifecycle end-to-end test on a fake project, real services, the installed CLI.
+    # Main, tags and the nightly run only. It does not gate the requirements job until a first CI run shows it
+    # stable on a runner; the flows grow with each slice and the last slice switches this to --all.
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Lifecycle end-to-end test
+        run: python3 -I -B scripts/e2e_lifecycle.py --flows L1,L2,L3,L4,L5 --jobs 4 --report "$RUNNER_TEMP/lifecycle-e2e.json"
+      - name: Retain the lifecycle report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: lifecycle-e2e-report
+          path: ${{ runner.temp }}/lifecycle-e2e.json
+          if-no-files-found: error
+
+  requirements:
+    needs: [unit, integration, full, pr-e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v7.0.0
+        with:
+          name: gate-unit-ubuntu-latest
+          path: gate
+      - uses: actions/download-artifact@v7.0.0
+        with:
+          name: gate-e2e-ubuntu-latest
+          path: gate
+      - uses: actions/download-artifact@v7.0.0
+        with:
+          pattern: integration-timings-*
+          path: gate
+          merge-multiple: true
+      # Decision 420: this gate judges each check only in the profile that selects its layer. The ci profile never
+      # selects soak checks, so a requirement whose only unrun checks are soak-layer is reported "awaiting soak gate"
+      # (listed, not a pass; the release-replay job's soak gate must prove it). Requirements marked planned are listed
+      # in their own list; tags add --release, which fails on any planned requirement.
+      - name: Enforce every requirement from complete run evidence
+        env:
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '' }}
+        run: python scripts/parallel_tests.py --requirement-gate gate/*.run.json $RELEASE
+
+  assertion-diff:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Report assertion changes for review
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        run: |
+          base="$PR_BASE"
+          if [ -n "$base" ]; then
+            base=$(git merge-base "$base" HEAD)
+          else
+            base="$PUSH_BASE"
+          fi
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+            echo '{"note": "no review base for this event; nothing to compare"}' > assertion-diff.json
+          else
+            python -B scripts/assertion_diff.py "$base" HEAD > assertion-diff.json || true
+          fi
+          cat assertion-diff.json
+          cat assertion-diff.json >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Retain assertion change report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: assertion-diff
+          path: assertion-diff.json
+          if-no-files-found: ignore

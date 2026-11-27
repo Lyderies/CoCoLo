@@ -16,11 +16,13 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from .service_record import ServiceRecordAuthority
 from .history_api import (
     HISTORY_OPERATIONS, HISTORY_PROTOCOL_VERSION, LARGE_REPLY_OPERATIONS, MAX_HISTORY_REPLY_BYTES,
     HistoryRequest, decode_history_request, decode_history_response, history_request_digest,
 )
-from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
+import re
+from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches, valid_integer
 from .project_learning_live import ProjectLearning
 from .host_result_contracts import (HostResultContext, OperationalCheckContext, OperationalQAContext,
                                     WorkerResultContext, decode_host_result_reference)
@@ -34,6 +36,9 @@ from .orchestration_service import OrchestrationService
 from .result_read_api import RESULT_READ_OPERATION, ResultReadRequest
 from .result_read_service import ResultReadAuthorization, ResultReadService
 from .service_transport import MAX_FRAME_BYTES
+
+
+_CODE = re.compile(r"[a-z0-9_]{1,64}")
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,14 @@ class HistoryAuthorization:
     operational_qa_context: OperationalQAContext | None = None
     operational_check_context: OperationalCheckContext | None = None
     open_scope_context: OpenScopeContext | None = None
+    # O0c M1, M3: (run slots this host can no longer free, run slots it has), for the capacity report.
+    run_slots: tuple | None = None
+    # LRS-7: (state, elapsed ms, failed phase, failure code) of the host's start-up checks, for the same report.
+    warm_up: tuple | None = None
+    # Decision 309: diagnostic count, supplied by the live owner, not stored history.
+    preparation_cleanup_pending: int | None = None
+    # Of those, the ones whose folder this service never learned (so it cannot retry them).
+    preparation_cleanup_unlocated: int | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -66,6 +79,17 @@ class HistoryAuthorization:
             or (self.operational_qa_context is not None and type(self.operational_qa_context) is not OperationalQAContext)
             or (self.operational_check_context is not None and type(self.operational_check_context) is not OperationalCheckContext)
             or (self.open_scope_context is not None and type(self.open_scope_context) is not OpenScopeContext)
+            or (self.run_slots is not None and (type(self.run_slots) is not tuple or len(self.run_slots) != 2
+                                                or any(type(n) is not int or n < 0 for n in self.run_slots)))
+            or (self.preparation_cleanup_pending is not None
+                and not valid_integer(self.preparation_cleanup_pending, maximum=64))
+            or (self.preparation_cleanup_unlocated is not None
+                and not valid_integer(self.preparation_cleanup_unlocated, maximum=64))
+            or (self.warm_up is not None and (type(self.warm_up) is not tuple or len(self.warm_up) != 4
+                                              or self.warm_up[0] not in {'warming', 'ready', 'failing'}
+                                              or type(self.warm_up[1]) is not int or self.warm_up[1] < 0
+                                              or self.warm_up[2] not in {None, 'listing', 'sweep'}
+                                              or (self.warm_up[3] is not None and not matches(self.warm_up[3], _CODE))))
         ):
             raise HistoryError("history_not_authorized")
 
@@ -397,14 +421,44 @@ class HistoryService:
                     result = {'stored': False, 'refused': refusal.owner_reason,
                               'detail': None if refusal.detail is None else refusal.detail[:200],
                               **({'record': None} if review else {})}
+            elif request.operation == 'service.stop_for_update':
+                result = {'stopping': True}
+            elif request.operation == 'history.takeover_report':
+                from .project_takeover import takeover_report
+                result = takeover_report(self._history(), run_handle=request.payload.get('run_handle'))
+            elif request.operation == 'history.holds_report':
+                from .project_holds_report import holds_report
+                self._history()
+                result = holds_report(self._store, runtime_digest=self._runtime)
+            elif request.operation == 'history.run_usage':
+                from .project_usage_report import service_run_usage
+                self._history()
+                self._store._require_owner(read_only=True)
+                result = service_run_usage(self._store, int(self._clock()))
+            elif request.operation == 'history.orchestration_counts':
+                from .project_orchestration_report import orchestration_counts
+                self._history()
+                result = orchestration_counts(self._store)
             elif request.operation == 'history.capacity_report':
                 from .project_capacity_report import capacity_report
                 self._history()
                 result = capacity_report(self._store)
+                if authorization.run_slots is not None:
+                    stuck, limit = authorization.run_slots
+                    result['run_slots'] = {'stuck': stuck, 'limit': limit}
+                    if authorization.preparation_cleanup_pending is not None:
+                        result['run_slots']['cleanup_pending'] = authorization.preparation_cleanup_pending
+                    if authorization.preparation_cleanup_unlocated is not None:
+                        result['run_slots']['cleanup_unlocated'] = authorization.preparation_cleanup_unlocated
+                    if authorization.warm_up is not None:
+                        state, since_ms, phase, code = authorization.warm_up
+                        result['run_slots']['warm_up'] = {'state': state, 'since_ms': since_ms,
+                                                          'failed_phase': phase, 'last_failure_code': code}
             elif request.operation == 'history.orchestration_report':
                 from .project_orchestration_report import orchestration_report
                 self._history()
-                result = orchestration_report(self._store, request.payload['orchestration_id'])
+                result = orchestration_report(self._store, request.payload['orchestration_id'],
+                                             runtime_digest=self._runtime)
             elif request.operation == 'history.routing_evidence':
                 if authorization.host_result_context is None:
                     raise HistoryError('history_not_authorized')
@@ -413,6 +467,16 @@ class HistoryService:
                 result = {'trusted': trusted_reconnaissance(
                     self._store, authorization.host_result_context, request.payload['host_outcome_digest'],
                     task_id=request.payload['task_id'], family=request.payload['family'])}
+            elif request.operation == 'history.result_reference':
+                # D1: the attempt's stored context (its host class and open inputs) authorized this; the reference
+                # is read from the store, so the record works after the service that ran it has gone.
+                if authorization.host_result_context is None:
+                    raise HistoryError('history_not_authorized')
+                binding = authorization.host_result_context.binding
+                if (binding.run_handle, binding.attempt) != (request.payload['run_handle'], request.payload['attempt']):
+                    raise HistoryError('history_not_authorized')
+                self._history()
+                result = self._store.committed_result_reference(binding)
             elif request.operation == 'history.worker_input':
                 # A recorded worker's exact originals, for the account open of its
                 # verifier: checked against the worker's consumed grant first.
@@ -451,7 +515,10 @@ class HistoryService:
                         raise HistoryError("history_not_authorized")
                     self._history()._require_owner()
 
-                result = self._store.admit_host_result(reference, **captured, before_commit=reauthorize)
+                # B2: the primary's admission runs the same final predicate, with this writer's own runtime.
+                result = self._store.admit_host_result(
+                    reference, **captured, before_commit=reauthorize,
+                    final_check=ServiceRecordAuthority(runtime_digest=self._runtime))
             else:
                 self._history()
                 result = self._execute(request, authorization)
@@ -470,7 +537,10 @@ class HistoryService:
             decode_history_response(reply, request)
             # Serialization and authorization may reenter trusted lifecycle code.
             # Consult the original owner again before releasing any cached reply.
-            self._history()._require_owner()
+            if request.operation != 'service.stop_for_update':
+                self._history()._require_owner()
+            elif self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
+                raise HistoryError('history_wrong_owner')
             if request.operation == 'history.open_scope':
                 authorize_open_scope()
                 from .project_open_scope import current_open_scope

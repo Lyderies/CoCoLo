@@ -12,13 +12,15 @@ from pathlib import Path
 from .history_contracts import (HistoryError, HISTORY_REASON_CODES, MAX_SEQUENCE, _ID, _PROJECT, _DIGEST, _ORCHESTRATION,
                                 matches, valid_integer)
 from .learning_contracts import canonical_json, parse_bounded_json
-from .service_transport import MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
+from .service_transport import MAX_TIMEOUT_SECONDS, SERVICE_REFUSALS, ServiceTransportError, exchange_frame
 
 ORCHESTRATION_PROTOCOL_VERSION = 1
 MAX_ORCHESTRATION_FRAME_BYTES = 16_384
 MAX_ORCHESTRATION_CHECKPOINT_BYTES = 8192
-ORCHESTRATION_OPERATIONS = frozenset('orchestration.' + name for name in ('open', 'pause', 'resume', 'checkpoint', 'close', 'status'))
-ORCHESTRATION_TERMINAL_STATES = frozenset({'completed', 'failed', 'interrupted', 'cancelled'})
+MAX_RESUME_STATE_BYTES = 2048
+ORCHESTRATION_OPERATIONS = frozenset('orchestration.' + name for name in (
+    'open', 'pause', 'resume', 'checkpoint', 'close', 'status', 'rollover', 'packet'))
+ORCHESTRATION_TERMINAL_STATES = frozenset({'completed', 'failed', 'interrupted', 'cancelled', 'rolled_over'})
 ORCHESTRATION_STATES = ORCHESTRATION_TERMINAL_STATES | {'active', 'paused'}
 HOST_CLIENT_VERSIONS = frozenset({'codex-host-v1', 'claude-host-v1'})
 SCOPE_FIELDS = ('project_id', 'primary_session_id', 'runtime_digest', 'supervisor_instance_id', 'supervisor_generation')
@@ -75,6 +77,26 @@ def _closed(value, fields):
     return type(value) is dict and value.keys() == fields
 
 
+def checked_resume_state(value):
+    if type(value) is not dict or len(canonical_json(value)) > MAX_RESUME_STATE_BYTES:
+        raise HistoryError('history_invalid_request')
+    return value
+
+
+def checked_handoff(value):
+    fields = {'version', 'handoff_id', 'request_digest', 'previous_handle', 'next_handle',
+              'session_id', 'next_session_id', 'cause'}
+    if (not _closed(value, fields) or type(value['version']) is not int or value['version'] != 1
+            or not matches(value['handoff_id'], _DIGEST) or not matches(value['request_digest'], _DIGEST)
+            or any(not matches(value[n], _ORCHESTRATION) for n in ('previous_handle', 'next_handle'))
+            or value['previous_handle'] == value['next_handle']
+            or any(not matches(value[n], _ID) for n in ('session_id', 'next_session_id'))
+            or value['cause'] not in {'session', 'capacity'}
+            or (value['cause'] == 'capacity' and value['session_id'] != value['next_session_id'])):
+        raise HistoryError('history_invalid_response')
+    return value
+
+
 def encode_orchestration_request(request):
     invalid = False
     try:
@@ -89,15 +111,25 @@ def encode_orchestration_request(request):
                 raise ValueError()
         else:
             fields = {'orchestration_handle'}
-            if operation != 'orchestration.status':
+            if operation not in {'orchestration.status', 'orchestration.packet'}:
                 fields.add('expected_sequence')
             if operation in {'orchestration.checkpoint', 'orchestration.close'}:
                 fields |= {'goal_tokens_used', 'goal_time_used_seconds'}
             if operation == 'orchestration.close':
                 fields.add('status')
+            if operation == 'orchestration.checkpoint' and type(payload) is dict and 'resume_state' in payload:
+                fields.add('resume_state')
+                checked_resume_state(payload['resume_state'])
+            if operation == 'orchestration.rollover':
+                fields |= {'session_id', 'next_session_id', 'cause'}
+                if (payload['cause'] not in {'session', 'capacity'}
+                        or any(not matches(payload[n], _ID) for n in ('session_id', 'next_session_id'))
+                        or (payload['cause'] == 'capacity' and payload['session_id'] != payload['next_session_id'])
+                        or (payload['cause'] == 'session' and payload['session_id'] == payload['next_session_id'])):
+                    raise ValueError()
             if not _closed(payload, fields) or not matches(payload['orchestration_handle'], _ORCHESTRATION):
                 raise ValueError()
-            if (operation != 'orchestration.status'
+            if (operation not in {'orchestration.status', 'orchestration.packet'}
                     and not valid_integer(payload['expected_sequence'], minimum=1, maximum=MAX_SEQUENCE - 1)):
                 raise ValueError()
             if operation == 'orchestration.close' and payload['status'] not in ORCHESTRATION_TERMINAL_STATES:
@@ -158,9 +190,10 @@ def checked_orchestration_view(value):
             or (s['status'] in ORCHESTRATION_TERMINAL_STATES
                 and (not valid_integer(s['ended_at_ms']) or s['ended_at_ms'] != s['observed_at_ms']))
             or any(s[n] is not None and not valid_integer(s[n]) for n in ('goal_tokens_used', 'goal_time_used_seconds'))
-            # Only open commits sequence 1: active, unmeasured and observed at start.
-            or (s['sequence'] == 1 and (s['status'] != 'active' or s['observed_at_ms'] != s['started_at_ms']
-                                        or s['goal_tokens_used'] is not None or s['goal_time_used_seconds'] is not None))):
+            # A successor's first checkpoint may inherit pause and cumulative usage.
+            # Ordinary open receipts still require active, unmeasured state below.
+            or (s['sequence'] == 1 and (s['status'] not in {'active', 'paused'}
+                                        or s['observed_at_ms'] != s['started_at_ms']))):
         raise HistoryError('history_invalid_response')
     return value
 
@@ -174,11 +207,16 @@ _RECEIPT_STATUS = {'orchestration.open': {'active'}, 'orchestration.pause': {'pa
                    'orchestration.resume': {'active'}, 'orchestration.checkpoint': {'active', 'paused'}}
 
 
-def _check_receipt(request, receipt, current, known):
+def _check_receipt(request, receipt, current, known, *, successor=False):
     # The receipt is the original committed result; current is separately read
     # state. A known receipt is metadata only and never a new execution grant.
     committed, now, payload = receipt['snapshot'], current['snapshot'], request.payload
     expected = {payload['status']} if request.operation == 'orchestration.close' else _RECEIPT_STATUS[request.operation]
+    if request.operation == 'orchestration.open':
+        if successor:
+            expected = {'active', 'paused'}
+        elif any(committed[n] is not None for n in ('goal_tokens_used', 'goal_time_used_seconds')):
+            raise ValueError()
     sequence = 1 if request.operation == 'orchestration.open' else payload['expected_sequence'] + 1
     if committed['status'] not in expected or committed['sequence'] != sequence:
         raise ValueError()
@@ -214,7 +252,12 @@ def decode_orchestration_response(raw, request):
             raise ValueError()
         if response['ready']:
             result = response['result']
-            if response['reason_code'] is not None or not _closed(result, {'receipt', 'current', 'known'}) or type(result['known']) is not bool:
+            if response['reason_code'] is not None:
+                raise ValueError()
+            if request.operation in {'orchestration.rollover', 'orchestration.packet'}:
+                _check_lifetime_result(request, result)
+                return result
+            if not _closed(result, {'receipt', 'current', 'known'}) or type(result['known']) is not bool:
                 raise ValueError()
             current = checked_orchestration_view(result['current'])
             if (not _same(current['snapshot']['scope'], scope)
@@ -238,6 +281,53 @@ def decode_orchestration_response(raw, request):
     return response['result']
 
 
+def _check_lifetime_result(request, result):
+    scope, payload = request.scope.as_data(), request.payload
+    current = checked_orchestration_view(result['current'])
+    if not _same(current['snapshot']['scope'], scope):
+        raise ValueError()
+    if request.operation == 'orchestration.packet':
+        if (not _closed(result, {'current', 'resume_state', 'handoff'})
+                or current['snapshot']['orchestration_handle'] != payload['orchestration_handle']):
+            raise ValueError()
+        checked_resume_state(result['resume_state'])
+        if result['handoff'] is not None:
+            link = checked_handoff(result['handoff'])
+            if current['snapshot']['orchestration_handle'] not in {link['previous_handle'], link['next_handle']}:
+                raise ValueError()
+        return
+    if (not _closed(result, {'receipt', 'current', 'previous', 'handoff', 'known', 'rolled_over', 'note'})
+            or type(result['known']) is not bool or type(result['rolled_over']) is not bool):
+        raise ValueError()
+    if not result['rolled_over']:
+        if (any(result[n] is not None for n in ('receipt', 'previous', 'handoff')) or result['known']
+                or result['note'] not in {None, 'Waiting for active work.'}
+                or current['snapshot']['orchestration_handle'] != payload['orchestration_handle']
+                or current['snapshot']['sequence'] != payload['expected_sequence']
+                or current['snapshot']['status'] not in {'active', 'paused'}):
+            raise ValueError()
+        return
+    receipt = checked_orchestration_view(result['receipt'])
+    previous = checked_orchestration_view(result['previous'])
+    link = checked_handoff(result['handoff'])
+    if (result['note'] is not None or not _same(previous['snapshot']['scope'], scope)
+            or link['previous_handle'] != payload['orchestration_handle']
+            or previous['snapshot']['orchestration_handle'] != link['previous_handle']
+            or receipt['snapshot']['orchestration_handle'] != link['next_handle']
+            or any(link[n] != payload[n] for n in ('session_id', 'next_session_id', 'cause'))
+            or link['request_digest'] != orchestration_request_digest(request)):
+        raise ValueError()
+    closing = OrchestrationRequest(1, 'orchestration.close', request.request_id, request.scope, {
+        'orchestration_handle': payload['orchestration_handle'], 'expected_sequence': payload['expected_sequence'],
+        'status': 'rolled_over', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
+    _check_receipt(closing, previous, previous, False)
+    opening = OrchestrationRequest(1, 'orchestration.open', request.request_id, request.scope, {})
+    _check_receipt(opening, receipt, current, result['known'], successor=True)
+    if any(receipt['snapshot'][n] != previous['snapshot'][n]
+           for n in ('goal_tokens_used', 'goal_time_used_seconds')):
+        raise ValueError()
+
+
 class OrchestrationClient:
     """One bounded exchange per call; no startup, retries or database fallback."""
     def __init__(self, endpoint: Path, scope: OrchestrationScope, *, timeout: float):
@@ -254,12 +344,12 @@ class OrchestrationClient:
         request = OrchestrationRequest(1, operation, request_id, self._scope, payload)
         raw = encode_orchestration_request(request)
         request = decode_orchestration_request(raw)
-        failed = False
+        failed = None
         try:
             reply = exchange_frame(self._endpoint, raw, timeout=self._timeout, request_limit=MAX_ORCHESTRATION_FRAME_BYTES,
                                    response_limit=MAX_ORCHESTRATION_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'history_service_unavailable'
         if failed:
-            raise HistoryError('history_service_unavailable')
+            raise HistoryError(failed)
         return decode_orchestration_response(reply, request)

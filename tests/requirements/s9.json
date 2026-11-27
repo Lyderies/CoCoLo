@@ -1,0 +1,35 @@
+{
+ "authority": "docs/requirements/s9.md",
+ "requirements": [
+  {
+   "id": "S9-HM4-1",
+   "source": "tests/requirements/s9.json#S9-HM4-1",
+   "statement": "Report corruption through resumable read-only quick/full checks on consistent copies; healthy stores are quiet."
+  },
+  {
+   "id": "S9-HM4-2",
+   "source": "tests/requirements/s9.json#S9-HM4-2",
+   "statement": "Report ledger and project size at 8 GiB and growth strictly over 1 GiB per day; never refuse runs."
+  },
+  {
+   "id": "S9-HM4-3",
+   "source": "tests/requirements/s9.json#S9-HM4-3",
+   "statement": "Report full check completion more than 24 hours ago as overdue, with strict boundary and completion-only timestamps."
+  },
+  {
+   "id": "S9-HM4-4",
+   "source": "tests/requirements/s9.json#S9-HM4-4",
+   "statement": "Reload configurable warning thresholds and show the effective defaults or changed values in status."
+  },
+  {
+   "id": "S9-HM4-5",
+   "source": "tests/requirements/s9.json#S9-HM4-5",
+   "statement": "Keep the mutable ledger on its owner; one exclusive read-only worker pins a snapshot, with bounded owner waits and resumable Python page backups and copy scans."
+  },
+  {
+   "id": "S9-HM4-6",
+   "source": "tests/requirements/s9.json#S9-HM4-6",
+   "statement": "Expose report-only scoped findings, fair project enumeration, retained warnings and deferred register hook."
+  }
+ ]
+}

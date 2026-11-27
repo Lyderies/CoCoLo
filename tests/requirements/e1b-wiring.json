@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/e1b-wiring.md",
+ "requirements": [
+  {
+   "id": "E1b-1",
+   "statement": "One opening thread constructs the ledger and account views and executes every SQL statement through shutdown.",
+   "source": "tests/requirements/e1b-wiring.json#E1b-1"
+  },
+  {
+   "id": "E1b-2",
+   "statement": "Whole ledger operations including account transactions and their authority rechecks execute as one owner request.",
+   "source": "tests/requirements/e1b-wiring.json#E1b-2"
+  },
+  {
+   "id": "E1b-8",
+   "statement": "Preparation runs before owner requests where existing checks permit, and current authority is rechecked before commit.",
+   "source": "tests/requirements/e1b-wiring.json#E1b-8"
+  }
+ ]
+}

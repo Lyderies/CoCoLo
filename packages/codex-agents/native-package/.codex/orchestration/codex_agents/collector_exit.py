@@ -19,12 +19,26 @@ import sys
 import time
 from pathlib import Path
 
-CAUSES = frozenset({'signal', 'requested', 'state_removed', 'thread_ended', 'error'})
+CAUSES = frozenset({'signal', 'requested', 'state_removed', 'thread_ended', 'error', 'account_restart',
+                    'stop_forced'})  # O10 SD2: the shutdown watchdog ended a stop that passed its bound
+# O10 SD2: the shutdown steps, in order; `stalled_in` names one of them. O10 SD3-3: the bound starts
+# when the stop signal arrives (`signal_received`), so a stop stuck before the first step is named too.
+SHUTDOWN_STEPS = ('signal_received', 'account_close', 'account_drain', 'server_stop', 'exit_record',
+                  'ledger_close')
+# S1-H1c: a self-restart records only the fixed cause that made the account stuck, in `error`.
+_RESTART_CAUSE = re.compile(r'[a-z][a-z_]{2,63}')
 MAX_LOCATIONS = 8
 MAX_RECORD_BYTES = 4096
 _TYPE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 _WHERE = re.compile(r'(?:[A-Za-z0-9_.-]{1,64}\.py|<other>):[0-9]{1,6} (?:[A-Za-z_<>][A-Za-z0-9_<>]{0,63})')
 _FIELDS = {'schema_version', 'stopped_at_ms', 'started_at_ms', 'cause', 'error', 'where'}
+# SD1: how long each shutdown step took, whole milliseconds; optional, so older records still read.
+STOP_STEPS = frozenset({'account_close', 'account_drain', 'server_stop'})
+
+
+def _stop_ok(value):
+    return (type(value) is dict and set(value) == STOP_STEPS
+            and all(type(item) is int and 0 <= item < 86_400_000 for item in value.values()))
 # Only COCOLO's own files and Python's are named; anything else could carry an identifier.
 _OWN_ROOT = Path(__file__).resolve().parent.parent
 _STDLIB = Path(os.__file__).resolve().parent
@@ -85,21 +99,27 @@ def _locations(error):
             name = code.co_name if _TYPE.fullmatch(code.co_name) or code.co_name == '<module>' else '<other>'
             item = f'{Path(code.co_filename).resolve().name}:{line} {name}'  # The file that was checked.
         else:
-            item = f'<other>:0 <other>'
+            item = '<other>:0 <other>'
         found.append(item if _WHERE.fullmatch(item) else '<other>:0 <other>')
     return found
 
 
-def write_exit(state_root, *, started_at_ms, cause, error) -> None:
+def write_exit(state_root, *, started_at_ms, cause, error, detail=None, stop_ms=None, stalled_in=None) -> None:
     """Best effort: a record that cannot be written is skipped, and stopping carries on."""
     with contextlib.suppress(Exception):
         record = {'schema_version': 1, 'stopped_at_ms': time.time_ns() // 1_000_000,
                   'started_at_ms': started_at_ms if type(started_at_ms) is int else None,
                   'cause': cause if cause in CAUSES else 'error',
-                  'error': _error_name(error) if cause == 'error' else None,
+                  'error': (_error_name(error) if cause == 'error' else
+                            detail if cause == 'account_restart' and type(detail) is str
+                            and _RESTART_CAUSE.fullmatch(detail) else None),
                   'where': _locations(error) if cause == 'error' else []}
         if record['cause'] == 'error' and record['error'] is None:
             record['error'] = 'Exception'
+        if _stop_ok(stop_ms):  # a malformed timing is left out; the record is still kept
+            record['stop_ms'] = dict(stop_ms)
+        if stalled_in in SHUTDOWN_STEPS:  # O10 SD2: only a known step, never free text
+            record['stalled_in'] = stalled_in
         data = json.dumps(record, sort_keys=True).encode()
         target = exit_path(state_root)
         temporary = target.with_name(f'.{target.name}.{os.getpid()}.{secrets.token_hex(8)}')
@@ -122,7 +142,9 @@ def write_exit(state_root, *, started_at_ms, cause, error) -> None:
 def checked(record):
     """The record if it has exactly the fixed shape, else None. Never raises."""
     try:
-        if (type(record) is not dict or set(record) != _FIELDS
+        if (type(record) is not dict or set(record) - {'stop_ms', 'stalled_in'} != _FIELDS
+                or ('stop_ms' in record and not _stop_ok(record['stop_ms']))
+                or ('stalled_in' in record and record['stalled_in'] not in SHUTDOWN_STEPS)
                 or type(record['schema_version']) is not int or record['schema_version'] != 1
                 or type(record['cause']) is not str or record['cause'] not in CAUSES
                 or type(record['stopped_at_ms']) is not int
@@ -133,6 +155,10 @@ def checked(record):
         if record['cause'] == 'error':
             # An error always names its type.
             if type(record['error']) is not str or not _TYPE.fullmatch(record['error']):
+                return None
+        elif record['cause'] == 'account_restart':
+            if record['where'] or (record['error'] is not None and (
+                    type(record['error']) is not str or not _RESTART_CAUSE.fullmatch(record['error']))):
                 return None
         elif record['error'] is not None or record['where']:
             return None

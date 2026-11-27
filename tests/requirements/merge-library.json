@@ -1,0 +1,157 @@
+{
+ "requirements": [
+  {
+   "id": "ML-1",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "a tampered base, manifest, digest, git link, history row or a refusing check is refused. Test: tamper each binding separately and force a refusing check."
+  },
+  {
+   "id": "ML-10",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "an owner edit, or overlapping edits, stop the landing; both versions are kept and named. The open-handle limit is stated in the report. Test: in-place, safe-save, delete and chmod injected through forward, compensation, reverse and cleanup; an overlapping hunk; an old handle writing during cleanup."
+  },
+  {
+   "id": "ML-11",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "recovery direction comes from the history only and is idempotent; staging is never read for direction. Test: kill oracle with recover twice; tree all-new while state is `applying` is still put back."
+  },
+  {
+   "id": "ML-12",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "I/O failure ends reverted or needs_owner(io), with history contents pinned; no claim of allocation-free restore. Test: fault sweep, a really full image, missing staging file, failed terminal commit, retry."
+  },
+  {
+   "id": "ML-13",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "undo restores bytes, mode, absence and recorded created folders in order, and refuses on owner change; empty folders left by deletes are not recreated. Test: map equality; L1/L2/undo-L2/undo-L1; ancestor overlap refused; crash around the combined commit; mode via an internal fixture."
+  },
+  {
+   "id": "ML-14",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "the report class per path matches the tree. It lists merged files, conflicts, leftover staging objects and \"unknown\" for inaccessible contents, and I/O is distinct from owner. Test: independent report oracle after each kill, fault and move."
+  },
+  {
+   "id": "ML-15",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "walks are anchored and same-device, including the staging folder and the history. Test: symlink or mount swap after intake, and a swapped `.cocolo` or staging folder, with outside canaries."
+  },
+  {
+   "id": "ML-16",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "`.git` is never written, and a HEAD change before commit B puts the landing back. Test: write trace across merge, staging and cleanup; change HEAD at final validation."
+  },
+  {
+   "id": "ML-17",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "the \"busy\" answer is replaced by a durable per-project FIFO. Cancel and unresolved landings (d) block the queue until retried or accepted. Test: concurrent sealers land in order; cancel at each phase; an unresolved landing blocks admission; a restart keeps the queue."
+  },
+  {
+   "id": "ML-18",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "history contents are kept until undone or 10 newer landings, and retired only after cleanup or handoff (no blob refcount). Test: 10 vs 11 landings, a kill during retirement."
+  },
+  {
+   "id": "ML-19",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "full flush before each commit. Test: order trace; power loss is separate APFS/ext4 evidence."
+  },
+  {
+   "id": "ML-2",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "safe intake with no blocking, and more than 2000 paths is refused with a reason and nothing split. Test: one valid-but-forbidden case per type or limit; 2000 vs 2001 paths; a FIFO under a timeout."
+  },
+  {
+   "id": "ML-20",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "a created folder is removed on reverse only if empty and matching its recorded identity. Test: substituted, unrecorded and non-empty folders are kept."
+  },
+  {
+   "id": "ML-21",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "reverse acts only on positive evidence. Test: owner deletes a target or creates an empty folder, then a crash right after commit A; recovery changes neither."
+  },
+  {
+   "id": "ML-22",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "before commit B every path is re-inspected. Test: inject an owner edit just before final validation; the landing is put back, the edit kept."
+  },
+  {
+   "id": "ML-23",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "the cleanup job removes an emptied folder only if it is on the commit-A list, still empty, identity-matching and not owner-created after the landing; it walks upward only through listed folders. Test: owner adds a file, creates an empty folder, or swaps the folder; each is kept."
+  },
+  {
+   "id": "ML-24",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "staging lives at `.cocolo/staging/<child id>/` and holds a `.gitignore` containing `*`. It is removed after the landing, and a leftover is listed and removed on next start. Test: `git status` stays clean; a kill leaves one listed folder; restart removes it; remove the `.gitignore` and expect git to show it."
+  },
+  {
+   "id": "ML-25",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "at landing, each file is merged three-way from the history's base; an owner-only change stands, a child-only change applies, and overlapping edits are a conflict that keeps both. Test: the three cases on plain files, with a merge-file trace showing no `.git` write."
+  },
+  {
+   "id": "ML-26",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "a change lands whole or not at all. Any failed file puts the change back, and none lands file by file. Test: fail the Nth file for each N; the tree equals the base."
+  },
+  {
+   "id": "ML-27",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "merged results are listed and the project's checks run before commit B. Test: a merged file appears in the report; a failing check puts the landing back."
+  },
+  {
+   "id": "ML-28",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "a version CoCoLo did not make always stands. It goes to the front of the queue and a builder only re-applies the child's change on top; not clean means stop and ask. Test: an owner commit between seal and turn; a clean re-apply; an unclean one stops. The builder is faked until write children exist."
+  },
+  {
+   "id": "ML-29",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "until write-capable children exist, a conflict waits for the owner, with no builder started. Test: force a conflict and assert no spawn and a visible waiting state."
+  },
+  {
+   "id": "ML-3",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "each precondition and conflict is refused, including aliases and any permission-bit change in a candidate (git class 644/755 is only a header). Test: one case per predicate with the others satisfied; a candidate chmod."
+  },
+  {
+   "id": "ML-30",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "the history, ledger, signatures and approvals live outside the project, and nothing under `.cocolo/` is trusted for them. Test: a child with write access to `.cocolo/` forges history or approvals and is ignored; removing the location check lets the forgery land."
+  },
+  {
+   "id": "ML-4",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "refuse a drive lacking exchange and no-replace, or a staging folder or CoCoLo storage on another st_dev than any target. Test: FAT/HFS+ images, a mounted subfolder target, a cross-drive staging case."
+  },
+  {
+   "id": "ML-5",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "events and old/new contents in the history verify before commit A. Test: corrupt each separately; a kill at each history write leaves no `applying` row and the tree unchanged."
+  },
+  {
+   "id": "ML-6",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "a normal landing has exactly two commits, A before the first tree change and B after all parent flushes and after the project checks pass. Test: syscall-trace checker; a kill each side of each commit; a failing check blocks B."
+  },
+  {
+   "id": "ML-7",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "the staging folder holds only complete staged bytes; an unknown object there is kept and reported, never unlinked. Test: foreign complete file, foreign partial file, missing file, safe-save B captured then a kill (B survives)."
+  },
+  {
+   "id": "ML-8",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "a path always holds a complete version or legitimate absence. Test: synchronized readers during injected partial writes and at each mutation boundary."
+  },
+  {
+   "id": "ML-9",
+   "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+   "statement": "only cross-folder exchange, no-replace rename, mkdir, rmdir, one compensation and the content-checked unlink are used. Test: syscall-trace allowlist; remove the unlink authorization and expect a foreign file in staging to be deleted."
+  }
+ ],
+ "section": "11.2",
+ "upstream_file": "ANALYSIS-0.4.0-merge-library.md",
+ "upstream_sha256": "bebfe51e9366d0a2a6adea75b024bcd318c7230aeaf9d19a83e272902647cf9a"
+}

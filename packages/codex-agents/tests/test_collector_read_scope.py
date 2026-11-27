@@ -230,7 +230,8 @@ class HostOpenPublishLockTests(unittest.TestCase):
             for _ in range(8):
                 if frame is None:
                     break
-                publishing = publishing or (frame.f_code.co_name == "take_claim_reply"
+                # M4b E1a: take_claim_reply now sets the request deadline and runs _take_claim_reply.
+                publishing = publishing or (frame.f_code.co_name in {"take_claim_reply", "_take_claim_reply"}
                                             and "current_open_request" in frame.f_locals)
                 frame = frame.f_back
             if publishing and not holders:
@@ -249,12 +250,15 @@ class HostOpenPublishLockTests(unittest.TestCase):
         for holder in holders:
             holder.join(5)
         self.assertTrue(holders)
-        with self.assertRaisesRegex(Exception, "open_unavailable"):
+        with self.assertRaisesRegex(Exception, "open_account_busy"):  # S1-U10b (was open_unavailable)
             decode_account_response(raw, request)
-        # The work limits allow 1 s, and the publish read waited exactly that; the holder
-        # would keep the lock for 5 s. Earlier reads in the open take it uncontended.
-        self.assertEqual(1.0, recording.timeouts[-1])
-        self.assertTrue(all(timeout == 1.0 for timeout in recording.timeouts))
+        # The work limits allow 1 s; M4b E1a-1 caps every wait for the ledger lock at
+        # LEDGER_LOCK_WAIT_MS (750 ms), or less inside a request's deadline, so the publish read
+        # waited at most that (requirement-driven change, recorded in PLAN). The holder would keep
+        # the lock for 5 s. Earlier reads in the open take it uncontended.
+        from codex_agents.ledger_waits import LEDGER_LOCK_WAIT_MS
+        self.assertLessEqual(recording.timeouts[-1], LEDGER_LOCK_WAIT_MS / 1000)
+        self.assertTrue(all(timeout <= LEDGER_LOCK_WAIT_MS / 1000 for timeout in recording.timeouts))
         self.assertLess(waited, 5)
 
 

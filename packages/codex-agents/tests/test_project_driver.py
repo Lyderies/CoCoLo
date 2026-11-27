@@ -6,6 +6,7 @@ they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
 import base64
+import functools
 import dataclasses
 import io
 import contextlib
@@ -14,12 +15,15 @@ import json
 import argparse
 import os
 import socket
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT
@@ -29,7 +33,7 @@ from tests.test_bridge import (
     CLEAN, PARENT_GRANT, RATE_LIMIT, CliTestCase, cli, git, init_frame, null_filled, result, result_frame,
 )
 
-from codex_agents import codex_preparation, codex_worker, learning_store, project_driver
+from codex_agents import codex_preparation, codex_worker, host_paths, learning_store, project_driver
 from codex_agents.account_api import AccountClient, AccountError
 from codex_agents.rate_limit_contracts import RateLimitError
 from codex_agents.liveness_clock import LivenessLimits
@@ -40,8 +44,30 @@ SECOND = 1_000_000_000
 class DriverHarness(ServiceHarness, CliTestCase):
     """In-process collector, account and project hosts; the CLI and run driver are the product."""
     primary = 'codex'  # Which primary host class drives the CLI.
+    # S13C-1: the project driver's sweep runs every 0.1 s here instead of every second (the TESTSPEED3-5 technique, now
+    # for every driver-based class). Nothing in these modules asserts the one-second cadence; a class that needs the
+    # product's own value sets this to None. The patch ends with the test, so the value is restored.
+    sweep_seconds = 0.1
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # S13C-1 (TESTSPEED3-3 for every driver-based class): the separate dispatches (and, in the lost-run tests, the
+        # separate host process) of one class share one bytecode cache outside the source tree.
+        cls.dispatch_pycache = tempfile.mkdtemp(prefix='driver-pyc-')
+        cls.addClassCleanup(shutil.rmtree, cls.dispatch_pycache, ignore_errors=True)
+        # S13C-1: the per-user Darwin temp directory `getconf` reports never changes during a test, but every
+        # `temp_roots()` call (some twenty-five per run, from each git and executable-location check) starts a
+        # `getconf` process. The class asks once; the answer is the product's own function's answer.
+        patcher = mock.patch.object(host_paths, 'darwin_directory', functools.cache(host_paths.darwin_directory))
+        patcher.start()
+        cls.addClassCleanup(patcher.stop)
 
     def setUp(self):
+        if self.sweep_seconds is not None:
+            patcher = mock.patch.object(project_driver, 'SWEEP_SECONDS', self.sweep_seconds)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         super().setUp()
         if self.primary == 'claude':
             patcher = mock.patch.dict(os.environ)
@@ -67,6 +93,18 @@ class DriverHarness(ServiceHarness, CliTestCase):
                               '--orchestration-handle', orchestration['orchestration_handle'])
         return context, route_path, orchestration['orchestration_handle'], opened['run_handle']
 
+    def attempt(self, command, *arguments):
+        """Run one command for the project; returns (exit code, report) without asserting either."""
+        stdout = io.StringIO()
+        argv = ['cli.py', command, '--state-root', str(self.state.root), '--project-root', str(self.project), *arguments]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli, 'BUNDLE_ROOT', self.bundle), \
+                contextlib.redirect_stdout(stdout):
+            code = cli.main()
+        return code, json.loads(stdout.getvalue())
+
+    def executions(self):
+        return [i for i in self.invocations('codex') if 'exec' in i['argv']]
+
     def cli_any(self, command, *arguments):
         """The CLI's reply whatever its exit status, for a command polled until it is ready."""
         from tests.test_bridge import cli as cli_module
@@ -78,6 +116,26 @@ class DriverHarness(ServiceHarness, CliTestCase):
             cli_module.main()
         return json.loads(stdout.getvalue())
 
+    def wait_for_launches(self, count, processes, seconds):
+        """Wait as before for `count` children to launch; on timeout, say why (Linux load failures,
+        0.4.0 O3): how many launched, and each dispatch's exit status and the end of its output."""
+        launched = lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']]  # noqa: E731
+        try:
+            self.wait_for(lambda: len(launched()) == count, seconds=seconds)
+        except AssertionError:
+            report = []
+            for process in processes:
+                if process.poll() is None:
+                    report.append('still running')
+                    continue
+                output, errors = process.communicate(timeout=5)
+                report.append(f'exit {process.returncode}: {output.decode(errors="replace")[-400:]!r} '
+                              f'{errors.decode(errors="replace")[-200:]!r}')
+            self.fail(f'{len(launched())} of {count} children launched within {seconds} s; dispatches: '
+                      f'{report}; driver stops: {self.stopped_runs[-6:]}')
+
+    dispatch_pycache = None  # set per class by setUpClass
+
     def separate_dispatch(self, context, route_path, run_handle, project=None):
         """A second primary process waits on dispatch while this one inspects the run."""
         env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
@@ -87,7 +145,11 @@ class DriverHarness(ServiceHarness, CliTestCase):
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='claude-primary')
         else:
             env['CODEX_THREAD_ID'] = 'driver-primary'
-        process = subprocess.Popen([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
+        # TESTSPEED3-3: a class that sets `dispatch_pycache` (a directory) lets its separate dispatches share one bytecode
+        # cache outside the source tree, so only the first compiles the runtime; the arguments after the interpreter
+        # flags are the same.
+        flags = ['-I', '-B', '-S'] if self.dispatch_pycache is None else ['-I', '-S', '-X', 'pycache_prefix=' + self.dispatch_pycache]
+        process = subprocess.Popen([sys.executable, *flags, str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
             '--state-root', str(self.state.root), '--project-root', str(project or self.project), *context,
             '--route', route_path, '--run-handle', run_handle], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.addCleanup(lambda: process.poll() is None and process.kill())
@@ -95,7 +157,13 @@ class DriverHarness(ServiceHarness, CliTestCase):
 
 
 class ProjectDriverTests(DriverHarness):
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_the_host_prepares_claims_dispatches_and_releases_a_bridged_codex_run(self):
+        # 0.3.3 requirement C1, carried here (PLAN T8 driver slice 2): a busy day of readings, about ten
+        # times a live project's, still opens and dispatches. 4,096 records and 2 MiB fit, at the open
+        # and at its claim.
+        self.busy_day('provider_headroom', 1800)
+        self.busy_day('provider_billing', 700)
         task = self.write('task.json', self.task())
         route = self.cli('learning-route', '--task', task)
         self.assertEqual(('codex', 'bridge'), (route['provider'], route['dispatch']))
@@ -109,6 +177,19 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']))
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        # Only the opening host class can prepare and dispatch its run (carried here, PLAN T8 driver
+        # slice 5): the other primary is refused, nothing is launched or claimed for it.
+        with mock.patch.dict(os.environ):
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
+                os.environ.pop(name, None)
+            if self.primary == 'claude':
+                os.environ['CODEX_THREAD_ID'] = 'other-primary'
+            else:
+                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+            foreign = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'],
+                               expected=2)
+        self.assertEqual('host_client_mismatch', foreign['reason_code'])
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
         with mock.patch.object(self, 'assertEqual', side_effect=lambda *a: unittest.TestCase.assertEqual(
                 self, *a[:2], (a[2] if len(a) > 2 else '') + ' driver stopped at %r' % (self.stopped_runs,))):
             dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
@@ -124,7 +205,7 @@ class ProjectDriverTests(DriverHarness):
         made_up = {**dispatched['result'], 'summary': 'A verdict the child never gave.'}
         refused = self.cli('learning-record-host-result', *context, '--route', route_path,
                            '--result', self.write('made-up.json', made_up), '--observation', observation, expected=2)
-        self.assertEqual('history_conflict', refused['reason_code'])
+        self.assertEqual('recheck_result_mismatch', refused['reason_code'])  # B2-5 (decision 92 A / 119 A): a body that is not the stored one has its own reason
         recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
                             '--result', self.write('result.json', dispatched['result']), '--observation', observation)
         self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
@@ -134,6 +215,7 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual([], [entry for entry in self.stopped_runs if len(entry) == 2 and entry[0] in
                               {'recording_open', 'claiming', 'registering', 'terminal', 'releasing'}])
 
+    @__import__('test_framework').requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_a_running_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_run()
         # The child starts, then goes quiet well inside every bound.
@@ -159,10 +241,23 @@ class ProjectDriverTests(DriverHarness):
             foreign = self.cli('learning-cancel-run', *target, expected=2)
         self.assertEqual('control_not_authorized', foreign['reason_code'])
 
+        # A handle nobody was given, in this orchestration or a made-up one, shows and stops nothing
+        # (carried here, PLAN T8 driver slice 6).
+        for forged in (('--orchestration-handle', orchestration, '--run-handle', 'hrn_' + 'f' * 48),
+                       ('--orchestration-handle', 'orc_' + 'f' * 48, '--run-handle', run_handle)):
+            for command in ('learning-run-status', 'learning-cancel-run'):
+                with self.subTest(command=command, forged=forged[1][:8] + forged[3][:8]):
+                    code, refused = self.attempt(command, *forged)
+                    self.assertEqual((2, False), (code, refused['ready']))
+                    self.assertNotIn('health', refused)
+        self.assertEqual('running', self.cli('learning-run-status', *target)['cancellation_state'])
+
         started = time.monotonic()
         cancelled = self.cli('learning-cancel-run', *target)
         self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
         self.assertIn(cancelled['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
+        # A second cancel keeps the first decision.
+        self.assertEqual(cancelled['stop_reason'], self.cli('learning-cancel-run', *target)['stop_reason'])
         output, errors = process.communicate(timeout=30)
         self.assertLess(time.monotonic() - started, 20)  # Long before the child's own 30-second sleep ends.
         self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
@@ -171,14 +266,37 @@ class ProjectDriverTests(DriverHarness):
         settled = self.cli('learning-run-status', *target)
         self.assertTrue(settled['stop_requested'])
         self.assertEqual('cancel_requested', settled['stop_reason'])
+        self.assertEqual('cancel_requested', self.cli('learning-cancel-run', *target)['stop_reason'])
+        # Dispatching the same handle again never starts another child.
+        code, repeated = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual(1, len(self.executions()))
+        if code == 0:
+            self.assertEqual(dispatched['bridge_report']['terminal_state'], repeated['bridge_report']['terminal_state'])
+            self.assertEqual(dispatched['result'], repeated['result'])
+        else:
+            self.assertFalse(repeated['ready'])
 
-    def test_routing_and_preflight_never_open_the_ledger_or_pause_the_collector(self):
+    def test_while_a_child_runs_other_commands_leave_it_and_the_shared_services_alone(self):
+        """One live run carries four checks (PLAN T8 driver slice 3): routing and preflight, another
+        project's registration, migration, and an owner ledger command, each while the child runs."""
+        from codex_agents.collector_client import CollectorClient
+        from codex_agents.collector_contracts import CollectorError
+
         context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'running-child'}, {'sleep': 30},
+        gate = self.tools / 'codex-gate'
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'wait_for': str(gate)},
                               {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         process = self.separate_dispatch(context, route_path, run_handle)
+        # Released even when a check fails, so the child never outlives the test.
+        self.addCleanup(lambda: gate.parent.is_dir() and not gate.exists() and gate.write_text('go'))
         self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+
+        def still_running():
+            status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+            self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
+
+        # Routing, validation and preflight never open the ledger or pause the collector.
         task = self.write('other-task.json', {**self.task(), 'id': 'task-other'})
         with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')), \
                 mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')):
@@ -188,8 +306,71 @@ class ProjectDriverTests(DriverHarness):
                      '--parent-grant', self.write('grant.json', PARENT_GRANT))
             self.assertEqual(assigned, self.cli('validate-assignment', *other))
             self.assertTrue(self.cli('result-preflight', *other)['ready'])
-        self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
-        process.communicate(timeout=30)
+        still_running()
+
+        # A new project registers, observes and completes the owner's signed billing
+        # attestation while the child runs, without ever pausing the collector.
+        newcomer = Path(self.temporary.name) / 'newcomer'
+        newcomer.mkdir()
+        git(newcomer, 'init', '-q')
+        with mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')), \
+                mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
+            registered = self.cli_for(newcomer, 'learning-register')
+            self.assertRegex(registered['project_id'], '^prj_[0-9a-f]{32}$')
+            observed = self.cli_for(newcomer, 'provider-observe', '--provider', 'codex')
+            identity = observed['records'][0]
+            self.assertEqual('provider_identity', identity['record_type'])
+            grant = self.write('newcomer-grant.json', {
+                'version': 1, 'provider': 'codex', 'account_fingerprint': identity['account_fingerprint'],
+                'no_paid_overage': True, 'no_usage_credits': True, 'issued_at': 2})
+            unsigned = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
+                                    '--grant', grant)
+            from tests.learning_support import sign_owner_payload
+            signature = sign_owner_payload(self.owner_key, base64.b64decode(unsigned['signing_payload_b64']),
+                                           'newcomer-attestation')
+            signed = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
+                                  '--grant', grant, '--signature', str(signature))
+            self.assertTrue(signed['ready'])
+        still_running()
+
+        # Migration reports and refuses; a drained-only shutdown is refused; nothing opens a store.
+        client = CollectorClient(self.state.socket, timeout=5)
+        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False, 'activation_pending': False,
+                          'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
+                         client.learning_migration(self.project))
+        with self.assertRaises(CollectorError) as busy:
+            client.shutdown(only_if_drained=True)
+        self.assertEqual('collector_busy', busy.exception.code)
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
+            self.assertEqual({'ready': True, 'state': 'not_needed', 'can_start_now': False,
+                              'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
+                             self.cli('learning-migrate-project', '--status'))
+            refused = self.cli_for(self.project, 'learning-migrate-project', expected=2)
+        self.assertEqual('migration_not_drained', refused['reason_code'])
+        still_running()
+
+        # A command that needs the ledger to itself says why it cannot have it; the
+        # shared services and the child keep running.
+        refused = self.cli_for(self.project, 'learning-backup-project', '--file-id', 'while_running',
+                               '--expires-in-seconds', '3600', expected=2)
+        self.assertIn('a child run is active; nothing was changed', refused['error'])
+        still_running()
+
+        gate.write_text('go')
+        output, errors = process.communicate(timeout=60)
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        self.cli('learning-record-host-result', *context, '--route', route_path,
+                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
+        # Terminal acceptance and capacity release reached the account services.
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
+        self.assertTrue(client.learning_migration(self.project)['drained'])
+        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
+        self.assertEqual((1, 1, 0), (lifecycle['host_runs_opened'], lifecycle['host_runs_terminal'],
+                                     lifecycle['host_runs_pending']))
 
     def test_a_run_whose_preparation_fails_says_which_stage_stopped_it(self):
         context, route_path, _, run_handle = self.open_run()
@@ -197,6 +378,172 @@ class ProjectDriverTests(DriverHarness):
             refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
         self.assertEqual('preparation_managed_configuration', refused['reason_code'], refused)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+        # 0.3.2 requirements, carried here (PLAN T8 driver slice 7; from runs admitted whose dispatch
+        # failed before they claimed a slot). D1: a child launches only after its claim, so replacing
+        # the collector or a project service of another version never waits for an unclaimed run.
+        # D2: the learning move counts it until its binding expires; then it can never be claimed.
+        ledger = self.collector_ledger
+        self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM active_run_capacity").fetchone()[0])
+        self.assertTrue(ledger.drained(children_only=True))                              # D1
+        self.assertFalse(ledger.drained())                                               # D2, before expiry
+        expires = ledger._connection.execute("SELECT MAX(expires_at_ms) FROM host_run_bindings").fetchone()[0]
+        with mock.patch.object(ledger, '_clock_ms', return_value=expires + 1):
+            self.assertTrue(ledger.drained())                                            # D2, after expiry
+
+    def report_for(self, handle):
+        store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3'))) + '?mode=ro',
+                                uri=True)
+        try:
+            for (content,) in store.execute('SELECT content FROM project_orchestration_checkpoints ORDER BY sequence DESC'):
+                snapshot = json.loads(content)['snapshot']
+                if snapshot['orchestration_handle'] == handle:
+                    return self.cli('learning-orchestration-report', '--orchestration-id', snapshot['orchestration_id'])
+        finally:
+            store.close()
+        self.fail('orchestration not found')
+
+    def test_R6_a_run_that_fails_before_its_open_is_in_the_report_as_abandoned_with_its_reason(self):
+        context, route_path, handle, run_handle = self.open_run()
+        with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('preparation_managed_configuration', refused['reason_code'], refused)
+        report = self.report_for(handle)
+        runs = report['runs']
+        self.assertEqual((0, 1, 1, 1, 0, 0), (runs['opened'], runs['admitted'], runs['failed_before_open'],
+                                              runs['abandoned'], runs['pending'], runs['terminal']), report)
+        self.assertEqual({'preparation_managed_configuration': 1}, runs['failed_before_open_reasons'])
+        self.assertEqual(0, report['qa']['passed'] + report['qa']['failed'] + report['qa']['pending'])
+
+    def test_R6_a_run_that_fails_reserving_its_lease_is_reported_with_its_reason(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        context, route_path, handle, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, '_check_result_capacity',
+                               side_effect=HistoryError('history_result_capacity')):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('result_capacity_full', refused['reason_code'], refused)
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((0, 1, 1, 1, 0), (runs['opened'], runs['admitted'], runs['failed_before_open'],
+                                           runs['abandoned'], runs['pending']), runs)
+        self.assertEqual({'result_capacity_full': 1}, runs['failed_before_open_reasons'])
+
+    def registered_rows(self):
+        store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3'))) + '?mode=ro',
+                                uri=True)
+        try:
+            return store.execute('SELECT run_id,attempt,failed_reason FROM project_registered_runs').fetchall()
+        finally:
+            store.close()
+
+    def test_R6_6_a_run_whose_registration_cannot_be_written_is_refused_before_preparation(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        with mock.patch.object(project_history.ProjectHistory, 'record_registered_run',
+                               side_effect=HistoryError('history_service_unavailable')), \
+                mock.patch.object(codex_preparation.CodexPreparationLane, 'submit') as submit:
+            context, route_path, _, run_handle = self.open_run()
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], refused)
+        submit.assert_not_called()
+        self.assertEqual([], self.registered_rows())
+
+    def test_R6_a_run_that_fails_with_its_lease_armed_before_its_open_is_reported_with_its_reason(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        context, route_path, handle, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, 'record_host_open',
+                               side_effect=HistoryError('history_service_unavailable')):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], refused)
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((0, 1, 1, 1, 0), (runs['opened'], runs['admitted'], runs['failed_before_open'],
+                                           runs['abandoned'], runs['pending']), runs)
+        self.assertEqual({'run_failed': 1}, runs['failed_before_open_reasons'])
+
+    def test_R6_10_a_failure_after_the_open_committed_is_not_recorded_as_before_the_open(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        original = project_history.ProjectHistory.record_host_open
+
+        def committed_then_failed(store, *args, **kwargs):
+            original(store, *args, **kwargs)
+            raise HistoryError('history_service_unavailable')
+
+        context, route_path, handle, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, 'record_host_open', committed_then_failed):
+            self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.wait_for(lambda: self.registered_rows() and True, seconds=10)
+        self.assertEqual([None], [row[2] for row in self.registered_rows()])
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((1, 1, 0), (runs['opened'], runs['admitted'], runs['failed_before_open']), runs)
+
+    def test_R6_15_a_registration_that_found_no_room_is_written_without_a_prepare(self):
+        from codex_agents import result_persistence
+        from codex_agents.history_contracts import HistoryError
+        original, calls = result_persistence.ResultPersistenceLane.report_registered_run, []
+
+        def busy_twice(lane, *args):
+            calls.append(1)
+            if len(calls) <= 2:
+                raise HistoryError('history_writer_busy')
+            return original(lane, *args)
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run', busy_twice):
+            self.open_run()
+            self.wait_for(lambda: len(self.registered_rows()) == 1, seconds=30)
+
+    def test_R6_16_a_prepare_waiting_on_a_closed_writer_is_refused(self):
+        from codex_agents import result_persistence
+        from codex_agents.history_contracts import HistoryError
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
+                               side_effect=HistoryError('history_service_unavailable')), \
+                mock.patch.object(codex_preparation.CodexPreparationLane, 'submit') as submit:
+            context, route_path, _, run_handle = self.open_run()
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], refused)
+        submit.assert_not_called()
+
+    def test_R6_18_a_registered_run_the_host_abandons_is_reported_run_failed(self):
+        _, _, handle, run_handle = self.open_run()
+        self.wait_for(lambda: len(self.registered_rows()) == 1, seconds=30)
+        self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle, '--reason', 'owner_cancelled')
+        self.wait_for(lambda: [row[2] for row in self.registered_rows()] == ['run_failed'], seconds=30)
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((1, 1, 0), (runs['admitted'], runs['failed_before_open'], runs['pending']), runs)
+
+    def test_R6_20_21_abandoning_a_run_waiting_on_its_registration_answers_its_prepare_and_reports_nothing(self):
+        from codex_agents import result_persistence
+        from codex_agents import project_driver
+        never = result_persistence._EarlierLeases('register')  # stays queued: the writer never answers it
+        drivers, advance = [], project_driver.RunDriver._advance
+
+        def seen(driver, run):
+            drivers.append(driver)
+            return advance(driver, run)
+        reports = mock.Mock(side_effect=AssertionError('no failure report may be sent'))
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
+                               return_value=never), mock.patch.object(project_driver.RunDriver, '_advance', seen), \
+                mock.patch.object(result_persistence.ResultPersistenceLane, 'report_failed_before_open', reports):
+            context, route_path, _, run_handle = self.open_run()
+            process = self.separate_dispatch(context, route_path, run_handle)
+            self.wait_for(lambda: drivers and any(run.state == 'recording_registration'
+                                                  for run in drivers[-1]._runs.values()), seconds=30)
+            self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle, '--reason', 'owner_cancelled')
+            output, _ = process.communicate(timeout=30)
+            self.assertEqual('run_abandoned', json.loads(output)['reason_code'], output)
+            self.assertTrue(drivers[-1]._reports)  # held while its registration is queued
+            never.state, never.reason = 'failed', 'history_conflict'  # refused after all: still no report
+            self.wait_for(lambda: not drivers[-1]._reports, seconds=10)
+        reports.assert_not_called()
+        self.assertEqual([], self.registered_rows())
+
+    def test_R6_a_run_that_opens_is_counted_once_by_its_open(self):
+        context, route_path, handle, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((1, 1, 0, {}), (runs['opened'], runs['admitted'], runs['failed_before_open'],
+                                         runs['failed_before_open_reasons']), runs)
 
     def test_a_run_refused_before_or_inside_preparation_names_the_refusal(self):
         # local-routing's 0.8.17 test still saw only run_unavailable, 0.3 s after dispatch.
@@ -216,23 +563,6 @@ class ProjectDriverTests(DriverHarness):
                                        expected=2)
                 self.assertEqual(reason, refused['reason_code'], refused)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
-
-    def test_D1_D2_a_run_refused_before_its_claim_never_holds_an_update_back(self):
-        # 0.3.2 requirements (local-routing: project_service_other_version after an update,
-        # from runs admitted that morning whose dispatch failed before they claimed a slot).
-        # D1: a child launches only after its claim, so replacing the collector or a project
-        # service of another version never waits for an unclaimed run.
-        # D2: the learning move counts it until its binding expires; then it can never be claimed.
-        context, route_path, _, run_handle = self.open_run()
-        with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
-            self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
-        ledger = self.collector_ledger
-        self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM active_run_capacity").fetchone()[0])
-        self.assertTrue(ledger.drained(children_only=True))                              # D1
-        self.assertFalse(ledger.drained())                                               # D2, before expiry
-        expires = ledger._connection.execute("SELECT MAX(expires_at_ms) FROM host_run_bindings").fetchone()[0]
-        with mock.patch.object(ledger, '_clock_ms', return_value=expires + 1):
-            self.assertTrue(ledger.drained())                                            # D2, after expiry
 
     def test_C8_three_children_of_one_project_run_at_once_a_fourth_is_refused_and_each_can_be_cancelled(self):
         # 0.3.3 requirement C8 (owner): a pool of six, at most three per project. One project's three
@@ -294,19 +624,6 @@ class ProjectDriverTests(DriverHarness):
         finally:
             connection.close()
 
-    def test_C1_a_busy_day_of_readings_still_opens_and_dispatches(self):
-        # 0.3.3 requirement C1 (live testing): about 180 headroom and 70 billing readings
-        # from one day, with 40 recent decisions, filled about 260 KiB of the 256 KiB the open and
-        # claim may read, and the claim was refused. 4,096 records and 2 MiB fit, at the open and
-        # at its claim; this is a day with about ten times that project's readings.
-        self.busy_day('provider_headroom', 1800)
-        self.busy_day('provider_billing', 700)
-        context, route_path, _, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-
     def test_C1_more_than_a_capture_holds_is_refused_plainly_and_changes_nothing(self):
         # Over 4,096 records the open says so, and records no run.
         self.busy_day('provider_headroom', 4200)
@@ -323,51 +640,6 @@ class ProjectDriverTests(DriverHarness):
                            '--orchestration-handle', orchestration['orchestration_handle'], expected=2)
         self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
         self.assertEqual(before, self.collector_ledger._connection.execute(bindings).fetchone()[0])
-
-    def legacy_history(self, count, content_bytes):
-        """Earlier dispatch results of this project as 0.2.x recorded them, through a second connection."""
-        import hashlib
-        connection = sqlite3.connect(self.state.root / 'learning.sqlite3', timeout=30)
-        try:
-            project, = connection.execute(
-                "SELECT project_id FROM records WHERE record_type='provider_identity' LIMIT 1").fetchone()
-            sequence = connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0]
-            now = int(time.time() * 1000)
-            with connection:
-                for index in range(count):
-                    run_id = 'run:' + hashlib.sha256(f'legacy-{index}'.encode()).hexdigest()
-                    content = json.dumps({'record_type': 'dispatch_result', 'run_id': run_id,
-                                          'summary': 'x' * content_bytes}, separators=(',', ':')).encode()
-                    sequence += 1
-                    observed = now - 40 * 86_400_000 + index
-                    connection.execute(
-                        "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
-                        "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
-                        (project, 'dispatch_result:' + hashlib.sha256(content).hexdigest(), 'dispatch_result',
-                         'lifecycle', sequence, observed, observed, observed + 90 * 86_400_000, content,
-                         hashlib.sha256(content).hexdigest()))
-        finally:
-            connection.close()
-
-    def test_C2_a_refused_claim_closes_whatever_the_size_of_an_earlier_record(self):
-        # 0.3.3 requirement C2 (live testing; COCOLO-run investigation): the fence
-        # looked for the run among every earlier dispatch record of the project, within 2,000
-        # progress callbacks, 50 ms and 16 KiB per value, and answered claim_busy when that ran out;
-        # after ten refusals the run kept its lease for good. Neither a large earlier record nor many
-        # of them stop a refused claim from closing.
-        self.legacy_history(1, 20_000)
-        self.assert_refused_claim_closes()
-
-    def test_C2_a_refused_claim_closes_whatever_the_number_of_earlier_records(self):
-        # 150,000 small earlier records (a long-lived project has about that many), each well under 16 KiB: only the
-        # callback budget is at stake.
-        # With the earlier budget the run does not close; that is what this case proves fixed.
-        from codex_agents import claim_denial
-        self.legacy_history(150_000, 64)
-        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (2000, 50, 2 * 1_048_576)):
-            with self.assertRaises(AssertionError):
-                self.assert_refused_claim_closes(seconds=5)
-        self.assert_refused_claim_closes()
 
     def assert_refused_claim_closes(self, seconds=20):
         from codex_agents import signature_job_intake
@@ -438,25 +710,6 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual('run_client_changed', refused['reason_code'], refused)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
-    def test_only_the_opening_host_class_can_prepare_and_dispatch_its_run(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        with mock.patch.dict(os.environ):
-            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
-                os.environ.pop(name, None)
-            if self.primary == 'claude':
-                os.environ['CODEX_THREAD_ID'] = 'other-primary'
-            else:
-                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
-            foreign = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
-        self.assertEqual('host_client_mismatch', foreign['reason_code'])
-        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
-        # Nothing was claimed for the refused host; the owner can still run it once.
-        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
-
     def test_a_slow_enrolled_driver_sender_cannot_stall_the_host(self):
         from codex_agents.client_runtime import read_runtime_hint
         from codex_agents.service_enrollment import enrollment_preamble, proof_directory, read_capability
@@ -494,89 +747,6 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual(('abandoned', 'never_claimed'), (abandoned['classification'], abandoned['capacity_state']))
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
-
-    def test_registering_another_project_during_a_run_does_not_disturb_it(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
-        # A new project registers, observes and completes the owner's signed billing
-        # attestation while the child runs, without ever pausing the collector.
-        newcomer = Path(self.temporary.name) / 'newcomer'
-        newcomer.mkdir()
-        git(newcomer, 'init', '-q')
-        with mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')), \
-                mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
-            registered = self.cli_for(newcomer, 'learning-register')
-            self.assertRegex(registered['project_id'], '^prj_[0-9a-f]{32}$')
-            observed = self.cli_for(newcomer, 'provider-observe', '--provider', 'codex')
-            identity = observed['records'][0]
-            self.assertEqual('provider_identity', identity['record_type'])
-            grant = self.write('newcomer-grant.json', {
-                'version': 1, 'provider': 'codex', 'account_fingerprint': identity['account_fingerprint'],
-                'no_paid_overage': True, 'no_usage_credits': True, 'issued_at': 2})
-            unsigned = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
-                                    '--grant', grant)
-            from tests.learning_support import sign_owner_payload
-            signature = sign_owner_payload(self.owner_key, base64.b64decode(unsigned['signing_payload_b64']),
-                                           'newcomer-attestation')
-            signed = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
-                                  '--grant', grant, '--signature', str(signature))
-            self.assertTrue(signed['ready'])
-        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
-        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
-        output, errors = process.communicate(timeout=60)
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        dispatched = json.loads(output)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
-            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
-        self.cli('learning-record-host-result', *context, '--route', route_path,
-                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
-        # Terminal acceptance and capacity release reached the restarted account services.
-        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
-
-    def test_learning_migration_never_takes_the_collector_from_under_a_run(self):
-        from codex_agents.collector_client import CollectorClient
-        from codex_agents.collector_contracts import CollectorError
-
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
-        client = CollectorClient(self.state.socket, timeout=5)
-        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False, 'activation_pending': False,
-                          'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
-                         client.learning_migration(self.project))
-        with self.assertRaises(CollectorError) as busy:
-            client.shutdown(only_if_drained=True)
-        self.assertEqual('collector_busy', busy.exception.code)
-        # The owner's command reports and refuses; it stops nothing and opens no store.
-        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
-            self.assertEqual({'ready': True, 'state': 'not_needed', 'can_start_now': False,
-                              'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
-                             self.cli('learning-migrate-project', '--status'))
-            refused = self.cli_for(self.project, 'learning-migrate-project', expected=2)
-        self.assertEqual('migration_not_drained', refused['reason_code'])
-        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
-        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
-        output, errors = process.communicate(timeout=60)
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        dispatched = json.loads(output)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
-            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
-        self.cli('learning-record-host-result', *context, '--route', route_path,
-                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
-        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
-        self.assertTrue(client.learning_migration(self.project)['drained'])
-        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
-        self.assertEqual((1, 1, 0), (lifecycle['host_runs_opened'], lifecycle['host_runs_terminal'],
-                                     lifecycle['host_runs_pending']))
 
     def test_a_service_left_by_another_version_is_replaced_only_when_no_run_is_active(self):
         from codex_agents.client_runtime import runtime_hint_path
@@ -659,96 +829,28 @@ class ProjectDriverTests(DriverHarness):
         from codex_agents.client_runtime import runtime_hint_path
 
         context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 4},
+        gate = self.tools / 'codex-gate'
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'wait_for': str(gate)},
                               {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         process = self.separate_dispatch(context, route_path, run_handle)
+        self.addCleanup(lambda: gate.parent.is_dir() and not gate.exists() and gate.write_text('go'))
         self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
         # Its hint is withdrawn (as a replacement or a migration would) while the child
         # runs: the service is not found by new commands, but it does not drop the run.
         runtime_hint_path(self.paths, self.project).unlink()
+        gate.write_text('go')  # The child finishes only after the hint is gone (PLAN T8 driver slice 4).
         output, errors = process.communicate(timeout=60)
         self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
         self.assertEqual('result', json.loads(output)['bridge_report']['outcome'])
         self.assertNotIn(('driver', 'stopping', 'cancelled'), self.stopped_runs)
 
-    def test_an_owner_ledger_command_is_refused_while_a_child_runs(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
-        # A command that needs the ledger to itself says why it cannot have it; the
-        # shared services and the child keep running.
-        refused = self.cli_for(self.project, 'learning-backup-project', '--file-id', 'while_running',
-                               '--expires-in-seconds', '3600', expected=2)
-        self.assertIn('a child run is active; nothing was changed', refused['error'])
-        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
-        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
-        output, errors = process.communicate(timeout=60)
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        dispatched = json.loads(output)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
-            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
-        self.cli('learning-record-host-result', *context, '--route', route_path,
-                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
-        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
 
 
 class LifecycleBoundaryTests(DriverHarness):
     """End-to-end checks of boundaries that are otherwise only tested below the project service."""
 
-    def attempt(self, command, *arguments):
-        """Run one command for the project; returns (exit code, report) without asserting either."""
-        stdout = io.StringIO()
-        argv = ['cli.py', command, '--state-root', str(self.state.root), '--project-root', str(self.project), *arguments]
-        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli, 'BUNDLE_ROOT', self.bundle), \
-                contextlib.redirect_stdout(stdout):
-            code = cli.main()
-        return code, json.loads(stdout.getvalue())
-
-    def executions(self):
-        return [i for i in self.invocations('codex') if 'exec' in i['argv']]
-
-    def test_repeated_cancels_keep_one_decision_and_a_finished_run_is_never_launched_again(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'quiet-child'}, {'sleep': 30},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        self.wait_for(self.executions, seconds=30)
-        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
-        # A handle nobody was given, in this orchestration or a made-up one, shows and stops nothing.
-        for forged in (('--orchestration-handle', orchestration, '--run-handle', 'hrn_' + 'f' * 48),
-                       ('--orchestration-handle', 'orc_' + 'f' * 48, '--run-handle', run_handle)):
-            for command in ('learning-run-status', 'learning-cancel-run'):
-                with self.subTest(command=command, forged=forged[1][:8] + forged[3][:8]):
-                    code, refused = self.attempt(command, *forged)
-                    self.assertEqual((2, False), (code, refused['ready']))
-                    self.assertNotIn('health', refused)
-        self.assertEqual('running', self.cli('learning-run-status', *target)['cancellation_state'])
-        first = self.cli('learning-cancel-run', *target)
-        again = self.cli('learning-cancel-run', *target)
-        self.assertEqual(('cancel_requested', True), (first['stop_reason'], first['stop_requested']))
-        self.assertEqual(first['stop_reason'], again['stop_reason'])
-        # A request is not a confirmed stop: the state says which it is.
-        self.assertIn(first['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
-        output, errors = process.communicate(timeout=30)
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        fenced = json.loads(output)
-        self.assertEqual('cancelled', fenced['bridge_report']['terminal_state'])
-        self.assertEqual('cancel_requested', self.cli('learning-cancel-run', *target)['stop_reason'])
-        # Dispatching the same handle again never starts another child.
-        code, repeated = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
-        self.assertEqual(1, len(self.executions()))
-        if code == 0:
-            self.assertEqual(fenced['bridge_report']['terminal_state'], repeated['bridge_report']['terminal_state'])
-            self.assertEqual(fenced['result'], repeated['result'])
-        else:
-            self.assertFalse(repeated['ready'])
-
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_an_invalid_result_is_fenced_with_its_reason_and_recorded_exactly_once(self):
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
@@ -772,7 +874,7 @@ class LifecycleBoundaryTests(DriverHarness):
         softened = {**dispatched['result'], 'semantic_verdict': 'pass', 'status': 'completed', 'execution_state': 'completed'}
         code, refused = self.attempt('learning-record-host-result', *context, '--route', route_path,
                                      '--result', self.write('softened.json', softened), '--observation', observation)
-        self.assertEqual((2, 'history_conflict'), (code, refused['reason_code']))
+        self.assertEqual((2, 'recheck_result_mismatch'), (code, refused['reason_code']))  # B2-5 (decision 92 A / 119 A)
         recorded = self.cli(*record)
         self.assertFalse(recorded['outcome']['accepted'])
         self.assertEqual('missing_evidence', recorded['dispatch_diagnostics']['result_validation_reason_code'])
@@ -780,7 +882,9 @@ class LifecycleBoundaryTests(DriverHarness):
         # Once recorded the host lets the run go; recording it again adds nothing.
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
         code, again = self.attempt(*record)
-        self.assertEqual((2, False), (code, again['ready']))
+        # (requirement) D1 (RS-D-2, K4): the record no longer needs the service to hold the run, so recording it
+        # again after the host let it go is the same admission (one outcome, below), not a refusal.
+        self.assertEqual((0, recorded['host_outcome_digest']), (code, again['host_outcome_digest']))
         store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3')))
                                 + '?mode=ro', uri=True)
         self.addCleanup(store.close)
@@ -810,6 +914,194 @@ class LifecycleBoundaryTests(DriverHarness):
         self.assertEqual(preview['capabilities']['sandbox'], 'read-only')
 
 
+STARTUP_WHY = ('Real CLI and service boundaries: an open landing inside the start-up memory recovery is registered '
+               'and dispatches as without the delay (RS-B-4 final fix, review 040-memholds-r2c).')
+
+
+class StartupRecoverOpenTests(DriverHarness):
+    """RS-B-4 (final fix, review 040-memholds-r2c): an open that arrives while the service's start-up memory
+    recovery is still under way is registered once that recovery is done, and its dispatch answers as it would
+    without the delay. The service's start-up recovery is put on its writer only once the open's run.register
+    has been taken by the driver, so the open always lands inside it; nothing here sleeps or depends on load.
+    (Holding the writer itself would also hold the orchestration open the test needs first.)"""
+
+    def setUp(self):
+        from codex_agents import result_persistence
+        self.recover_held, self.memory_at_register, self.recover_fails = threading.Event(), [], False
+        self.deferred = None
+        original_configure, original_request = (result_persistence.ResultPersistenceLane.configure_memory,
+                                                project_driver.RunDriver._request)
+        test = self
+
+        class Deferred:
+            """The start-up recovery's request, as the driver sees it: queued until it is put on the writer."""
+            def __init__(self, lane, arguments):
+                self.lane, self.arguments, self.real = lane, arguments, None
+
+            def start(self):
+                if self.real is None:
+                    self.real = (SimpleNamespace(state='failed', reason='history_unavailable') if test.recover_fails
+                                 else self.lane.memory_hold(*self.arguments))
+
+            state = property(lambda self: 'queued' if self.real is None else self.real.state)
+            reason = property(lambda self: None if self.real is None else self.real.reason)
+
+        def configure(lane, journal):
+            # The real attachment; only the queueing of its recovery is deferred.
+            lane.memory_hold = lambda *arguments: Deferred(lane, arguments)
+            try:
+                self.deferred = original_configure(lane, journal)
+            finally:
+                del lane.memory_hold
+            self.recover_held.set()
+            return self.deferred
+
+        def request(driver, connection, enrolled, raw):
+            if b'"run.register"' not in raw:
+                return original_request(driver, connection, enrolled, raw)
+            self.memory_at_register.append(driver._memory_start.state)
+            try:
+                return original_request(driver, connection, enrolled, raw)
+            finally:
+                self.deferred.start()
+
+        for owner, name, value in ((result_persistence.ResultPersistenceLane, 'configure_memory', configure),
+                                   (project_driver.RunDriver, '_request', request)):
+            patcher = mock.patch.object(owner, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def open_during_recovery(self):
+        task = self.write('task.json', self.task())
+        route = self.cli('learning-route', '--task', task)
+        context = ('--task', task, '--assignment', self.write('assignment.json', self.assignment_for(route)),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        route_path = self.write('route.json', route)
+        orchestration = self.cli('learning-open-orchestration')
+        self.assertTrue(self.recover_held.is_set(), 'the start-up recovery was not held')
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration['orchestration_handle'])
+        self.assertEqual(['queued'], self.memory_at_register, 'the register did not arrive during the recovery')
+        return context, route_path, opened
+
+    def registered_rows(self):
+        store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3'))) + '?mode=ro',
+                                uri=True)
+        try:
+            return store.execute('SELECT run_id,attempt,failed_reason FROM project_registered_runs').fetchall()
+        finally:
+            store.close()
+
+    @__import__('test_framework').requirements('RS-B-4', why_not_scenario=STARTUP_WHY)
+    def test_an_open_during_the_start_up_recovery_is_registered_and_dispatches(self):
+        context, route_path, opened = self.open_during_recovery()
+        self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']),
+                         self.stopped_runs)
+        self.wait_for(lambda: len(self.registered_rows()) == 1, seconds=30)
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'], self.stopped_runs)
+        self.assertEqual(1, len(self.executions()))
+
+    @__import__('test_framework').requirements('RS-B-4', why_not_scenario=STARTUP_WHY)
+    def test_R6_16_a_during_the_start_up_recovery_dispatch_still_answers_run_failed(self):
+        # The exact R6_16_a scenario (the registration report refused by the writer), with the open landing inside
+        # the start-up recovery: dispatch answers the required run_failed, never dispatch_unavailable.
+        from codex_agents import result_persistence
+        from codex_agents.history_contracts import HistoryError
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
+                               side_effect=HistoryError('history_service_unavailable')), \
+                mock.patch.object(codex_preparation.CodexPreparationLane, 'submit') as submit:
+            context, route_path, opened = self.open_during_recovery()
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'],
+                               expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], (refused, self.stopped_runs))
+        self.assertTrue(opened['project_host_registered'], self.stopped_runs)
+        submit.assert_not_called()
+
+    @__import__('test_framework').requirements('RS-B-4', why_not_scenario=STARTUP_WHY)
+    def test_a_failed_start_up_recovery_refuses_the_waiting_register_as_an_unavailable_service(self):
+        # Compatibility, not a red claim: when the recovery itself fails, the waiting register gets the answer an
+        # unavailable service gave before this unit (refused history_service_unavailable; the open is left
+        # unregistered and its dispatch answers dispatch_unavailable, as before).
+        self.recover_fails = True
+        context, route_path, opened = self.open_during_recovery()
+        self.assertEqual(('admitted', False), (opened['admission'], opened['project_host_registered']))
+        # S10 review r1: the open first asks the driver whether a new run may open (run.check, ready), then registers.
+        self.assertEqual([('ready', None), ('refused', 'history_service_unavailable')],
+                         [(entry[2].get('state'), entry[2].get('reason_code')) for entry in self.stopped_runs
+                          if entry[0] == 'client' and isinstance(entry[2], dict)], self.stopped_runs)
+        self.assertEqual([], self.registered_rows())
+        refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'],
+                           expected=2)
+        self.assertEqual('dispatch_unavailable', refused['reason_code'], refused)
+
+
+class RefusedRegistrationViewTests(DriverHarness):
+    """RS-B-4 final fix with W5: a run whose registration report is refused leaves the driver's memory at once (M7),
+    yet a prepare that arrives after that, within FAILED_VIEW_SECONDS, still reads its failure (run_failed),
+    never dispatch_unavailable. The dispatch is sent only once the driver has dropped the run (event-coordinated)."""
+
+    @__import__('test_framework').requirements('RS-B-4', why_not_scenario=STARTUP_WHY)
+    def test_R6_16_a_a_prepare_after_the_failed_run_left_memory_still_answers_run_failed(self):
+        from codex_agents import result_persistence
+        from codex_agents.history_contracts import HistoryError
+        released, original = [], project_driver.RunDriver._release_failed
+
+        def release(driver, run):
+            original(driver, run)
+            if run.state == 'released':
+                released.append((driver, run.key))
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
+                               side_effect=HistoryError('history_service_unavailable')), \
+                mock.patch.object(project_driver.RunDriver, '_release_failed', release), \
+                mock.patch.object(codex_preparation.CodexPreparationLane, 'submit') as submit:
+            context, route_path, _, run_handle = self.open_run()
+            self.wait_for(lambda: released and released[-1][1][0] == run_handle
+                          and released[-1][1] not in released[-1][0]._runs, seconds=30)
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], (refused, self.stopped_runs))
+        submit.assert_not_called()
+
+
+class WarmUpGateTests(unittest.TestCase):
+    """LRS-6, LRS-7: a final answer never changes; the start-up checks are visible. No service is started."""
+
+    def driver(self, *, listed, swept, lost=None, fenced=None, failures=None, now=5.0):
+        driver = object.__new__(project_driver.RunDriver)
+        driver._earlier_listed, driver._swept = listed, swept
+        driver._lost, driver._fenced, driver._earlier_fences = lost or {}, fenced or {}, {}
+        driver._clock, driver._warm_started, driver._warm_failures = (lambda: now), 2.0, failures or {}
+        return driver
+
+    def test_LRS_6_each_start_up_condition_alone_keeps_run_settling_before_any_known_entry(self):
+        for listed, swept in ((False, True), (True, False), (False, False)):
+            for known in ({'lost': {'h': ('codex', 'released')}}, {'fenced': {'h': 'codex'}}, {}):
+                with self.subTest(listed=listed, swept=swept, known=sorted(known)):
+                    reply = self.driver(listed=listed, swept=swept, **known)._unheld_reply('h', 'codex')
+                    self.assertEqual({'state': 'failed', 'reason_code': 'run_settling'}, reply)
+
+    def test_LRS_6_after_both_conditions_the_known_answers_are_unchanged(self):
+        both = dict(listed=True, swept=True)
+        self.assertEqual('run_lost', self.driver(**both, lost={'h': ('codex', 'released')})._unheld_reply('h', 'codex')['reason_code'])
+        self.assertEqual('run_lost_held', self.driver(**both, lost={'h': ('codex', 'held')})._unheld_reply('h', 'codex')['reason_code'])
+        self.assertEqual('run_closed', self.driver(**both, fenced={'h': 'codex'})._unheld_reply('h', 'codex')['reason_code'])
+        self.assertEqual('history_not_authorized', self.driver(**both, fenced={'h': 'claude'})._unheld_reply('h', 'codex')['reason_code'])
+        self.assertEqual({'state': 'refused', 'reason_code': 'history_orchestration_unavailable'},
+                         self.driver(**both)._unheld_reply('h', 'codex'))
+
+    def test_LRS_7_the_warm_up_report_names_state_phase_and_fixed_code(self):
+        self.assertEqual(('warming', 3000, None, None), self.driver(listed=False, swept=False).warm_up())
+        self.assertEqual(('ready', 3000, None, None), self.driver(listed=True, swept=True).warm_up())
+        self.assertEqual(('failing', 3000, 'sweep', 'sweep_failed'),
+                         self.driver(listed=True, swept=False, failures={'sweep': 'sweep_failed'}).warm_up())
+        self.assertEqual(('failing', 3000, 'listing', 'history_service_unavailable'),
+                         self.driver(listed=False, swept=False, failures={'sweep': 'sweep_failed',
+                                                                          'listing': 'history_service_unavailable'}).warm_up())
+
+
 class HostRestartTests(DriverHarness):
     """The project host stops mid-run and starts again: nothing is claimed that is not known."""
 
@@ -826,6 +1118,9 @@ class HostRestartTests(DriverHarness):
         self.restart_host()
         process.communicate(timeout=60)
         # The new host does not know the old run: it is lost (abandoned, outcome unknown), never an outcome.
+        # LRS-3 (setup only): while the new host warms up it answers run_settling; wait, bounded, for it to know.
+        self.wait_for(lambda: self.cli('learning-run-status', *target, expected=2)['reason_code'] != 'run_settling',
+                      seconds=30)
         after = self.cli('learning-run-status', *target, expected=2)
         self.assertFalse(after['ready'])
         self.assertNotIn('health', after)
@@ -833,10 +1128,15 @@ class HostRestartTests(DriverHarness):
                          (after['reason_code'], after['terminal_state'], after['outcome']))
         # The stopped host settled it on its way out, once its child and watchdog were gone:
         # no release receipt is invented, but the binding is abandoned and the slot no longer counts.
+        # Corrected for O0b RS-A-2 (requirement): the slot is now released as `lost`, for good, its release
+        # digest the written decision's (the register's receipt), never a completion receipt.
         unsettled = [tuple(row) for row in self.ledger._connection.execute(
-            'SELECT a.released_at_ms,a.release_digest,h.binding_state,h.abandoned_reason FROM active_run_capacity a '
-            'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest')]
-        self.assertEqual([(None, None, 'abandoned', 'service_lost')], unsettled)
+            'SELECT a.released_at_ms IS NOT NULL,a.release_digest IS r.receipt,r.release_kind,h.binding_state,'
+            'h.abandoned_reason,EXISTS(SELECT 1 FROM capacity_completions c WHERE c.project_id=a.project_id '
+            'AND c.handle_digest=a.handle_digest) FROM active_run_capacity a '
+            'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest '
+            "JOIN run_holds r ON r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest")]
+        self.assertEqual([(1, 1, 'lost', 'abandoned', 'service_lost', 0)], unsettled)
         self.assertTrue(self.ledger.drained())
         # The primary carries on: a new run in the same orchestration routes, opens and runs.
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
@@ -850,12 +1150,90 @@ class HostRestartTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': 'next'})))
         dispatched = self.cli('dispatch', *nxt, '--route', nxt_route, '--run-handle', opened['run_handle'])
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        # The earlier run's claim keeps no release receipt, and neither child was started twice.
-        claims = [row[0] for row in self.ledger._connection.execute(
-            'SELECT released_at_ms FROM active_run_capacity ORDER BY claimed_at_ms')]
+        # The earlier run's claim keeps no completion receipt, and neither child was started twice.
+        # Corrected for O0b RS-A-2 (requirement): it is released as `lost` (its decision written), not completed.
+        claims = [tuple(row) for row in self.ledger._connection.execute(
+            "SELECT a.released_at_ms IS NOT NULL,r.release_kind FROM active_run_capacity a JOIN run_holds r "
+            "ON r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest "
+            "ORDER BY a.claimed_at_ms")]
         self.assertEqual(2, len(claims))
-        self.assertIsNone(claims[0])
+        self.assertEqual((1, 'lost'), claims[0])
         self.assertEqual(2, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+
+    def test_LRS_2_a_fresh_host_still_warming_up_says_run_settling_never_the_generic_refusal(self):
+        """LRS-1/LRS-2: before the new host's first sweep is collected, an earlier host's run is not 'not found'."""
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
+        self._host_stop.set()
+        host.join(20)
+        self.assertFalse(host.is_alive())
+        self.threads.remove(host)
+        process.communicate(timeout=60)
+        # The new host's first sweep is held: it has not been collected, so nothing is known about earlier runs.
+        original, gate, entered = project_driver.RunDriver._settle_lost, threading.Event(), threading.Event()
+
+        def held(driver, own):
+            if not own:
+                entered.set()
+                gate.wait(60)
+            return original(driver, own)
+        try:
+            with mock.patch.object(project_driver.RunDriver, '_settle_lost', held):
+                self.start_project_host(self.project)
+                self.wait_for(entered.is_set, seconds=30)
+                during = self.cli('learning-run-status', *target, expected=2)
+                self.assertEqual(('run_settling', False), (during['reason_code'], during['ready']))
+                self.assertNotIn('terminal_state', during)
+                self.assertNotIn('outcome', during)
+                self.assertIn('again', during['error'])
+                gate.set()
+                self.wait_for(lambda: self.cli('learning-run-status', *target, expected=2)['reason_code']
+                              != 'run_settling', seconds=30)
+        finally:
+            gate.set()
+        after = self.cli('learning-run-status', *target, expected=2)
+        self.assertEqual(('run_lost', 'abandoned', 'unknown'),
+                         (after['reason_code'], after['terminal_state'], after['outcome']))
+
+    def test_LRS_7_a_failing_first_sweep_is_shown_in_status_with_its_phase_and_fixed_code(self):
+        host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
+        self._host_stop.set()
+        host.join(20)
+        self.assertFalse(host.is_alive())
+        self.threads.remove(host)
+        with mock.patch.object(project_driver.RunDriver, '_settle_lost', side_effect=RuntimeError('/secret/path boom')):
+            self.start_project_host(self.project)
+            self.wait_for(lambda: ((self.cli('learning-status').get('project_service') or {}).get('warm_up') or {})
+                          .get('state') == 'failing', seconds=30)
+            service = self.cli('learning-status')['project_service']
+        self.assertEqual(('failing', 'sweep', 'sweep_failed'), tuple(service['warm_up'][k] for k in (
+            'state', 'failed_phase', 'last_failure_code')))
+        self.assertIn('last check failed (sweep_failed)', service['summary'])
+        self.assertNotIn('secret', json.dumps(service))
+
+    def test_LRS_5_a_failed_first_sweep_keeps_the_host_warming_up(self):
+        """Decision 228: only a collected sweep result ends the warm-up."""
+        from concurrent.futures import Future
+        driver = object.__new__(project_driver.RunDriver)
+        driver._clock, driver._next_sweep, driver._lost, driver._swept = (lambda: 0.0), 1e9, {}, False
+        driver._warm_failures = {}  # LRS-7 state the sweep step now also keeps (setup only)
+        failed = Future()
+        failed.set_exception(RuntimeError('sweep failed'))
+        driver._sweep = failed
+        driver._sweep_lost()
+        self.assertFalse(driver._swept)
+        done = Future()
+        done.set_result({'h': ('host', 'released')})
+        driver._sweep = done
+        driver._sweep_lost()
+        self.assertTrue(driver._swept)
+        self.assertEqual({'h': ('host', 'released')}, driver._lost)
 
     def restart_host(self):
         """Stop the running project host and start a fresh one for the same project."""
@@ -1381,7 +1759,8 @@ class HostClaudeVerificationTests(HostVerificationTests):
         opened = self.cli('learning-open-host-run', *context, '--route', route_path,
                           '--orchestration-handle', orchestration)
         self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']))
-        self.frames('claude', [init_frame(), RATE_LIMIT, result_frame(json.dumps(
+        # The client reports the model the route requested.
+        self.frames('claude', [init_frame(model=route['model']), RATE_LIMIT, result_frame(json.dumps(
             {**result(), 'assignment_id': assigned['assignment_id']}))])
         dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
@@ -1465,6 +1844,63 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
             recorders[0].record_claude_rate_limit_event(
                 self.project_id, run_handle=run_handle, rate_limit_info=RATE_LIMIT['rate_limit_info'])
 
+    def test_l6_1_a_tool_the_client_denied_is_reported_in_the_dispatch_reply(self):
+        # L6.1: the denial the client reports reaches the reply as fixed fields (count and tool names), no inputs.
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        frame = result_frame()
+        frame['permission_denials'] = [{'tool_name': 'Write', 'tool_input': {'file_path': '/PRIVATE-CANARY'}}]
+        self.frames('claude', [init_frame(), frame])
+        dispatched = self.dispatch_claude(context, route_path, run_handle)
+        report = dispatched['bridge_report']
+        self.assertEqual(('claude_tool_not_allowed', 'failed'), (report['outcome'], report['terminal_state']))
+        self.assertIn('claude_tool_not_allowed', dispatched['result']['summary'])
+        self.assertEqual({'count': 1, 'tools': ['Write']}, report['permission_denials'])
+        self.assertNotIn('PRIVATE-CANARY', json.dumps(dispatched))
+
+    def test_l6_2_open_refuses_an_uncommitted_read_path_before_any_admission(self):
+        # L6.2: dispatch-preflight refuses an uncommitted read path; open refuses it the same way, admitting nothing.
+        task = self.write('l6-task.json', self.task())
+        route = self.cli_for(self.project, 'learning-route', '--task', task)
+        (self.project / 'draft-l6.txt').write_text('uncommitted\n')
+        assigned = self.assignment_for(route, context=['draft-l6.txt'])
+        common = ('--task', task, '--assignment', self.write('l6-assignment.json', assigned),
+                  '--parent-grant', self.write('l6-grant.json', PARENT_GRANT))
+        route_path = self.write('l6-route.json', route)
+        orchestration = self.cli_for(self.project, 'learning-open-orchestration')['orchestration_handle']
+        started = []
+        preflight = self.cli_for(self.project, 'dispatch-preflight', *common, expected=2)
+        with mock.patch.object(cli, '_start_project_host', side_effect=lambda *a, **k: started.append(a)), \
+                mock.patch.object(cli, 'check_backend', side_effect=lambda *a, **k: started.append(a)):
+            opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
+                                  '--orchestration-handle', orchestration, expected=2)
+        self.assertEqual([], started)   # no host start and no backend call before the refusal
+        self.assertEqual(preflight['reason'], opened['reason'])
+        connection = self.collector_ledger._connection
+        for table in ('host_run_bindings', 'active_run_capacity'):
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], table)
+
+    def test_l6_2_a_supplied_non_bridge_route_that_resolves_to_bridge_is_refused_before_admission(self):
+        task = self.write('l6b-task.json', self.task())
+        route = self.cli_for(self.project, 'learning-route', '--task', task)
+        (self.project / 'draft-l6b.txt').write_text('uncommitted\n')
+        assigned = self.assignment_for(route, context=['draft-l6b.txt'])
+        common = ('--task', task, '--assignment', self.write('l6b-assignment.json', assigned),
+                  '--parent-grant', self.write('l6b-grant.json', PARENT_GRANT))
+        route_path = self.write('l6b-route.json', {**route, 'dispatch': 'native'})
+        orchestration = self.cli_for(self.project, 'learning-open-orchestration')['orchestration_handle']
+        started = []
+        # The supplied route is accepted as supplied (shape checks and the changed-route comparison are stubbed);
+        # the installed route it is refreshed to is the bridge route.
+        with mock.patch.object(cli, '_start_project_host', side_effect=lambda *a, **k: started.append(a)), \
+                mock.patch.object(cli, 'validate_assignment'), mock.patch.object(cli, '_same_route', return_value=True):
+            opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
+                                  '--orchestration-handle', orchestration, expected=2)
+        self.assertEqual([], started)
+        self.assertEqual('dispatch refused', opened.get('error'), opened)
+        connection = self.collector_ledger._connection
+        for table in ('host_run_bindings', 'active_run_capacity'):
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], table)
+
     def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         # The child starts and does some work, then goes quiet well inside every bound.
@@ -1511,8 +1947,10 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
                 {'type': 'tool_use', 'id': 'toolu_1', 'name': 'Read', 'input': {'file_path': 'CANARY-PRIVATE-PATH'}}]}},
             {'type': 'user', 'message': {'role': 'user', 'content': [
                 {'type': 'tool_result', 'tool_use_id': 'toolu_1', 'content': 'CANARY-PRIVATE-OUTPUT'}]}},
-            {'sleep': 3}, result_frame()])
+            {'wait_for': str(self.tools / 'claude-gate')}, result_frame()])
         process = self.separate_dispatch(context, route_path, run_handle)
+        gate = self.tools / 'claude-gate'
+        self.addCleanup(lambda: gate.parent.is_dir() and not gate.exists() and gate.write_text('go'))
         target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
         self.wait_for(lambda: [i for i in self.invocations('claude') if '-p' in i['argv']], seconds=30)
         self.wait_for(lambda: self.cli('learning-run-status', *target)['health'] in {'active', 'quiet'}, seconds=20)
@@ -1520,6 +1958,7 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         # Status is counts and states: bounded, and none of what the child thought, said or read.
         self.assertNotIn('CANARY', json.dumps(status))
         self.assertLess(len(json.dumps(status)), 4096)
+        gate.write_text('go')  # The child finishes only after its live status was read (PLAN T8 driver slice 4).
         output, errors = process.communicate(timeout=60)
         self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
         dispatched = json.loads(output)
@@ -1583,7 +2022,7 @@ class ClaudeOnlyVerificationTests(ClaudeChildHarness):
     def run_claude(self, context, route_path, orchestration, assignment_id):
         opened = self.cli('learning-open-host-run', *context, '--route', route_path,
                           '--orchestration-handle', orchestration)
-        self.frames('claude', [init_frame(), RATE_LIMIT, result_frame(json.dumps(
+        self.frames('claude', [init_frame(model=json.loads(Path(route_path).read_text())['model']), RATE_LIMIT, result_frame(json.dumps(
             {**result(), 'assignment_id': assignment_id}))])
         dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
@@ -1753,6 +2192,114 @@ ManyRunsTests.verifier = HostVerificationTests.verifier
 ManyRunsTests.verified = HostVerificationTests.verified
 
 
+class StoredContextRestartTests(DriverHarness):
+    """Slice D1 (RS-D D5, RS-D-2): a run's record context is in the project store, so a successor service of the
+    same runtime finishes what the stopped one began: its record, its verifier, QA and routing evidence."""
+
+    def setUp(self):
+        self._host_stop = threading.Event()
+        original = DriverHarness.start_project_host
+
+        def first(harness, project, stop=None):
+            return original(harness, project, stop or self._host_stop)
+
+        with mock.patch.object(DriverHarness, 'start_project_host', first):
+            super().setUp()
+
+    def stop_host(self):
+        host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
+        self._host_stop.set()
+        host.join(20)
+        self.assertFalse(host.is_alive())
+        self.threads.remove(host)
+        self._host_stop = threading.Event()
+
+    def restart_host(self):
+        """Stop the running project host and start a fresh one for the same project: nothing in memory is kept."""
+        self.stop_host()
+        self.start_project_host(self.project, self._host_stop)
+
+    def stored_context(self, run_handle):
+        """The run's stored context row, read from the project store without the service."""
+        for path in self.state.root.rglob('history.sqlite3'):
+            connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+            try:
+                row = connection.execute('SELECT state,host_class FROM project_result_contexts WHERE run_handle=?',
+                                         (run_handle,)).fetchone()
+                if row is not None:
+                    return tuple(row)
+            except sqlite3.Error:
+                pass
+            finally:
+                connection.close()
+        return None
+
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
+    def test_D1_a_result_on_disk_before_its_record_is_recorded_by_the_next_service_from_the_stored_context(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        # B2 (decision 92 A / 119 A): the service records the committed result itself, at once.
+        self.assertEqual(('recorded', self.primary + '-host-v1'), self.stored_context(run_handle))
+        self.restart_host()
+        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
+        self.assertEqual(('recorded', self.primary + '-host-v1'), self.stored_context(run_handle))
+        # Recording again after one more restart is the same admission, never a second one.
+        self.restart_host()
+        again = self.cli('learning-record-host-result', *context, '--route', route_path,
+                         '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+        self.assertEqual(recorded['host_outcome_digest'], again['host_outcome_digest'])
+        self.assertEqual(1, len(self.executions()))
+
+    def test_A1_after_restarts_a_verifier_qa_and_routing_evidence_still_find_the_recorded_originals(self):
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        base = self.task()
+        with mock.patch.object(self, 'task', return_value={**base, 'context_breadth': 'unknown'}):
+            worker = self.recorded_worker(orchestration, base['id'])  # reconnaissance of the task below
+        self.restart_host()
+        verifier = self.bound_verifier(orchestration, 'verify-after-restart', worker)
+        self.restart_host()
+        checks = self.checks(worker, verifier)
+        self.assertTrue(checks['checks_passed'])
+        self.restart_host()
+        self.assertTrue(self.record_qa(worker, verifier, checks['check_receipt'])['ready'])
+        self.restart_host()
+        hard = {**base, 'operation': 'end_to_end', 'complexity': 'extreme', 'ambiguity': 'high',
+                'context_breadth': 'cross_system', 'routing_evidence_refs': ['outcome:' + worker['digest']]}
+        routed = self.cli('learning-route', '--task', self.write('hard-task.json', hard))
+        self.assertIn('hard_end_to_end_evidence', json.dumps(routed))
+        self.assertEqual(2, len(self.executions()))
+
+    def test_D1_a_host_holding_recorded_workers_stops_at_the_ordinary_idle_time(self):
+        """The 12-hour retaining idle rule is gone: nothing a recorded worker needs is in the service's memory."""
+        from codex_agents import project_service
+        from codex_agents.client_runtime import runtime_hint_path
+        self.stop_host()
+        reports = []
+        stopped = self._host_stop.is_set
+        thread = threading.Thread(daemon=True, name='test-project-host-idle', target=lambda: reports.append(
+            project_service.serve_project(self.state.root, self.project, stopped=lambda: self.stop.is_set() or stopped(),
+                                          bundle_root=self.bundle, idle_stop_ns=8 * SECOND)))
+        self.threads.append(thread)
+        thread.start()
+        self.wait_for(lambda: runtime_hint_path(self.paths, self.project).exists())
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        self.recorded_worker(orchestration, 'task-idle')
+        thread.join(90)
+        self.assertFalse(thread.is_alive(), 'a host holding a recorded worker did not stop when idle')
+        self.assertEqual([{'ready': True, 'stopped': True}], reports)
+
+
+for _name in ('recorded_worker', 'bound_verifier', 'checks', 'record_qa'):
+    setattr(StoredContextRestartTests, _name, getattr(HostVerificationTests, _name))
+
+
 class SharedPoolTests(DriverHarness):
     """0.3.3 requirement C8 end to end: three projects share the machine's pool of six."""
 
@@ -1786,7 +2333,7 @@ class SharedPoolTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         processes = [self.separate_dispatch(run[0], run[1], run[3], project) for project, run in runs]
         launched = lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']]  # noqa: E731
-        self.wait_for(lambda: len(launched()) == 6, seconds=120)
+        self.wait_for_launches(6, processes, 120)
         for child in launched():
             os.killpg(child['pgid'], 0)  # All six are alive together.
         refused = self.cli_for(third, 'dispatch', *seventh[0], '--route', seventh[1], '--run-handle', seventh[3],
@@ -1825,7 +2372,7 @@ class TwoProjectTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         processes = [self.separate_dispatch(first[0], first[1], first[3], self.project),
                      self.separate_dispatch(second[0], second[1], second[3], self.second)]
-        self.wait_for(lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']]) == 2, seconds=40)
+        self.wait_for_launches(2, processes, 40)
         targets = [('--orchestration-handle', run[2], '--run-handle', run[3]) for run in (first, second)]
         for project, target in zip((self.project, self.second), targets):
             status = self.cli_for(project, 'learning-run-status', *target)
@@ -1858,7 +2405,7 @@ class TwoProjectTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         processes = [self.separate_dispatch(first[0], first[1], first[3], self.project),
                      self.separate_dispatch(second[0], second[1], second[3], self.second)]
-        self.wait_for(lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']]) == 2, seconds=40)
+        self.wait_for_launches(2, processes, 40)
         targets = [('--orchestration-handle', run[2], '--run-handle', run[3]) for run in (first, second)]
 
         def timed_status(project, target, expected=0):

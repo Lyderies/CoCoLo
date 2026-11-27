@@ -351,6 +351,59 @@ class DispatchPreflightTests(unittest.TestCase):
                 mock.patch.object(cli, "_learning_ledger", side_effect=AssertionError("state opened")):
             self.assertEqual(2, cli.main())
 
+    def test_cli_refusal_of_an_uncommitted_read_path_says_it_admitted_nothing(self) -> None:
+        # batch2 decision 167 (L6.2): every dispatch-preflight refusal carries admission_created false.
+        for name, data in (("task", self.task), ("assignment", self.assigned), ("grant", self.grant)):
+            (self.base / f"{name}.json").write_text(json.dumps(data))
+        argv = ["cli.py", "dispatch-preflight", "--project-root", str(self.root),
+                "--task", str(self.base / "task.json"), "--assignment", str(self.base / "assignment.json"),
+                "--parent-grant", str(self.base / "grant.json")]
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                mock.patch.object(cli, "_learning_ledger", return_value=(object(), "project-fixture")), \
+                mock.patch.object(cli, "_close_ledger"), \
+                mock.patch.object(cli, "_store_free_route", return_value=None), \
+                mock.patch.object(cli, "_trusted_host_route", return_value=(self.route, {})), \
+                mock.patch.object(cli, "dispatch_preflight", side_effect=bridge.BridgeRefused("assignment read path is not committed")):
+            self.assertEqual(2, cli.main())
+        report = json.loads(output.getvalue())
+        self.assertIs(False, report["ready"])
+        self.assertIn("not committed", report["reason"])
+        self.assertIs(False, report["admission_created"])
+
+    def test_cli_refusal_of_an_uncommitted_read_path_names_its_reason_code(self) -> None:
+        # batch2 (L6.2): every refusal reply carries its reason_code; open and preflight share this handler.
+        for name, data in (("task", self.task), ("assignment", self.assigned), ("grant", self.grant)):
+            (self.base / f"{name}.json").write_text(json.dumps(data))
+        argv = ["cli.py", "dispatch-preflight", "--project-root", str(self.root),
+                "--task", str(self.base / "task.json"), "--assignment", str(self.base / "assignment.json"),
+                "--parent-grant", str(self.base / "grant.json")]
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                mock.patch.object(cli, "_learning_ledger", return_value=(object(), "project-fixture")), \
+                mock.patch.object(cli, "_close_ledger"), \
+                mock.patch.object(cli, "_store_free_route", return_value=None), \
+                mock.patch.object(cli, "_trusted_host_route", return_value=(self.route, {})), \
+                mock.patch.object(cli, "dispatch_preflight", side_effect=bridge.BridgeRefused("assignment read path is not committed")):
+            self.assertEqual(2, cli.main())
+        self.assertEqual("read_path_not_committed", json.loads(output.getvalue())["reason_code"])
+
+    def test_open_time_read_path_check_leaves_repository_trust_to_dispatch(self) -> None:
+        # batch2 (L6.2 narrowed): the early open check refuses an uncommitted (or ungranted) read path;
+        # repository-trust conditions that open never refused stay with dispatch-preflight's full check.
+        with self.assertRaisesRegex(bridge.BridgeRefused, "export_path_not_granted"):
+            cli._refuse_uncommitted_read_paths(self.root, {**self.assigned, "context": ["draft.txt"]}, self.task)
+        cli._refuse_uncommitted_read_paths(self.root, self.assigned, self.task)  # committed: no refusal
+        self.git("rm", "-q", "--cached", "source.txt")  # the granted read path stays on disk, not in HEAD
+        self.git("commit", "-qm", "uncommit source")
+        with self.assertRaisesRegex(bridge.BridgeRefused, "^assignment read path is not committed$"):
+            cli._refuse_uncommitted_read_paths(self.root, self.assigned, self.task)
+        plain = self.base / "not-a-repository"
+        plain.mkdir()
+        with self.assertRaisesRegex(bridge.BridgeRefused, "cannot be trusted for export"):
+            bridge.committed_export_manifest(plain, ["source.txt"])  # dispatch still refuses it
+        cli._refuse_uncommitted_read_paths(plain, self.assigned, self.task)  # open leaves it to dispatch
+
     def test_cli_refuses_policy_override_before_state_or_inputs_are_opened(self) -> None:
         argv = ["cli.py", "dispatch-preflight", "--project-root", str(self.root),
                 "--task", "missing-task.json", "--assignment", "missing-assignment.json",

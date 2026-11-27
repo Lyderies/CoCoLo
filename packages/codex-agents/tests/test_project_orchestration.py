@@ -97,6 +97,149 @@ class ProjectOrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
             self.call('open', context={'role': 'host', 'active': True})
 
+    def test_R6_registration_is_recorded_once_and_a_failure_before_open_never_changes(self):
+        handle = self.opened()['orchestration_handle']
+        run = ('hrn_' + 'a' * 48, 'run-r6', 1)
+        self.store.record_registered_run(handle, *run, instance='supervisor', now_ms=self.now)
+        self.store.record_registered_run(handle, *run, instance='supervisor', now_ms=self.now + 5)  # a replay: no change
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):
+            self.store.record_registered_run(handle, run[0], 'another-run', 1, instance='supervisor', now_ms=self.now)
+        self.store.record_run_failed_before_open(run[0], 1, 'preparation_export_failed', now_ms=self.now + 10)
+        self.store.record_run_failed_before_open(run[0], 1, 'preparation_export_failed', now_ms=self.now + 20)
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):
+            self.store.record_run_failed_before_open(run[0], 1, 'preparation_full', now_ms=self.now + 30)
+        with self.assertRaisesRegex(HistoryError, 'history_not_found'):
+            self.store.record_run_failed_before_open('hrn_' + 'b' * 48, 1, 'preparation_full', now_ms=self.now)
+        with self.assertRaisesRegex(HistoryError, 'history_invalid_input'):
+            self.store.record_run_failed_before_open(run[0], 1, 'free text with a path /x', now_ms=self.now)
+        rows = self.store._connection.execute(
+            'SELECT orchestration_handle,run_id,attempt,registered_at_ms,failed_reason,failed_at_ms '
+            'FROM project_registered_runs').fetchall()
+        self.assertEqual([(handle, 'run-r6', 1, self.now, 'preparation_export_failed', self.now + 10)],
+                         [tuple(row) for row in rows])
+
+    def r6_report(self, snapshot):
+        from codex_agents.project_orchestration_report import orchestration_report
+        return orchestration_report(self.store, snapshot['orchestration_id'])['runs']
+
+    def test_P10_the_report_finds_its_orchestration_however_many_the_project_has(self):
+        """O0c P10 (ANALYSIS-0.4.0-lifetime-caps.md): the report counted every orchestration row of any state
+        and refused past 1,024, so about 11 orchestrations a day made every report fail. It now finds its
+        orchestration by its keyed id with no count of the project's rows."""
+        from codex_agents import project_orchestration_report as report
+        snapshots = [self.call('open', identity=f'open-{i}')['current']['snapshot'] for i in range(3)]
+        with mock.patch.object(report, 'MAX_ORCHESTRATIONS', 2, create=True):
+            for snapshot in snapshots:
+                self.assertEqual(snapshot['orchestration_handle'],
+                                 report._orchestration(self.store, snapshot['orchestration_id'])[0])
+                self.assertIsInstance(report.orchestration_report(self.store, snapshot['orchestration_id']), dict)
+        with self.assertRaisesRegex(HistoryError, 'history_not_found'):
+            report.orchestration_report(self.store, 'orc:' + 'f' * 64)
+
+    def test_R6_9_only_listed_reasons_are_stored(self):
+        handle = self.opened()['orchestration_handle']
+        run = 'hrn_' + 'c' * 48
+        self.store.record_registered_run(handle, run, 'run-c', 1, instance='supervisor', now_ms=self.now)
+        for reason in ('customer_private_project_name', 'open_failed_somewhere'):
+            with self.subTest(reason=reason), self.assertRaisesRegex(HistoryError, 'history_invalid_input'):
+                self.store.record_run_failed_before_open(run, 1, reason, now_ms=self.now)
+        for reason in ('preparation_managed_configuration', 'result_capacity_full', 'run_failed', 'service_stopped'):
+            with self.subTest(reason=reason):
+                self.store._connection.execute('UPDATE project_registered_runs SET failed_reason=NULL')
+                self.store.record_run_failed_before_open(run, 1, reason, now_ms=self.now)
+
+    def test_R6_8_an_earlier_services_unresolved_registrations_are_marked_service_stopped(self):
+        handle = self.opened()['orchestration_handle']
+        runs = ['hrn_' + str(i) * 48 for i in range(1, 4)]
+        self.store.record_registered_run(handle, runs[0], 'run-1', 1, instance='earlier', now_ms=self.now)
+        self.store.record_registered_run(handle, runs[1], 'run-2', 1, instance='earlier', now_ms=self.now)
+        self.store.record_run_failed_before_open(runs[1], 1, 'run_failed', now_ms=self.now)
+        self.store.record_registered_run(handle, runs[2], 'run-3', 1, instance='current', now_ms=self.now)
+        self.assertEqual(1, self.store.settle_earlier_registrations('current', now_ms=self.now + 7))
+        self.assertEqual(0, self.store.settle_earlier_registrations('current', now_ms=self.now + 8))
+        rows = dict(self.store._connection.execute('SELECT run_id,failed_reason FROM project_registered_runs'))
+        self.assertEqual({'run-1': 'service_stopped', 'run-2': 'run_failed', 'run-3': None}, rows)
+
+    def test_R6_12_registrations_are_bounded_per_orchestration_and_a_replay_at_the_limit_is_kept(self):
+        from codex_agents.project_orchestration_report import MAX_RUNS
+        handle = self.opened()['orchestration_handle']
+        for i in range(MAX_RUNS):
+            self.store.record_registered_run(handle, 'hrn_' + format(i, '048x'), f'run-{i}', 1, instance='s',
+                                             now_ms=self.now)
+        self.store.record_registered_run(handle, 'hrn_' + format(0, '048x'), 'run-0', 1, instance='s', now_ms=self.now)
+        with self.assertRaisesRegex(HistoryError, 'history_learning_capacity'):
+            self.store.record_registered_run(handle, 'hrn_' + format(MAX_RUNS, '048x'), 'run-x', 1, instance='s',
+                                             now_ms=self.now)
+
+    def test_R6_11_attempts_of_one_run_are_combined_the_same_whatever_the_row_order(self):
+        snapshot = self.opened()
+        handle = snapshot['orchestration_handle']
+        a, b = 'hrn_' + 'd' * 48, 'hrn_' + 'e' * 48
+        for order in ((1, 2), (2, 1)):
+            with self.subTest(order=order):
+                self.store._connection.execute('DELETE FROM project_registered_runs')
+                for attempt in order:  # run-d: attempt 1 failed, attempt 2 unresolved
+                    self.store.record_registered_run(handle, a, 'run-d', attempt, instance='s', now_ms=self.now)
+                    self.store.record_registered_run(handle, b, 'run-e', attempt, instance='s', now_ms=self.now)
+                self.store.record_run_failed_before_open(a, 1, 'run_failed', now_ms=self.now)
+                self.store.record_run_failed_before_open(b, 1, 'run_failed', now_ms=self.now)
+                self.store.record_run_failed_before_open(b, 2, 'result_capacity_full', now_ms=self.now)
+                runs = self.r6_report(snapshot)
+                self.assertEqual((2, 1, 1), (runs['admitted'], runs['pending'], runs['failed_before_open']), runs)
+                self.assertEqual({'result_capacity_full': 1}, runs['failed_before_open_reasons'])
+
+    def test_R6_a_populated_schema_16_store_gains_the_table_only_by_explicit_upgrade(self):
+        import sqlite3
+        from tests.project_schema_fixtures import legacy_registered_run_layout
+        self.opened()
+        legacy_registered_run_layout(self.store)
+        self.store._connection.execute('PRAGMA user_version=16')
+        before = self.store._connection.execute('SELECT * FROM project_orchestration_checkpoints').fetchall()
+        self.store.close()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.open_history()
+        connection = sqlite3.connect(self.directory / 'history.sqlite3')
+        connection.execute('CREATE TRIGGER unexpected AFTER INSERT ON project_learning_activation BEGIN SELECT 1; END')
+        connection.commit()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            ProjectHistory(self.directory, PROJECT_A, result_key=KEY, allow_schema_upgrade=True,
+                           result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
+                           result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
+        connection.execute('DROP TRIGGER unexpected')
+        connection.commit()
+        connection.close()
+        self.store = ProjectHistory(self.directory, PROJECT_A, result_key=KEY, allow_schema_upgrade=True,
+                                    result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
+                                    result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
+        self.assertEqual(23, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # B4t additive schema
+        self.assertEqual(before, self.store._connection.execute('SELECT * FROM project_orchestration_checkpoints').fetchall())
+        self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
+
+    def test_R6_17_a_replay_from_another_supervisor_instance_is_refused(self):
+        handle = self.opened()['orchestration_handle']
+        run = 'hrn_' + '7' * 48
+        self.store.record_registered_run(handle, run, 'run-7', 1, instance='earlier', now_ms=self.now)
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):
+            self.store.record_registered_run(handle, run, 'run-7', 1, instance='current', now_ms=self.now)
+
+    def test_R6_13_retiring_an_attempt_removes_its_registration(self):
+        handle = self.opened()['orchestration_handle']
+        run = 'hrn_' + 'f' * 48
+        self.store.record_registered_run(handle, run, 'run-f', 1, instance='s', now_ms=self.now)
+        with self.store._transaction():
+            self.store._delete_attempt_rows(run, 1, None)
+        self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
+
+    def test_R8a_an_orchestration_opened_under_another_scope_says_so(self):
+        snapshot = self.opened()
+        # After an update the service runs under a new generation; the caller is authorized for it.
+        self.scope = replace(self.scope, supervisor_generation=2)
+        with self.assertRaisesRegex(HistoryError, '^history_orchestration_other_scope$'):
+            self.call('status', {'orchestration_handle': snapshot['orchestration_handle']}, identity='status-later')
+        with self.assertRaisesRegex(HistoryError, '^history_orchestration_other_scope$'):
+            self.call('close', self.target(snapshot, status='completed', goal_tokens_used=None,
+                                           goal_time_used_seconds=None), identity='close-later')
+
     def test_monotonic_checkpoints_pause_resume_and_known_current_are_distinct(self):
         initial = self.call('open', identity='open')
         opened = initial['current']['snapshot']
@@ -181,9 +324,9 @@ class ProjectOrchestrationTests(unittest.TestCase):
                                                   (handle,)).fetchone()[0]
         self.assertEqual((1, 0), (kept(handles[0]), kept(handles[1])))
 
-    def test_034_R10_an_update_ends_the_earlier_runtimes_open_orchestrations(self):
-        """R10 (live 2026-11-19): after an update, nothing could close an orchestration opened under the
-        earlier runtime, and it counted as open for good."""
+    def test_B4t_an_update_keeps_earlier_open_and_paused_orchestrations(self):
+        """B4t/D2.11: an update keeps sealed open/paused custody, including unknown runtime scopes.
+        Only its ordinary close/rollover or the idle rule can end it."""
         from dataclasses import replace
         first = self.opened()
         paused = self.call('open', identity='second')['current']['snapshot']
@@ -194,15 +337,57 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.assertEqual(2, owner._open_count())
         self.assertEqual(0, owner.end_earlier(other_instance, 10))  # Not this service's journals.
         self.assertEqual(0, owner.end_earlier(self.scope, 10))      # Its own scope: nothing earlier.
-        self.assertEqual(2, owner.end_earlier(updated, 10))
+        self.assertEqual(0, owner.end_earlier(updated, 10))
+        self.assertEqual(2, owner._open_count())
+        for snapshot, expected in ((first, 'active'), (paused, 'paused')):
+            ended = owner._current(self.scope, snapshot['orchestration_handle'])['snapshot']
+            self.assertEqual(expected, ended['status'])
+            self.assertIsNone(ended['ended_at_ms'])
+        self.assertEqual(0, owner.end_earlier(updated, 10))  # Already ended: once only.
+
+    def test_O0c_P5_abandoned_orchestrations_end_after_24_hours_idle_so_a_new_one_opens(self):
+        """O0c P5 (owner 2026-11-21: 24 hours idle): with the limit 2, three abandoned orchestrations in a row
+        (one paused, one with a late checkpoint) never leave the project unable to open another."""
+        from codex_agents.orchestration_store import ORCHESTRATION_IDLE_MS
+        self.assertEqual(24 * 60 * 60 * 1000, ORCHESTRATION_IDLE_MS)
+        self.store._orchestration_limits = OrchestrationLimits(2, 12)
+        owner = self.store._orchestration_owner()
+        first = self.call('open', identity='open-first')['current']['snapshot']
+        paused = self.call('open', identity='open-second')['current']['snapshot']
+        self.call('pause', self.target(paused), 'pause-second')
+        with self.assertRaisesRegex(HistoryError, 'history_orchestration_full'):
+            self.call('open', identity='open-third')
+        self.now += ORCHESTRATION_IDLE_MS - 1
+        self.assertEqual(0, owner.end_idle(self.now, 10))  # Not idle long enough yet.
+        self.assertEqual(2, owner._open_count())
+        self.now += 1
+        self.assertEqual(2, owner.end_idle(self.now, 10))
         self.assertEqual(0, owner._open_count())
         for snapshot in (first, paused):
             ended = owner._current(self.scope, snapshot['orchestration_handle'])['snapshot']
-            self.assertEqual('interrupted', ended['status'])
-            self.assertIsNotNone(ended['ended_at_ms'])
-        self.assertEqual(0, owner.end_earlier(updated, 10))  # Already ended: once only.
+            self.assertEqual(('interrupted', self.now), (ended['status'], ended['ended_at_ms']))
+        self.assertEqual(0, owner.end_idle(self.now, 10))  # Once only.
+        self.assertEqual('active', self.call('open', identity='open-third')['current']['snapshot']['status'])
 
-    def test_034_R10_a_used_request_id_never_stops_the_end(self):
+    def test_O0c_P5_an_orchestration_with_recent_activity_or_a_run_not_over_is_never_ended_idle(self):
+        from codex_agents.orchestration_store import ORCHESTRATION_IDLE_MS
+        owner = self.store._orchestration_owner()
+        busy = self.opened()
+        self.call('open', identity='open-quiet')
+        self.now += ORCHESTRATION_IDLE_MS
+        self.call('checkpoint', self.target(busy, goal_tokens_used=0, goal_time_used_seconds=0), 'checkpoint-busy')
+        self.assertEqual(1, owner.end_idle(self.now, 10))  # Only the quiet one.
+        self.assertEqual(1, owner._open_count())
+        # A run registered against it and not over keeps even an idle one open.
+        self.store._connection.execute(
+            "INSERT INTO result_reservations(project_id,claim_id,run_handle,attempt,claim_digest,orchestration_handle,"
+            "binding,assignment_digest,created_at_ms,hard_deadline_at_ms,reserved_until_ms,expires_at_ms,state) "
+            "VALUES(?,'clm_y','hrn_y',1,?,?,x'00','a',0,0,0,0,'reserved')", (PROJECT_A, 'c' * 64, busy['orchestration_handle']))
+        self.now += ORCHESTRATION_IDLE_MS
+        self.assertEqual(0, owner.end_idle(self.now, 10))
+        self.assertEqual(1, owner._open_count())
+
+    def test_B4t_a_used_legacy_close_id_does_not_trigger_an_update_close(self):
         """Review 034-r10: the end used the predictable request id 'end-earlier-<handle>'; one already
         used by an old client made every attempt conflict, so the orchestration stayed open for good."""
         from dataclasses import replace
@@ -211,10 +396,10 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.call('checkpoint', self.target(opened, goal_tokens_used=0, goal_time_used_seconds=0),
                   'end-earlier-' + handle)
         owner = self.store._orchestration_owner()
-        self.assertEqual(1, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 10))
-        self.assertEqual('interrupted', owner._current(self.scope, handle)['snapshot']['status'])
+        self.assertEqual(0, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 10))
+        self.assertEqual('active', owner._current(self.scope, handle)['snapshot']['status'])
 
-    def test_034_R10_each_pass_tries_at_most_its_limit(self):
+    def test_B4t_runtime_change_does_not_attempt_the_retired_close(self):
         """Review 034-r10: only successful ends counted, so orchestrations kept open by a run not yet
         over were all retried on every pass."""
         from dataclasses import replace
@@ -232,8 +417,8 @@ class ProjectOrchestrationTests(unittest.TestCase):
         with mock.patch.object(orchestration_store.OrchestrationOwner, 'apply', pending):
             for _ in range(3):
                 self.assertEqual(0, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 1))
-        self.assertEqual(3, len(tries))
-        self.assertEqual(3, len(set(tries)))  # Each pass went on to the next one.
+        self.assertEqual(0, len(tries))
+        self.assertEqual(0, len(set(tries)))  # B4t never attempts the retired runtime-only close.
 
     def test_034_R6_a_closed_orchestration_is_removed_after_its_retention(self):
         from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS

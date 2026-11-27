@@ -1,0 +1,496 @@
+{
+  "baseline": "8d4a7ce3 (package 0.8.55), captured before B4m production changes",
+  "envelope": [
+    "project_id",
+    "protocol_version",
+    "ready",
+    "reason_code",
+    "request_digest",
+    "request_id",
+    "result",
+    "runtime_digest"
+  ],
+  "operations": {
+    "account.billing_probe": {
+      "optional": [
+        "billing_waivers",
+        "client_version",
+        "retry_at"
+      ],
+      "required": [
+        "known",
+        "observed_at_ms",
+        "probe",
+        "reason_code",
+        "records"
+      ]
+    },
+    "account.capacity_status": {
+      "optional": [],
+      "required": [
+        "receipt_digest",
+        "released_at_ms",
+        "state"
+      ]
+    },
+    "account.claim_launch": {
+      "optional": [],
+      "required": [
+        "bridge_run_id",
+        "deadline_at_ms",
+        "known",
+        "reason_code",
+        "receipt_digest",
+        "recorded_at_ms",
+        "run_id",
+        "state"
+      ]
+    },
+    "account.close_denied_attempt": {
+      "optional": [],
+      "required": [
+        "assignment_digest",
+        "binding",
+        "denial",
+        "fenced_at_ms",
+        "known",
+        "lease_digest",
+        "receipt_digest",
+        "record_content_digest",
+        "record_id",
+        "state"
+      ]
+    },
+    "account.fence_claim": {
+      "optional": [],
+      "required": [
+        "closure",
+        "receipt"
+      ]
+    },
+    "account.health": {
+      "optional": [],
+      "required": [
+        "database_checked",
+        "transport_alive"
+      ]
+    },
+    "account.observe_provider": {
+      "optional": [
+        "billing_waivers"
+      ],
+      "required": [
+        "known",
+        "observed_at_ms",
+        "phase",
+        "provider",
+        "records",
+        "run_handle",
+        "run_id"
+      ]
+    },
+    "account.open_host_run": {
+      "optional": [],
+      "required": [
+        "admission_content_digest",
+        "admission_record_id",
+        "inputs_digest",
+        "known",
+        "observation_deadline_at_ms",
+        "reason_code",
+        "receipt_digest",
+        "recorded_at_ms",
+        "run_handle",
+        "run_id",
+        "scope_digest",
+        "state"
+      ]
+    },
+    "account.open_provenance": {
+      "optional": [],
+      "required": [
+        "provenance",
+        "schema_version",
+        "seal"
+      ]
+    },
+    "account.owner_key": {
+      "optional": [],
+      "required": [
+        "fingerprint",
+        "last_replaced_at_ms",
+        "replacements",
+        "sequence",
+        "state"
+      ]
+    },
+    "account.owner_public_key": {
+      "optional": [],
+      "required": [
+        "fingerprint",
+        "last_replaced_at_ms",
+        "public_key",
+        "replacements",
+        "sequence",
+        "state"
+      ]
+    },
+    "account.project": {
+      "optional": [],
+      "required": [
+        "created_at_ms",
+        "project_id",
+        "status"
+      ]
+    },
+    "account.provider_state_snapshot": {
+      "optional": [],
+      "required": [
+        "classifier",
+        "evaluated_at_ms",
+        "format_version",
+        "project_id",
+        "providers",
+        "snapshot_ref",
+        "status"
+      ]
+    },
+    "account.record_observation_unavailable": {
+      "optional": [],
+      "required": [
+        "known",
+        "observed_at_ms",
+        "phase",
+        "provider",
+        "reason_code",
+        "record",
+        "run_handle",
+        "run_id"
+      ]
+    },
+    "account.record_rate_limit_event": {
+      "optional": [],
+      "required": [
+        "kept",
+        "stop"
+      ]
+    },
+    "account.register_execution": {
+      "optional": [],
+      "required": [
+        "grant",
+        "known"
+      ]
+    },
+    "account.release_capacity": {
+      "optional": [],
+      "required": [
+        "acknowledgement_digest",
+        "binding",
+        "cleanup_digest",
+        "known",
+        "receipt_digest",
+        "registration_digest",
+        "released_at_ms",
+        "result_digest",
+        "state",
+        "terminal_content_digest",
+        "terminal_record_id"
+      ]
+    },
+    "account.run_provenance": {
+      "optional": [],
+      "required": [
+        "provenance",
+        "schema_version",
+        "seal"
+      ]
+    },
+    "account.settle_lost_run": {
+      "optional": [],
+      "required": [
+        "bridge_run_id",
+        "known",
+        "receipt_digest",
+        "run_handle",
+        "state"
+      ]
+    },
+    "account.submit_terminal": {
+      "optional": [],
+      "required": [
+        "binding",
+        "known",
+        "receipt_digest",
+        "registration_digest",
+        "result_digest",
+        "state",
+        "terminal_content_digest",
+        "terminal_record_id"
+      ]
+    },
+    "account.withdraw_open": {
+      "optional": [],
+      "required": [
+        "known",
+        "receipt",
+        "run_handle",
+        "state"
+      ]
+    },
+    "history.acknowledge_terminal": {
+      "optional": [],
+      "required": [
+        "recorded"
+      ]
+    },
+    "history.admit_host_result": {
+      "optional": [],
+      "required": [
+        "admission",
+        "admission_commit",
+        "event_commit",
+        "outcome_commit"
+      ]
+    },
+    "history.bind_verifier": {
+      "optional": [],
+      "required": [
+        "content_digest",
+        "ingested_at_ms",
+        "late",
+        "observed_at_ms",
+        "record_id",
+        "source",
+        "source_sequence"
+      ]
+    },
+    "history.capacity_report": {
+      "optional": [
+        "run_slots"
+      ],
+      "required": [
+        "cleanup_reservations",
+        "operational_qa",
+        "orchestrations",
+        "qa_check_receipts",
+        "results",
+        "results_in_flight"
+      ]
+    },
+    "history.commit_qa": {
+      "optional": [],
+      "required": [
+        "accepted",
+        "check_receipt",
+        "deterministic_pass",
+        "host_outcome_digest",
+        "known",
+        "outcome_digest",
+        "outcome_record_id",
+        "qa_digest",
+        "qa_record_id",
+        "required_criteria_passed",
+        "required_criteria_total",
+        "security_pass",
+        "verifier_disagreement",
+        "verifier_host_outcome_digest"
+      ]
+    },
+    "history.commit_terminal": {
+      "optional": [],
+      "required": [
+        "binding",
+        "delivery_sequence",
+        "dispatch_result",
+        "record_content_digest",
+        "record_id",
+        "result_digest"
+      ]
+    },
+    "history.issue_qa_checks": {
+      "optional": [],
+      "required": [
+        "check_receipt",
+        "check_report_digest",
+        "checks_passed",
+        "expires_at_ms",
+        "known"
+      ]
+    },
+    "history.learning_cycle": {
+      "optional": [],
+      "required": [
+        "reason_code",
+        "report_bytes",
+        "state",
+        "summary"
+      ]
+    },
+    "history.learning_feedback": {
+      "optional": [],
+      "required": [
+        "detail",
+        "refused",
+        "stored"
+      ]
+    },
+    "history.learning_report": {
+      "optional": [],
+      "required": [
+        "chunk",
+        "next_offset",
+        "report_bytes"
+      ]
+    },
+    "history.learning_review_case": {
+      "optional": [],
+      "required": [
+        "detail",
+        "record",
+        "refused",
+        "stored"
+      ]
+    },
+    "history.open_scope": {
+      "optional": [],
+      "required": [
+        "facts",
+        "schema_version",
+        "seal"
+      ]
+    },
+    "history.orchestration_report": {
+      "optional": [],
+      "required": [
+        "astra_runs",
+        "by_agent_type",
+        "by_effort",
+        "by_model",
+        "by_role",
+        "checkpoint_count",
+        "checkpoints",
+        "duration_ms",
+        "ended_at_ms",
+        "no_progress_events",
+        "orchestration_id",
+        "outcome_status",
+        "qa",
+        "recording",
+        "repairs",
+        "run_duration_ms",
+        "runs",
+        "started_at_ms",
+        "status",
+        "usage"
+      ]
+    },
+    "history.pending_terminals": {
+      "optional": [],
+      "required": [
+        "deliveries",
+        "next_after_sequence"
+      ]
+    },
+    "history.qa_details": {
+      "optional": [],
+      "required": [
+        "outcome_commit",
+        "qa",
+        "summary"
+      ]
+    },
+    "history.qa_scope": {
+      "optional": [],
+      "required": [
+        "verifier",
+        "worker"
+      ]
+    },
+    "history.read_record": {
+      "optional": [],
+      "required": [
+        "metadata",
+        "record"
+      ]
+    },
+    "history.record_event": {
+      "optional": [],
+      "required": [
+        "content_digest",
+        "ingested_at_ms",
+        "late",
+        "observed_at_ms",
+        "record_id",
+        "source",
+        "source_sequence"
+      ]
+    },
+    "history.record_host_open": {
+      "optional": [],
+      "required": [
+        "metadata",
+        "record"
+      ]
+    },
+    "history.record_intent": {
+      "optional": [],
+      "required": [
+        "content_digest",
+        "ingested_at_ms",
+        "late",
+        "observed_at_ms",
+        "record_id",
+        "source",
+        "source_sequence"
+      ]
+    },
+    "history.record_outcome": {
+      "optional": [],
+      "required": [
+        "content_digest",
+        "ingested_at_ms",
+        "late",
+        "observed_at_ms",
+        "record_id",
+        "source",
+        "source_sequence"
+      ]
+    },
+    "history.result_reference": {
+      "optional": [],
+      "required": [
+        "binding",
+        "delivery"
+      ]
+    },
+    "history.routing_evidence": {
+      "optional": [],
+      "required": [
+        "trusted"
+      ]
+    },
+    "history.worker_input": {
+      "optional": [],
+      "required": [
+        "reference",
+        "worker"
+      ]
+    },
+    "history.worker_reference": {
+      "optional": [],
+      "required": [
+        "binding",
+        "body_size",
+        "expires_at_ms",
+        "host_open_content_digest",
+        "host_open_record_id",
+        "host_outcome_digest",
+        "provider",
+        "result_digest",
+        "task_family",
+        "terminal_record_id"
+      ]
+    }
+  }
+}

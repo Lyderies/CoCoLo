@@ -1,0 +1,33 @@
+S5 final fix: affected run and classification (unsandboxed, short TMPDIR under /tmp/claude-501)
+
+Command: env -u COCOLO_TEST_B4T_SKIP_SOCKETS python -B scripts/parallel_tests.py --jobs 6 --affected ce81bd96
+This worktree has no coverage map, so --affected fell back to a FULL run:
+7906 tests (claude 134, codex 6588, root 1184), 1365.7 s, preflight 10.0 s, metadata_errors [].
+
+Failed units (16), classified by running each failing test on ce81bd96 (cocolo-batch10, read-only), on an
+extracted copy of 094f73d1 (the head before this round) and on this round's tree:
+
+1. Expected: codex:tests.test_runtime_release (current digest not catalogued until release bookkeeping).
+2. Caused by this round, fixed in it, green on rerun:
+   - root:test_e2e_update_safety FaultTests.test_every_rewrite_applies_to_the_product_exactly_once: the L12.5
+     fault rewrite named the old 'runtime_hint_path(self.state, ...)' line that the product fix replaced; the
+     rewrite now names 'runtime_hint_path(paths, ...)'. Module rerun green.
+   - codex:tests.test_b4t_native AcceptedResidualStubTests (held lock): 'signal' != 'hint' under full-run load.
+     Fixture race (the C stub closed accepted connections at once; macOS LOCAL_PEERPID then reports no peer,
+     reproduced in isolation). The stub now holds connections like a real service. Rerun green.
+3. NOT from this round: fail identically at 094f73d1 and now, pass at ce81bd96 (22 tests, 13 modules),
+   i.e. regressions of the earlier B4t rounds (146955fc / ff35ecdd), outside the final brief, left unfixed:
+   - Op-set pins missing B4t's new read ops: test_b2_service_outcome AuthorityTests.test_operation_set_unchanged
+     ('history.takeover_report'); test_account_host ...reads_status_and_nothing_that_spends ('account.takeover_report');
+     test_holds_report_socket / test_b7b_terminal B7_1_2_3_6 and learning_status_recovery_from_plain_terminal
+     (['history.holds_report'] gains 'history.takeover_report'); test_admission_inputs, test_signature_inputs,
+     test_signature_job_intake (captured operation-family set differs).
+   - Downgraded-schema fixtures refused by B4t's 'predecessor ledger schema is incompatible' (floor/lineage tables
+     below schema 18): test_cleanup_receipt_lifetime (3 P1_4 cases), test_rsf_s7_account (3 cases),
+     test_candidate_evidence_lookup AP3 real previous release.
+   - test_cli_status_client_boundary (4 cases; project id listed twice), test_updfix UPDFIX_2 (4 cases;
+     (False, False) != (False, True)), test_host_slots M1 (service did not become ready).
+4. Budget failures in the full run (6 jobs): test_b2_service_outcome_paths 76.5 s, test_billing_gate 86.0 s,
+   test_host_slots 92.0 s, test_merge_library_adversarial 84.0 s. Rerun named at 4 jobs: this tree 63.0 / 73.4 s,
+   within their debt ceilings, no budget failure; ce81bd96 60.7 / 77.1 / 62.5 s and itself fails
+   test_merge_library_adversarial's budget. Load-induced; not from this round.

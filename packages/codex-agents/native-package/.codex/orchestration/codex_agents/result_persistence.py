@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 import contextlib
 import os
 import queue
+import secrets
 import sqlite3
 import threading
 import time
@@ -29,7 +30,9 @@ from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket
 from .contracts import ContractError
 from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, valid_integer
 from .learning_contracts import parse_bounded_json
+from . import service_record
 from .project_history import ProjectHistory, _ExecutionProvenanceRejected
+from .service_record import ServiceRecordAuthority
 from .history_service import HistoryService
 from .project_request_queue import ProjectRequestLimits, ProjectRequestQueue
 from .project_monitor import _capture_binding
@@ -50,6 +53,10 @@ class ResultPersistenceHandle:
     __slots__ = ("__weakref__",)
 
 
+REPORT_SLOTS = 8  # S1-R6-7: reporting writes queued at once, beside the lane's own room
+EARLIER_SLOTS = 4  # S1-R6-14: earlier-lease requests (list, settle, expire) queued at once
+
+
 @dataclass(repr=False)
 class _EarlierLeases:
     """One request on the writer for leases an earlier service left armed (0.3.3, C3).
@@ -64,6 +71,9 @@ class _EarlierLeases:
     state: str = 'queued'
     result: object = None
     reason: str | None = None
+    arguments: tuple = ()  # `register` / `failed_before_open` (S1-R6)
+    skipped: int = 0  # `list`: leases that could not be read this time (O10 E2)
+    lease_pass_pending: bool = False  # `expire`: full start pass or rows backed off (RS-B section 12)
 
 
 @dataclass(repr=False)
@@ -101,7 +111,9 @@ class _Pending:
     cleanup_custody: object = None
     cleanup_raw: bytes | None = None
     release_acknowledgement: bytes | None = None
+    adoption_pending: bool = False  # D4: retry attestation after replay has removed the material
     release_confirmed: bytes | None = None
+    record_inputs: dict | None = None  # D1: the host class and client capability stored with the lease
 
 
 class ResultPersistenceLane:
@@ -145,6 +157,14 @@ class ResultPersistenceLane:
         self._project = owner._monitor.scope().project_id
         # This service's scope, read here on the owner thread; the writer thread cannot ask (0.3.4 R10).
         self._service_scope = owner._monitor.scope()
+        # This service process's own instance, new at every start (O10 D2). The scope's supervisor id is
+        # durable per project, so it cannot tell a restarted service's rows from its predecessor's.
+        self._service_instance = 'svc-' + secrets.token_hex(16)
+        self._memory_journal = None
+        # B2-18: what the recording sweep last published, for the health check (read without any store or lock).
+        self.recording_notes = service_record.RecordingNotes()
+        from .recovery_report import RecoveryNotes
+        self.recovery_notes = RecoveryNotes()
         self._runtime = owner._monitor.scope().runtime_digest
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
@@ -156,8 +176,13 @@ class ResultPersistenceLane:
         self._requests = None if request_limits is None else ProjectRequestQueue(request_limits)
         self._api_ingress_owner = None
         self._service_authorizers = (history_authorizer, result_authorizer, orchestration_authorizer)
-        # API requests cannot consume one slot per result entry or the close marker.
-        self._incoming = queue.Queue(maxsize=max_entries + 1 + (0 if request_limits is None else request_limits.requests))
+        # API requests cannot consume one slot per result entry or the close marker, and reporting
+        # writes have their own REPORT_SLOTS (S1-R6-7).
+        self._incoming = queue.Queue(maxsize=max_entries + 1 + REPORT_SLOTS + EARLIER_SLOTS
+                                     + (0 if request_limits is None else request_limits.requests))
+        self._reporting = 0  # reporting writes queued or being written (at most REPORT_SLOTS)
+        self._earlier_held = 0  # earlier-lease requests queued or being run (at most EARLIER_SLOTS)
+        self._unanswered = {}  # id -> request: queued and not yet answered; failed if the writer stops (R6-19)
         self._ready = threading.Event()
         self._closed = self._fault = False
         self._store = None
@@ -219,16 +244,28 @@ class ResultPersistenceLane:
         return self._jobs[handle]
 
     def prepare(self, binding, worker_handle, *, hard_deadline_at_ms):
-        """Known-claim reference only; services use prepare_lease before claiming."""
+        """Known-claim reference only; services use prepare_lease before claiming.
+
+        D2 (RS-D-D2): product results are lease-born. A lane built without `allow_local_execution_reference`
+        (the service runtime's lane) refuses this non-lease reservation; only the explicit local-reference fixtures
+        of the tests construct a lane that permits it.
+        """
         self._check_owner()
+        if not self._allow_local_reference:
+            raise HistoryError("history_not_authorized")
         binding = _capture_binding(binding)
         self._owner._monitor._entry(binding)
         if not valid_integer(hard_deadline_at_ms, minimum=1):
             raise HistoryError("history_invalid_input")
         return self._prepare_entry(binding, worker_handle, hard_deadline_at_ms)
 
-    def prepare_lease(self, binding, worker_handle):
-        """Reserve before the account creates its claim ID; launch nothing."""
+    def prepare_lease(self, binding, worker_handle, *, record_context=None):
+        """Reserve before the account creates its claim ID; launch nothing.
+
+        D1 (RS-D-1): with `record_context` ({'host_class', 'client_capability'}, the driver's own facts of the run),
+        the writer stores the run's record context with the lease, its assignment, task and route taken from the
+        prepared worker's own input, so it is durable before the lease can be armed.
+        """
         self._check_owner()
         if type(binding) is not ResultLeaseBinding:
             raise HistoryError("history_invalid_input")
@@ -236,9 +273,15 @@ class ResultPersistenceLane:
         scope = self._owner._monitor.scope()
         if any(getattr(scope, name) != getattr(binding, name) for name in vars(scope)):
             raise HistoryError("history_not_authorized")
-        return self._prepare_entry(binding, worker_handle, None)
+        if record_context is not None and (type(record_context) is not dict
+                                           or record_context.keys() != {'host_class', 'client_capability'}
+                                           or type(record_context['host_class']) is not str
+                                           or type(record_context['client_capability']) is not dict):
+            raise HistoryError("history_invalid_input")
+        return self._prepare_entry(binding, worker_handle, None,
+                                   None if record_context is None else dict(record_context))
 
-    def _prepare_entry(self, binding, worker_handle, deadline):
+    def _prepare_entry(self, binding, worker_handle, deadline, record_inputs=None):
         if type(worker_handle) is not CodexWorkerHandle:
             raise HistoryError("history_invalid_input")
         with self._lock:
@@ -252,7 +295,7 @@ class ResultPersistenceLane:
                     raise HistoryError("history_conflict")
                 return previous
             if len(self._jobs) >= self._maximum:
-                raise HistoryError("history_result_capacity")
+                raise HistoryError("history_result_capacity_busy")  # O10 RC-1: running results
         with self._pool._registry._lock:
             original = self._pool._job(worker_handle)
             if original.state != "prepared" or type(original.payload) is not bytes:
@@ -261,6 +304,7 @@ class ResultPersistenceLane:
         handle = ResultPersistenceHandle()
         with self._lock:
             pending = _Pending(binding, worker_handle, original, payload, deadline)
+            pending.record_inputs = record_inputs
             if type(binding) is ResultLeaseBinding:
                 pending.lease_binding = binding
             self._jobs[handle] = pending
@@ -426,6 +470,25 @@ class ResultPersistenceLane:
             pending.state, pending.reason = 'withdrawing', None
             self._incoming.put_nowait(('withdraw_unsent', handle))
 
+    def retire_refused(self, handle):
+        """B4s r1 (RS-B-B4-9, RC-3): drop the input of a job whose lease the store refused for result space. That
+        refusal is raised inside the lease's own transaction before anything is written, so no lease of it exists
+        and none can be armed: the run is then one that never took a lease, and its open binding is withdrawn."""
+        pending = self._job(handle)
+        with self._lock:
+            if (pending.state != 'failed' or pending.reason not in {'history_result_capacity',
+                                                                     'history_result_capacity_busy'}
+                    or pending.lease_binding is None or pending.lease is not None or pending.execution_issued):
+                raise HistoryError('history_result_not_ready')
+        with self._pool._registry._lock:
+            original = self._pool._job(pending.worker_handle)
+            if original is not pending.original_job or original.state != 'prepared':
+                raise HistoryError('history_not_authorized')
+        self._pool.withdraw_prepared(pending.worker_handle)
+        with self._lock:
+            self._jobs.pop(handle)
+            self._by_worker.pop(pending.worker_handle)
+
     def retire_denied(self, handle):
         """Drop a closed lease's input: denied by the account, or withdrawn before its claim."""
         pending = self._job(handle)
@@ -588,7 +651,7 @@ class ResultPersistenceLane:
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError("history_service_unavailable")
-            if pending.state in {"queued", "committing", "committed", "acknowledging", "acknowledged"}:
+            if pending.state in {"queued", "committing", "adopting", "committed", "acknowledging", "acknowledged"}:
                 return
             if pending.state != "failed" or pending.selected is None:
                 raise HistoryError("history_result_not_ready")
@@ -810,6 +873,37 @@ class ResultPersistenceLane:
                     self._requests.close()
                 self._incoming.put_nowait(None)
 
+    def faulted(self):
+        """O10 D13: whether the writer stopped on its own (never after a normal close).
+
+        A faulted lane refuses every later call for good, so its service stops itself and the next
+        start settles from the store. A plain flag read under the lane's lock; the writer only sets it.
+        """
+        with self._lock:
+            return self._fault
+
+    # D1 (RS-D-2): the service's authorizers read a run's record context from the store, never from the driver's
+    # memory. They run on this writer thread, inside its own services' requests, so they use its store directly.
+    def _writer_store(self):
+        if threading.current_thread() is not self._writer:
+            raise HistoryError("history_wrong_owner")
+        return self._history()
+
+    def stored_result_context(self, binding, host_class, *, recorded=False):
+        return self._writer_store().stored_result_context(binding, host_class=host_class, recorded=recorded)
+
+    def adopted_orchestration_scope(self, scope, handle, host_class):
+        from .project_takeover import adopted_orchestration_scope
+        return adopted_orchestration_scope(self._writer_store(), scope, handle, host_class)
+
+    def stored_worker_context(self, outcome_digest, host_class, *, orchestration_handle=None):
+        return self._writer_store().stored_worker_context(outcome_digest, host_class=host_class,
+                                                          orchestration_handle=orchestration_handle)
+
+    def stored_attempt_context(self, run_handle, attempt, host_class, inputs_digest):
+        return self._writer_store().stored_attempt_context(run_handle, attempt, host_class=host_class,
+                                                           inputs_digest=inputs_digest)
+
     def _history(self):
         if self._store is None:
             store = self._open()
@@ -817,6 +911,7 @@ class ResultPersistenceLane:
                 if type(store) is ProjectHistory:
                     store.close()
                 raise HistoryError("history_service_unavailable")
+            store._recovery_notes = self.recovery_notes
             self._store = store
         return self._store
 
@@ -832,7 +927,13 @@ class ResultPersistenceLane:
         from .open_scope_contracts import open_inputs_digest
         inputs_digest = open_inputs_digest(assignment, original['task'], original['route'], original['parent_grant'])
         if pending.lease_binding is not None:
-            lease = self._history().reserve_result_lease(pending.lease_binding, assignment)
+            context = None
+            if pending.record_inputs is not None:
+                from .host_result_contracts import RecordContext
+                context = RecordContext(original['task'], original['route'],
+                                        pending.record_inputs['client_capability'], pending.record_inputs['host_class'],
+                                        inputs_digest)
+            lease = self._history().reserve_result_lease(pending.lease_binding, assignment, record_context=context)
         else:
             self._history().reserve_result(pending.binding, assignment, hard_deadline_at_ms=pending.deadline_ms)
             lease = None
@@ -940,6 +1041,23 @@ class ResultPersistenceLane:
             pending.delivery, pending.state, pending.reason = delivery, "committed", None
             pending.terminal_evidence = evidence
             pending.selected = None
+            pending.adoption_pending = False
+        self._record_published(pending.binding)
+
+    def _record_authority(self):
+        return ServiceRecordAuthority(runtime_digest=self._runtime, service=True)
+
+    def _record_published(self, binding):
+        """B2 (decision 92.2 A): right after the result is safely stored, the writer records its outcome itself. A
+        refusal is a normal outcome (the status names it) and the restart/backstop sweep tries again; nothing here
+        can fail the publication, which is already committed."""
+        try:
+            self._history().admit_service_result(binding, final_check=self._record_authority())
+        except HistoryError:
+            pass  # a refusal is a normal outcome: the status names it, and the sweep decides about a retry
+        except Exception:  # not a refusal: the sweep tries again, and the health check is told (never raised here)
+            with contextlib.suppress(Exception):
+                service_record.report_unexpected(self._history(), binding, self.recording_notes)
 
     def _acknowledge_terminal(self, pending):
         self._history().acknowledge_account_terminal(pending.binding, pending.acknowledgement)
@@ -983,35 +1101,313 @@ class ResultPersistenceLane:
 
     def earlier_leases(self):
         """Ask the writer for the leases an earlier service left armed; poll its `state`."""
-        return self._queue_earlier(_EarlierLeases('list'))
+        return self._queue_counted(_EarlierLeases('list'), '_earlier_held', EARLIER_SLOTS)
 
     def settle_earlier_lease(self, binding, raw):
         """Expire one such lease with the account's closure for its claim request."""
         if type(binding) is not ResultLeaseBinding or type(raw) is not bytes or not 0 < len(raw) <= MAX_DENIAL_RECEIPT_BYTES:
             raise HistoryError('history_invalid_input')
-        return self._queue_earlier(_EarlierLeases('settle', binding, raw))
+        return self._queue_counted(_EarlierLeases('settle', binding, raw), '_earlier_held', EARLIER_SLOTS)
 
     def expire_results(self):
         """Ask the writer to run one bounded result cleanup (0.3.4 R2); poll its `state`."""
-        return self._queue_earlier(_EarlierLeases('expire'))
+        return self._queue_counted(_EarlierLeases('expire'), '_earlier_held', EARLIER_SLOTS)
+
+    def arbitrate_publication(self, run_handle, attempt, request_id):
+        """D4 (shared rule S-3): the writer's decision on one attempt before the account is asked to settle it; poll
+        `state`, then read `result`: `recovered`, `unrecoverable`, `settling` or `none`. `history_writer_busy` when
+        no room is left: ask again later."""
+        if (type(run_handle) is not str or type(attempt) is not int or type(request_id) is not str
+                or not 0 < len(request_id) <= 128):
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('arbitrate', arguments=(run_handle, attempt, request_id)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
+    def arbitrate_after_stop(self, run_handle, attempt, request_id):
+        """D4 (shared rule S-3): the same decision, for the owner's thread once this lane's writer has stopped (this
+        service's own exit settles what it still holds): on a store opened for this call alone, so the exiting service
+        never asks the account about an attempt whose body the writer could still publish."""
+        if type(run_handle) is not str or type(attempt) is not int or type(request_id) is not str:
+            raise HistoryError('history_invalid_input')
+        with self._lock:
+            if self._fault or not self._closed:
+                raise HistoryError('history_service_unavailable')
+        self._writer.join(10)
+        if self._writer.is_alive():
+            raise HistoryError('history_service_unavailable')
+        store = self._open()
+        try:
+            if type(store) is not ProjectHistory or store.project_id != self._project:
+                raise HistoryError('history_service_unavailable')
+            return store.arbitrate_publication(run_handle, attempt, request_id)
+        finally:
+            if type(store) is ProjectHistory:
+                store.close()
+
+    def _install_delivery(self, pending, delivery, evidence):
+        """D4 (RS-D draft 4 §3, `adopt_delivery`): install a delivery the writer committed for this job's claim, with
+        the three fields `_publish` sets. Idempotent: a job that already has an equal delivery is left alone, an
+        unequal one is `history_conflict`."""
+        with self._lock:
+            if pending.delivery is not None:
+                if pending.delivery != delivery:
+                    raise HistoryError('history_conflict')
+                return
+            pending.delivery, pending.state, pending.reason = delivery, 'committed', None
+            pending.terminal_evidence = evidence
+            pending.selected = None
+            pending.adoption_pending = False
+
+    def _adopt_committed(self, history, claim_ids=None, *, run=None):
+        """Writer step: a job of this service that failed publishing, whose claim was committed from the store (a
+        replay or the arbitration), takes the stored delivery instead of publishing it again."""
+        with self._lock:
+            failed = [pending for pending in self._jobs.values()
+                      if pending.state == 'failed' and pending.delivery is None and type(pending.binding) is AttemptBinding
+                      and (pending.adoption_pending or (claim_ids is not None and pending.binding.claim_id in claim_ids)
+                           or (run is not None and (pending.binding.run_handle, pending.binding.attempt) == run))]
+            for pending in failed:
+                # Claim adoption under the same lock as retry's queue decision;
+                # store I/O and attestation happen after releasing the lock.
+                pending.state = 'adopting'
+                pending.adoption_pending = True
+        for pending in failed:
+            try:
+                delivery = history.committed_delivery(pending.binding)
+                evidence = None if pending.grant is None else history.attest_terminal_delivery(pending.binding)
+                self._install_delivery(pending, delivery, evidence)
+            except (HistoryError, sqlite3.Error, OSError):
+                with self._lock:
+                    pending.state = 'failed'
+                continue  # retain the trigger on this bounded live job for later expiry passes
+
+    def open_binding(self, operation, *arguments, **options):
+        """B3: bounded writer requests for the open-binding outbox (polled by the owner)."""
+        if operation not in {'record_open_binding', 'mark_open_withdrawing', 'open_withdrawals',
+                             'release_open_binding', 'withdraw_earlier_open_bindings',
+                             'defer_open_withdrawal'}:
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('open_binding', arguments=(operation, arguments, options)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
+    SETTLEMENT_STEPS = frozenset({'open_account_settlement', 'record_account_settlement', 'takeover_unverified'})
+
+    def account_settlement(self, operation, *arguments, **options):
+        """B4s (RS-B-B4-2/-3): one step of a lost run's settlement on the writer, the outbox (`releasing` with the
+        account request) or the verified closure's record; poll `state`, then read `result`."""
+        if operation not in self.SETTLEMENT_STEPS:
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('settlement', arguments=(operation, arguments, options)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
+    def account_settlement_after_stop(self, operation, *arguments, **options):
+        """The same step for the owner's thread once this lane's writer has stopped (this service's own exit), on a
+        store opened for this call alone, as `arbitrate_after_stop`."""
+        if operation not in self.SETTLEMENT_STEPS:
+            raise HistoryError('history_invalid_input')
+        with self._lock:
+            if self._fault or not self._closed:
+                raise HistoryError('history_service_unavailable')
+        self._writer.join(10)
+        if self._writer.is_alive():
+            raise HistoryError('history_service_unavailable')
+        store = self._open()
+        try:
+            if type(store) is not ProjectHistory or store.project_id != self._project:
+                raise HistoryError('history_service_unavailable')
+            return getattr(store, operation)(*arguments, **options)
+        finally:
+            if type(store) is ProjectHistory:
+                store.close()
+
+    def configure_memory(self, journal):
+        """Trusted driver attachment; this instance's journal lock outlives every memory row."""
+        self._check_owner()
+        self._memory_journal = journal
+        self._service_instance = journal.instance
+        journal.keep_lock = True
+        return self.memory_hold('recover', journal.directory, journal.instance)
+
+    def memory_hold(self, operation, *arguments):
+        from .memory_holds import OPERATIONS
+        if operation not in OPERATIONS:
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('memory', arguments=(operation, arguments)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
+    def retire_memory_after_stop(self, instance, pending=None):
+        """Owner after every runtime thread stopped; never callable on a serving writer."""
+        self._check_owner()
+        if not self._closed or self._fault or self._writer.is_alive():
+            raise HistoryError('history_service_unavailable')
+        store = self._open()
+        try:
+            from .memory_holds import retire_instance
+            return retire_instance(store, instance, pending)
+        finally:
+            store.close()
+
+    def check_detach(self, handle):
+        pending = self._job(handle)
+        with self._lock:
+            if (pending.state not in {'claim_pending', 'lease_claim_pending', 'failed'}
+                    or pending.claim_binding is not None or pending.grant_raw is not None
+                    or pending.grant is not None or pending.supervisor is not None or pending.execution_issued):
+                raise HistoryError('history_result_not_ready')
+        with self._pool._registry._lock:
+            original = self._pool._job(pending.worker_handle)
+            if original is not pending.original_job or original.state != 'prepared' or original.ticket is not None:
+                raise HistoryError('history_not_authorized')
+
+    def detach(self, handle):
+        """After durable sweep handoff: withdraw prepared worker, drop lane memory, retain armed lease."""
+        self.check_detach(handle)
+        pending = self._job(handle)
+        self._pool.withdraw_prepared(pending.worker_handle)
+        with self._lock:
+            self._jobs.pop(handle)
+            self._by_worker.pop(pending.worker_handle)
+
+    def report_registered_run(self, orchestration_handle, run_handle, run_id, attempt):
+        """S1-R6: record that the driver registered this run, under this service process's own instance (O10 D2);
+        poll its `state`. `history_writer_busy` when every reporting slot is in use: ask again later."""
+        return self._queue_report(_EarlierLeases('register', arguments=(
+            orchestration_handle, run_handle, run_id, attempt, self._service_instance)))
+
+    def report_failed_before_open(self, run_handle, attempt, reason):
+        """S1-R6: record that a registered run failed before its host open (reporting only)."""
+        return self._queue_report(_EarlierLeases('failed_before_open', arguments=(run_handle, attempt, reason)))
+
+    def _queue_report(self, request):
+        return self._queue_counted(request, '_reporting', REPORT_SLOTS)
+
+    def _queue_counted(self, request, counter, slots):
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')  # before any quota (R6-19)
+            if getattr(self, counter) >= slots:
+                raise HistoryError('history_writer_busy')
+            setattr(self, counter, getattr(self, counter) + 1)
+        try:
+            return self._queue_earlier(request)
+        except BaseException:
+            with self._lock:
+                setattr(self, counter, getattr(self, counter) - 1)
+            raise
 
     def _queue_earlier(self, request):
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError('history_service_unavailable')
-            self._incoming.put_nowait(('earlier', request))
+            try:
+                self._incoming.put_nowait(('earlier', request))
+            except queue.Full:
+                raise HistoryError('history_writer_busy') from None  # never queue.Full out of a step
+            self._unanswered[id(request)] = request
         return request
 
     def _earlier(self, request):
         """Writer step: the history's own checked leases, or one settled with its closure."""
         try:
             history = self._history()
-            if request.kind == 'expire':
+            if request.kind == 'memory':
+                from . import memory_holds
+                operation, arguments = request.arguments
+                result = getattr(memory_holds, operation)(history, *arguments)
+                if operation == 'recover':
+                    self._memory_journal.memory_instances = result
+            elif request.kind in {'open_binding', 'settlement'}:
+                operation, arguments, options = request.arguments
+                result = getattr(history, operation)(*arguments, **options)
+            elif request.kind == 'expire':
+                maintenance_ok = True
+                if getattr(self, '_memory_journal', None) is not None:
+                    from .memory_holds import recover
+                    try:
+                        self._memory_journal.memory_instances = recover(
+                            history, self._memory_journal.directory, self._service_instance)
+                    except (HistoryError, sqlite3.Error):
+                        maintenance_ok = False
                 # An update leaves the earlier runtime's open orchestrations to this service (0.3.4 R10).
                 # A failure here never stops the result cleanup below (review 034-r10).
-                with contextlib.suppress(HistoryError, sqlite3.Error):
+                try:
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
+                # O0c P5 / B6 (RS-B-B6-4): an orchestration idle for 24 hours with no run left is ended interrupted
+                # unattended, at most UNATTENDED_CLOSE_BATCH a pass, fairly by each one's next check. The owner reads
+                # its own effective time (max(wall, floor), never moving the floor): a wall clock that went back below
+                # the floor never stops the pass (review r1).
+                from .orchestration_store import UNATTENDED_CLOSE_BATCH
+                try:
+                    history._orchestration_owner().end_idle(None, UNATTENDED_CLOSE_BATCH)
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
+                try:  # S1-R6-8, reporting only
+                    history.settle_earlier_registrations(self._service_instance, now_ms=history._result_now())
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
+                # RS-B L1 (the start pass, and every pass after it): an unarmed lease no live job of this
+                # service holds is an earlier service's; it can never be armed and no claim of it was sent, so it is
+                # released `withdrawn_unsent` now, before its time. A live job's lease is untouched.
+                with self._lock:
+                    live = {(pending.lease_binding.run_handle, pending.lease_binding.attempt)
+                            for pending in self._jobs.values() if pending.lease_binding is not None}
+                # A backed-off row may hide eligible rows behind it even when none was released. The next
+                # driver step gets one more bounded request; an empty pass clears this signal. The writer-local
+                # flag is reset here, before the call: a wrapper failure before the body runs (which would never
+                # reset it) cannot leave an earlier pass's True behind to requeue. A body that fails late keeps what
+                # it set (a backoff it made still continues). A lease deferred because a live job holds it also sets
+                # the flag, by design: it is backed off like any blocked row, so the next step reaches rows behind it.
+                history._unarmed_lease_pass_pending = False
+                try:
+                    history.release_earlier_unarmed_leases(live, limit=64)
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
+                request.lease_pass_pending = history._unarmed_lease_pass_pending
+                # An earlier service's unarmed lease past its time can never be armed; release it here,
+                # with no client action (O10 D1). Armed leases are never expired by time.
+                try:
+                    history.expire_result_leases(limit=10)
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
+                # D4 (RS-D draft 3 §6): stored publications whose job is not publishing here are completed, at most
+                # 4 a pass, before the cleanup; a job of this service that failed takes the delivery committed.
+                with self._lock:
+                    publishing = frozenset(pending.binding.claim_id for pending in self._jobs.values()
+                                           if pending.state in {'queued', 'committing'}
+                                           and type(pending.binding) is AttemptBinding)
+                try:
+                    self._adopt_committed(history, set(history.replay_publications(publishing)))
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
+                # B2 (decision 92.2 A): the backstop and the check after a restart: record what is committed and
+                # unrecorded. A refusal never stops the result cleanup below.
+                try:  # each candidate is isolated inside; this is the pass's own limit
+                    service_record.record_pass(history, self._record_authority(), clock=history._result_now,
+                                               notes=self.recording_notes)
+                except Exception:
+                    maintenance_ok = False
                 result = history.expire_results(limit=10)
+                # RECOV-1/3: every maintenance step must succeed to renew progress. Suppressed failures still
+                # allow cleanup, but must not hide partly broken maintenance from E2c-9.
+                if maintenance_ok:
+                    from .project_takeover import complete_takeovers
+                    complete_takeovers(history)
+                    from .project_holds_schema import wake_checked
+                    wake_checked(history.project_id, history._connection, now_ms=_TIME_NS() // 1_000_000)
+            elif request.kind == 'arbitrate':
+                result = history.arbitrate_publication(*request.arguments)
+                if result == 'recovered':
+                    self._adopt_committed(history, run=request.arguments[:2])
+            elif request.kind == 'register':
+                handle, run_handle, run_id, attempt, instance = request.arguments
+                result = history.record_registered_run(handle, run_handle, run_id, attempt, instance=instance,
+                                                       now_ms=history._result_now(),
+                                                       memory=None if getattr(self, '_memory_journal', None) is None
+                                                       else self._memory_journal.directory)
+            elif request.kind == 'failed_before_open':
+                result = history.record_run_failed_before_open(*request.arguments, now_ms=history._result_now())
             elif request.kind == 'list':
                 with self._lock:
                     held = {pending.lease_binding for pending in self._jobs.values() if pending.lease_binding is not None}
@@ -1029,6 +1425,7 @@ class ResultPersistenceLane:
                             client = history._orchestration_owner().metadata_for(binding)['snapshot']['client_version']
                             found.append((binding, history.attest_pending_result_lease(binding), client))
                         except HistoryError:
+                            request.skipped += 1
                             continue
                 result = found
             else:
@@ -1039,6 +1436,11 @@ class ResultPersistenceLane:
             reason = HistoryError(error.reason_code).reason_code if type(error) is HistoryError else 'history_service_unavailable'
         with self._lock:
             request.result, request.reason, request.state = result, reason, state
+            self._unanswered.pop(id(request), None)
+            if request.kind in {'register', 'failed_before_open'}:
+                self._reporting -= 1
+            else:
+                self._earlier_held -= 1
 
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,
@@ -1057,7 +1459,9 @@ class ResultPersistenceLane:
                 # Trusted runtime startup only, never selected by a request.
                 # Validate schema and acquire the existing exclusive writer lock
                 # before the native frontend publishes any endpoint.
-                self._history()
+                history = self._history()
+                from .project_holds_schema import wake_checked
+                wake_checked(history.project_id, history._connection, now_ms=_TIME_NS() // 1_000_000)
             if self._requests is not None:
                 history_auth, result_auth, orchestration_auth = self._service_authorizers
                 service = HistoryService(self._project, self._runtime, self._history,
@@ -1080,6 +1484,9 @@ class ResultPersistenceLane:
                 with self._lock:
                     pending = self._jobs[handle]
                     if operation == "publish":
+                        if pending.delivery is not None:
+                            pending = handle = command = None
+                            continue  # an adoption already completed this queued publication
                         pending.state = "committing"
                 try:
                     operations[operation](pending)
@@ -1098,6 +1505,12 @@ class ResultPersistenceLane:
                     if retained.state not in {"committed", "failed"}:
                         retained.state, retained.reason = "unknown", "history_service_unavailable"
         finally:
+            with self._lock:
+                # R6-19: nothing left queued is answered now; each says so instead of waiting forever.
+                self._fault = self._fault or not self._closed
+                for request in self._unanswered.values():
+                    request.state, request.reason = 'failed', 'history_service_unavailable'
+                self._unanswered.clear()
             self._ready.set()
             if service is not None:
                 try:

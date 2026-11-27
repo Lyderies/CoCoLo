@@ -13,10 +13,29 @@ from pathlib import Path
 
 MAX_FRAME_BYTES = 81_920
 MAX_TIMEOUT_SECONDS = 60
+# R7b: a service that will not take a connection says why in one fixed line before closing it.
+SERVICE_REFUSALS = frozenset({
+    "service_refused_late", "service_refused_enrollment", "service_refused_busy", "service_refused_unavailable",
+})
 REASON_CODES = frozenset({
     "invalid_request", "request_too_large", "response_too_large",
-    "deadline_exceeded", "transport_unavailable",
+    "deadline_exceeded", "transport_unavailable", *SERVICE_REFUSALS,
 })
+
+
+def refusal_frame(reason: str) -> bytes:
+    """The one line a service sends before closing a connection it will not take (R7b)."""
+    if reason not in SERVICE_REFUSALS:
+        raise ValueError(reason)
+    return b'{"refused":"' + reason.encode("ascii") + b'"}\n'
+
+
+def _refusal(raw: bytes):
+    """The reason of an exact refusal line, else None: any other bytes are an ordinary reply."""
+    for reason in SERVICE_REFUSALS:
+        if raw == refusal_frame(reason)[:-1]:
+            return reason
+    return None
 
 
 class ServiceTransportError(RuntimeError):
@@ -113,7 +132,8 @@ def exchange_frame(
                 client.settimeout(remaining())
                 client.sendall((b"" if preamble is None else preamble + b"\n") + message + b"\n")
             except BaseException:
-                # Not delivered: leave no proof behind for anyone else to spend.
+                # Not delivered: leave no proof behind for anyone else to spend. A refusal sent before the
+                # request was written is not read here: the failure stays transport_unavailable (R7b).
                 if withdraw is not None:
                     withdraw()
                 raise
@@ -134,6 +154,8 @@ def exchange_frame(
                 if len(raw) > response_limit:
                     raise ServiceTransportError("response_too_large")
             response = bytes(raw).split(b"\n", 1)[0]
+            if b"\n" in raw and _refusal(response) is not None:
+                raise ServiceTransportError(_refusal(response))
     except ServiceTransportError as exc:
         reason = exc.reason_code
     except TimeoutError:

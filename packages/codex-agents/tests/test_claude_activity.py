@@ -182,28 +182,58 @@ class ClaudeActivityTests(unittest.TestCase):
         self.assertEqual("activity", activity.observe(self.delta()))
         self.assertNotIn("PRIVATE", repr(vars(activity)))
 
-    def test_more_fragment_frames_than_can_be_followed_is_a_monitoring_failure_not_silence(self):
+    def test_fragment_frames_beyond_the_window_are_forgotten_never_a_fault(self):
+        # O0c M6: the fragment memory is a recent window; the oldest frame is forgotten, the run goes on.
         now = [100.0]
         activity = self.streaming(now)
         with mock.patch.object(claude_activity, "MAX_STREAM_EVENTS", 3):
             for _ in range(3):
+                now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
                 activity.observe(self.delta())
-            replayed = self.delta(uuid="00000000-0000-4000-8000-000000000001")
-            self.assertIsNone(activity.observe(replayed))  # A frame already seen is still recognised.
-            with self.assertRaisesRegex(ClaudeActivityError, "^monitor_unavailable$"):
-                activity.observe(self.delta())
+            replayed = self.delta(uuid="00000000-0000-4000-8000-000000000003")
+            self.assertIsNone(activity.observe(replayed))  # A recent frame is still recognised.
+            for _ in range(50):
+                now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+                self.assertEqual("activity", activity.observe(self.delta()))
+            self.assertLessEqual(len(vars(activity)["_events"]), 3)
 
-    def test_the_stream_cap_ends_a_run_before_fragment_tracking_runs_out(self):
-        # The smallest frame that takes a place: no delta, no other field, a one-character ID.
+    def test_the_fragment_window_is_one_place_per_frame_and_bounded_below_the_stream_cap(self):
         smallest = {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0}, "uuid": "a"}
         now = [100.0]
         activity = self.streaming(now)
         with mock.patch.object(claude_activity, "MAX_STREAM_EVENTS", 1):
             self.assertIsNone(activity.observe(smallest))
+            self.assertIsNone(activity.observe({**smallest, "uuid": "b"}))
+            self.assertEqual(1, len(vars(activity)["_events"]))
+
+    def test_a_long_run_of_completed_work_never_reaches_the_cap(self):
+        # O0c M6: only tool calls still in progress count toward the cap; completed work is forgotten.
+        now = [100.0]
+        activity = ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS, clock=lambda: now[0])
+        activity.startup()
+        with mock.patch.object(claude_activity, "MAX_ACTIVITY_ITEMS", 8), \
+                mock.patch.object(claude_activity, "MAX_STREAM_EVENTS", 8):
+            for number in range(50):
+                identity = f"toolu_{number}"
+                self.assertEqual("activity", activity.observe(assistant(tool_use(identity))))
+                self.assertEqual("activity", activity.observe(tool_result(identity)))
+                self.assertEqual("activity", activity.observe(assistant(text(f"PRIVATE-{number}"))))
+                message = f"msg_s{number}"
+                activity.observe(self.stream("message_start", message={"id": message, "model": MODEL}))
+                activity.observe(self.stream("content_block_start", index=0, content_block={"type": "text"}))
+                now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+                self.assertEqual("activity", activity.observe(self.delta()))
+                activity.observe(self.stream("message_stop"))
+            for name in ("_pending", "_done", "_work", "_streamed", "_events"):
+                self.assertLessEqual(len(vars(activity)[name]), 8, name)
+            # A late result for a forgotten call is an unknown call, as today; a replayed call is new, never a fault.
+            self.assertIsNone(activity.observe(tool_result("toolu_0")))
+            self.assertEqual("activity", activity.observe(assistant(tool_use("toolu_0"))))
+            # The cap still bounds the calls in progress.
+            for number in range(7):
+                activity.observe(assistant(tool_use(f"open_{number}")))
             with self.assertRaisesRegex(ClaudeActivityError, "^monitor_unavailable$"):
-                activity.observe({**smallest, "uuid": "b"})
-        line = json.dumps(smallest, separators=(",", ":")).encode() + b"\n"
-        self.assertLess(bridge.MAX_STREAM_BYTES // len(line), claude_activity.MAX_STREAM_EVENTS)
+                activity.observe(assistant(tool_use("open_7")))
 
     def test_partial_fragments_of_another_model_or_bad_shapes_never_count(self):
         now = [5.0]
@@ -243,7 +273,7 @@ class ClaudeActivityTests(unittest.TestCase):
         with self.assertRaises(ClaudeActivityError):
             ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS).observe(assistant(text()))
 
-    def test_tool_cardinality_overflow_is_monitoring_failure(self):
+    def test_tools_in_progress_beyond_the_cap_are_a_monitoring_failure(self):
         activity = self.start()
         with mock.patch.object(claude_activity, "MAX_ACTIVITY_ITEMS", 1):
             activity.observe(assistant(tool_use()))
@@ -289,6 +319,7 @@ class ClaudeActivityExecutionTests(unittest.TestCase):
                     assignment=bridge_fixtures.assignment(), role_prompt="Read the fixture only.",
                     export=root / "export", control=root / "control", environ={"PATH": os.defpath},
                     deadline_seconds=60, max_turns=4, executable=str(executable), _execution=ticket,
+                    schema=bridge_fixtures.RESULT_SCHEMA,  # O10 VF-1 (requirement)
                 ))
             except BaseException as error:
                 errors.append(error)
@@ -318,6 +349,16 @@ class ClaudeActivityExecutionTests(unittest.TestCase):
         self.at(19)
         self.owner.run_once()
         self.finished(execution, "work_silence")
+
+    def test_a_run_with_more_completed_calls_than_the_cap_is_not_aborted(self):
+        # O0c M6: the cap bounds calls in progress, never the calls a long run completes.
+        rows = [{"frame": bridge_fixtures.init_frame()}]
+        for number in range(50):
+            rows += [{"frame": assistant(tool_use(f"toolu_{number}"))}, {"frame": tool_result(f"toolu_{number}")}]
+        with mock.patch.object(claude_activity, "MAX_ACTIVITY_ITEMS", 8):
+            execution = self.execution([*rows, {"exit": True}])
+            self.finished(execution, "missing_result")
+        self.assertFalse(execution[4].activity.failed)
 
     def test_prohibited_tool_call_stops_before_activity(self):
         execution = self.execution([{"frame": bridge_fixtures.init_frame()},

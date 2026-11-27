@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .admission_metadata import EVIDENCE_HORIZON_MS
+from .admission_metadata import FIVE_HOURS_MS, _headroom_components, _headroom_state
 from .learning_contracts import content_digest, validate_provider_headroom
 
 CLAUDE_STATUS_RANK = {None: 0, "allowed": 0, "allowed_warning": 1, "rejected": 2}
@@ -33,7 +33,7 @@ def _effective_window_reset(window: dict[str, Any], observed_at_ms: int) -> int:
     # Explicit resets are exclusive; the reset-less fallback is live through
     # observed + horizon, inclusively, so its equivalent reset is one ms later.
     return (window["resets_at"] if window["resets_at"] is not None
-            else observed_at_ms + EVIDENCE_HORIZON_MS + 1)
+            else observed_at_ms + FIVE_HOURS_MS + 1)
 
 
 def _window_covered(
@@ -71,6 +71,13 @@ def _more_restrictive(record: dict[str, Any], prior: list[dict[str, Any]]) -> bo
         return BILLING_RANK[record["paid_usage_usable"]] > max(
             BILLING_RANK[item["paid_usage_usable"]] for item in prior
         )
+    if _headroom_state(record["provider"], record, record["observed_at_ms"],
+                       unknown_when_unmeasured=True) in {"ample", "constrained"}:
+        if any(component["observed_at_ms"] < record["observed_at_ms"]
+               and _headroom_state(record["provider"], component, record["observed_at_ms"]) in {"exhausted", "constrained"}
+               and (not component["windows"] or any(w["resets_at"] is None for w in component["windows"]))
+               for item in prior for component in _headroom_components(item)):
+            return True
     status = CLAUDE_STATUS_RANK[record["status"]]
     covering = [item for item in prior if CLAUDE_STATUS_RANK[item["status"]] >= status]
     if not covering:
@@ -91,7 +98,7 @@ def _merged_restriction(
     """One headroom record as restrictive as all of a run's: the highest status,
     and per window the highest use and the latest effective reset.
 
-    A reset-less or empty aggregate restriction counts through a day from its
+    A reset-less or empty aggregate restriction counts through five hours from its
     own observation. Its equivalent exclusive reset is one millisecond later.
     Every merged window has an explicit reset at least as late as its inputs,
     so neither merging nor a clock rollback can shorten that restriction.
@@ -111,8 +118,15 @@ def _merged_restriction(
                     if value is not None]
             merged["used_percent"] = max(used) if used else None
             merged["resets_at"] = max(merged["resets_at"], effective_reset)
+    provenance = []
+    for item in records:
+        for component in _headroom_components(item):
+            value = {key: component[key] for key in ("windows", "status", "observed_at_ms")}
+            if value not in provenance:
+                provenance.append(value)
     last = records[-1]
     return _headroom_record(
+        restriction_provenance=provenance,
         provider=last["provider"],
         account_fingerprint=last["account_fingerprint"],
         windows=[windows[key] for key in sorted(windows, key=repr)],

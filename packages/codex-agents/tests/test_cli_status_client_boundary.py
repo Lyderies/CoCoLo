@@ -41,6 +41,7 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.native_context = object()
         self.authorized = True
         self.requests = []
+        self.on_account_request = None  # called as each account request arrives
 
         def authorize(request, context):
             if not self.authorized or context is not self.native_context or request.project_id != self.project_id:
@@ -100,6 +101,8 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
                         raw += chunk
                         self.assertLessEqual(len(raw), 16_384)
                     self.requests.append(json.loads(raw))
+                    if self.on_account_request is not None:
+                        self.on_account_request()
                     response = self.account.handle(raw[:-1], self.native_context)
                     connection.sendall(response + b'\n')
             stdout, stderr = process.communicate(timeout=2)
@@ -119,7 +122,8 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         report = json.loads(stdout)
         self.assertTrue(report['ready'])
         self.assertTrue(report['active'])
-        self.assertEqual(original_key, report['owner_key'])
+        self.assertEqual({k: v for k, v in original_key.items() if k != 'fingerprint'}, report['owner_key'])
+        self.assertNotIn('fingerprint', report['owner_key'])  # D36
         self.assertEqual(self.started, report['started_at_ms'])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, report['collector_runtime_digest'])
         self.assertEqual('active', report['ingestion']['registered_project_state'])
@@ -142,6 +146,128 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertNotIn('inspected a database', stdout + stderr)
         self.assertEqual(1, len(self.requests))
 
+    def test_H1a_health_carries_the_lane_notes_and_this_projects_slots(self):
+        lanes = {'probe_worker': {'faulted': False, 'kept': 1, 'busy': 0, 'queued': 0,
+                                  'last_failure': None, 'held_since_ms': 5}}
+        self.collector.account_lanes = lambda: lanes
+        health = self.client.health(self.project)
+        self.assertEqual(lanes, health['account_lanes'])
+        self.assertTrue(health['account_slots']['available'])
+        self.assertEqual(lanes, self.client.health()['account_lanes'])  # project-less: notes, no slots
+        self.assertNotIn('account_slots', self.client.health())
+        self.collector.account_lanes = lambda: 1 / 0  # a failing view never breaks health
+        self.assertEqual({'available': False}, self.client.health(self.project)['account_lanes'])
+
+    @staticmethod
+    def lane(**changes):
+        return {'faulted': False, 'kept': 0, 'busy': 0, 'queued': 0, 'last_failure': None,
+                'held_since_ms': None, **changes}
+
+    def status_with(self, lanes):
+        self.collector.account_lanes = (lambda: lanes) if lanes is not None else None
+        code, stdout, stderr = self.command()
+        return code, json.loads(stdout)
+
+    def test_H1a_4_account_health_states_and_ready_is_unchanged(self):
+        clean = {name: self.lane() for name in ('signature', 'claims', 'observations', 'ingress', 'billing',
+                                                 'probe_worker')}
+        code, report = self.status_with(clean)
+        self.assertEqual((0, True, 'ok'), (code, report['ready'], report['account_health']['state']))
+        self.assertEqual([], report['account_health']['attention'])
+        held = {**clean, 'probe_worker': self.lane(kept=1, held_since_ms=1_700_000_000_000)}
+        code, report = self.status_with(held)
+        health = report['account_health']
+        self.assertEqual((0, True, 'degraded'), (code, report['ready'], health['state']))
+        self.assertTrue(any('probe worker' in line and 'held since' in line for line in health['attention']), health)
+        failed = {**held, 'ingress': self.lane(faulted=True, last_failure={
+            'cause': 'ingress_cleanup_failed', 'type': 'OSError', 'at_ms': 1_700_000_000_000})}
+        code, report = self.status_with(failed)
+        health = report['account_health']
+        self.assertEqual(('faulted', True), (health['state'], report['ready']))
+        self.assertTrue(any('ingress_cleanup_failed' in line for line in health['attention']), health)
+        self.assertTrue(all('account-wide' in line for line in health['attention'] if 'slot' not in line))
+        code, report = self.status_with(None)  # no notes (a collector started otherwise)
+        self.assertEqual(('unknown', 'account_health_unavailable'),
+                         (report['account_health']['state'], report['account_health']['reason_code']))
+
+    def test_C2_C3_malformed_or_missing_sources_never_stop_status_and_never_say_ok(self):
+        clean = {name: self.lane() for name in ('signature', 'claims', 'observations', 'ingress', 'billing',
+                                                 'probe_worker')}
+        for slots, reason in (({'available': False, 'reason': []}, 'account_health_invalid'),
+                              ([1, 2], 'account_health_invalid')):
+            with self.subTest(slots=slots), mock.patch.object(
+                    self.ledger, 'account_slot_health', return_value=slots):
+                code, report = self.status_with(clean)
+                self.assertEqual((0, True), (code, report['ready']))
+                self.assertEqual(('unknown', reason), (report['account_health']['state'],
+                                                       report['account_health']['reason_code']))
+        code, report = self.status_with({'billing': self.lane()})  # five lanes missing
+        self.assertEqual(('unknown', 'account_health_unavailable'),
+                         (report['account_health']['state'], report['account_health']['reason_code']))
+
+    def test_H1c_4_6_status_says_why_a_stuck_account_is_not_restarting(self):
+        clean = {name: self.lane() for name in ('signature', 'claims', 'observations', 'ingress', 'billing',
+                                                 'probe_worker')}
+        faulted = {**clean, 'claims': self.lane(faulted=True, last_failure={
+            'cause': 'claim_owner_failed', 'type': 'RuntimeError', 'at_ms': 1_700_000_000_000})}
+        for decision, words in (
+                ({'action': 'wait', 'lane': 'claims', 'cause': 'claim_owner_failed',
+                  'held': {'run_slots': ['prj_' + 'a' * 32, self.project_id], 'probes': [],
+                           'lanes': {'billing': 1}}},
+                 ('not restarting', 'prj_' + 'a' * 32, self.project_id + ' (this project)', 'billing')),
+                ({'action': 'suppressed', 'lane': 'claims', 'cause': 'claim_owner_failed', 'held': {}},
+                 ('restarted itself less than an hour ago',))):
+            with self.subTest(action=decision['action']):
+                self.collector.account_restart = decision
+                code, report = self.status_with(faulted)
+                self.assertEqual((0, True), (code, report['ready']))
+                text = ' '.join(report['account_health']['attention'])
+                for word in words:
+                    self.assertIn(word, text)
+                # C6 (review 040-s1-h1c): projects are named by their opaque id; a suppressed restart
+                # is also a reason code.
+                self.assertEqual(decision['action'] == 'suppressed',
+                                 'account_restart_suppressed' in report['account_health']['reasons'])
+        # D5/D6: the last self-restart is shown whatever the current decision; each suppression says why.
+        self.collector.account_restart = {'action': 'suppressed', 'reason': 'unrecorded', 'lane': 'claims',
+                                          'cause': 'claim_owner_failed', 'held': {}}
+        self.collector.account_restart_last = {'at_ms': 1_700_000_000_000, 'mono_ns': 1, 'lane': 'ingress',
+                                               'cause': 'ingress_cleanup_failed'}
+        code, report = self.status_with(faulted)
+        text = ' '.join(report['account_health']['attention'])
+        self.assertIn('could not record', text)
+        self.assertNotIn('less than an hour ago', text)
+        self.assertIn('restarted itself at', text)
+        self.assertIn('ingress_cleanup_failed', text)
+        self.collector.account_restart_last = None
+        self.collector.account_restart = ['malformed']
+        code, report = self.status_with(faulted)
+        self.assertEqual(('faulted', True), (report['account_health']['state'], report['ready']))
+
+    def test_ST1_account_services_still_starting_say_starting(self):
+        self.collector.account_services = 'starting'
+        self.hint.unlink()
+        code, stdout, stderr = self.command()
+        self.assertEqual(1, code, stdout + stderr)
+        report = json.loads(stdout)
+        self.assertFalse(report['ready'])
+        self.assertEqual('status_account_starting', report['reason_code'])
+        self.assertEqual('starting', report['account_services'])
+
+    def test_ST2_a_ready_status_never_reports_health_from_before_the_account_came_up(self):
+        self.collector.account_services = 'starting'
+
+        def came_up_meanwhile():  # the account answers, and its host has meanwhile finished starting
+            self.collector.account_services = 'running'
+            self.collector.startup_phases = {'ledger_open': 1, 'collector': 2, 'account': 3}
+        self.on_account_request = came_up_meanwhile
+        code, stdout, stderr = self.command()
+        self.assertEqual(0, code, stdout + stderr)
+        report = json.loads(stdout)
+        self.assertTrue(report['ready'])
+        self.assertEqual('running', report['account_services'])
+        self.assertEqual({'ledger_open': 1, 'collector': 2, 'account': 3}, report['collector_startup_ms'])
+
     def test_missing_hint_does_not_read_database_or_start_runtime(self):
         self.hint.unlink()
         code, stdout, stderr = self.command()
@@ -162,7 +288,8 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertFalse(report['ready'])
         self.assertFalse(report['active'])
         self.assertEqual('status_collector_transport_unavailable', report['reason_code'])
-        self.assertEqual(original_key, report['owner_key'])
+        self.assertEqual({k: v for k, v in original_key.items() if k != 'fingerprint'}, report['owner_key'])
+        self.assertNotIn('fingerprint', report['owner_key'])  # D36
         self.assertEqual('unavailable', report['ingestion']['freshness']['state'])
         self.assertEqual(['account.owner_key'], [r['operation'] for r in self.requests])
         self.assertNotIn('inspected a database', stdout + stderr)
@@ -179,7 +306,7 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         report = json.loads(stdout)
         self.assertFalse(report['ready'])
         self.assertEqual('unavailable', report['owner_key']['state'])
-        self.assertIsNone(report['owner_key']['fingerprint'])
+        self.assertNotIn('fingerprint', report['owner_key'])
         self.assertEqual('status_account_unavailable', report['reason_code'])
         self.assertEqual([identity], [r['project_id'] for r in self.requests])
 

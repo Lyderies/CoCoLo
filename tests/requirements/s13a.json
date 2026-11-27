@@ -1,0 +1,30 @@
+{
+ "authority": "docs/requirements/s13a/STATUS.md",
+ "requirements": [
+  {
+   "id": "S13A-BOUND",
+   "statement": "The unarmed lease start pass selects at most min(limit,64) held unarmed due rows from the existing partial register index, including with 128 blocked rows and 50 new blocked arrivals per batch; armed rows do not consume the batch and eligible releases remain bounded by 64.",
+   "source": "tests/requirements/s13a.json#S13A-BOUND"
+  },
+  {
+   "id": "S13A-BACKOFF",
+   "statement": "A blocked unarmed lease is deferred in its inspection batch for 1 s, doubling on each retry to a 300 s cap; retries persist across reopen, do not occur before next_check_ms, leave due_at_ms unchanged, and an inspection refusal does not prevent progress of other selected rows.",
+   "source": "tests/requirements/s13a.json#S13A-BACKOFF"
+  },
+  {
+   "id": "S13A-RESET",
+   "statement": "Every lease release resets next_check_ms and its start-pass backoff counter, including start-pass release, explicit unsent release, lease expiry, and binding to a reservation.",
+   "source": "tests/requirements/s13a.json#S13A-RESET"
+  },
+  {
+   "id": "S13A-ORDER",
+   "statement": "The unarmed lease start pass selects only next_check_ms <= now, in ascending next_check_ms order rather than source insertion order.",
+   "source": "tests/requirements/s13a.json#S13A-ORDER"
+  },
+  {
+   "id": "S13A-FAIR",
+   "statement": "A previously blocked lease is retried once its backoff ends despite full batches of new blocked arrivals; new leases join with their creation time as next_check_ms so they cannot continually overtake an older due retry.",
+   "source": "tests/requirements/s13a.json#S13A-FAIR"
+  }
+ ]
+}

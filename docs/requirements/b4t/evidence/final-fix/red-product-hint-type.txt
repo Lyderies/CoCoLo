@@ -1,0 +1,11 @@
+E
+======================================================================
+ERROR: test_B4t_A1_no_other_process_is_inspected (tests.test_b4t_native.NativeArchiveTests.test_B4t_A1_no_other_process_is_inspected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+codex_agents.update_takeover.TakeoverError: The update stopped (project_store_busy): another program is using this project's records right now, for example a backup or a records command. Nothing was changed. Let it finish, then run ./setup.sh --update. If this keeps happening, docs/troubleshooting.md, 'Update hand-over', shows how to see which program it is.
+
+----------------------------------------------------------------------
+Ran 1 test in 6.936s
+
+FAILED (errors=1)

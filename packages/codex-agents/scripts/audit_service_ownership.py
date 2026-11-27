@@ -59,12 +59,16 @@ MAX_DIRECTORY_DEPTH = 64
 # Full 0.3.0 runtime inventory exceeds the original 20,000 call sites. Keep a
 # finite source-size ceiling; byte/node/import/report budgets independently cap
 # parsing and retained metadata. A successful inventory still fails unsafe roots.
-MAX_CALLS = 32_768
+# 0.4.0 (2026-11-21): the runtime passed 32,768 call sites (32,840 with the M3 gate and merge modules); doubled,
+# still finite and well inside MAX_AST_NODES.
+MAX_CALLS = 65_536
 MAX_IMPORTS = 8_192
-# The 133-module compact inventory needed 4,197,945 output bytes,
-# exceeding 4 MiB. Retain every call and all nine client roots in a finite
-# 5 MiB report envelope; findings and the other source/AST/call caps stay intact.
-MAX_REPORT_BYTES = 5 * MAX_SOURCE_BYTES
+# The report is derived from the sources it audits (about 1.43 bytes per source
+# byte in 0.8.38: 5,252,094 for 3,662,524), so its envelope follows the source
+# ceiling instead of today's size, which needed raising twice (4 MiB, then 5 MiB,
+# outgrown by 0.4.0 RS-A). Twice MAX_TOTAL_BYTES stays finite and covers any
+# inventory the source caps admit; findings and the other caps stay intact.
+MAX_REPORT_BYTES = 2 * MAX_TOTAL_BYTES
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _COMMAND = re.compile(r"[a-z][a-z0-9-]{0,79}")
 REASONS = frozenset({"audit_invalid_path", "audit_invalid_source", "audit_source_limit", "audit_unsafe_source"})

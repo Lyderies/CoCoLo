@@ -57,16 +57,21 @@ class LostRunHarness(DriverHarness):
         """Claims the account's limits count now (or `later_ms` from now, on both clocks)."""
         crashed, parameters = crashed_claim('a', self.ledger._clock_ms() + later_ms,
                                             time.monotonic_ns() + later_ms * 1_000_000)
-        return self.ledger._connection.execute(
-            'SELECT COUNT(*) FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND NOT ' + crashed,
-            parameters).fetchone()[0]
+        with self.ledger._lock:  # TESTSPEED2-2: never read between the statements of an open account write
+            return self.ledger._connection.execute(
+                'SELECT COUNT(*) FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND NOT ' + crashed,
+                parameters).fetchone()[0]
 
     def claimed_bindings(self):
-        """(binding state, abandoned reason, released) of every claimed run, oldest first."""
-        return [tuple(row) for row in self.ledger._connection.execute(
-            'SELECT h.binding_state,h.abandoned_reason,a.released_at_ms IS NOT NULL FROM active_run_capacity a '
-            'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest '
-            'ORDER BY a.claimed_at_ms')]
+        """(binding state, abandoned reason, released) of every claimed run, oldest first.
+
+        Corrected for O0b RS-A-2 (requirement): a lost settlement now releases the slot itself, as `lost`,
+        written once, so a settled lost run reads (abandoned, service_lost, 1); before, it stayed unreleased."""
+        with self.ledger._lock:  # TESTSPEED2-2: see counted()
+            return [tuple(row) for row in self.ledger._connection.execute(
+                'SELECT h.binding_state,h.abandoned_reason,a.released_at_ms IS NOT NULL FROM active_run_capacity a '
+                'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest '
+                'ORDER BY a.claimed_at_ms')]
 
     def launches(self):
         return [i for i in self.invocations('codex') if 'exec' in i['argv']]
@@ -97,9 +102,20 @@ class LostRunHarness(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': name})))
         return self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
 
+    def run_status(self, orchestration, run_handle):
+        """Run-status once the new host is past run_settling (LRS-4, setup only; bounded 30 s)."""
+        replies = []
+        self.wait_for(lambda: replies.append(self.cli('learning-run-status', '--orchestration-handle', orchestration,
+                                                      '--run-handle', run_handle, expected=2))
+                      or replies[-1].get('reason_code') != 'run_settling', seconds=30)
+        return replies[-1]
+
+    def lost_capacity(self, orchestration, run_handle):
+        """The capacity state run-status reports for this lost run ('held' until the sweep settles it)."""
+        return self.run_status(orchestration, run_handle)['capacity_state']
+
     def assert_lost_status(self, orchestration, run_handle, capacity_state):
-        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle,
-                          expected=2)
+        status = self.run_status(orchestration, run_handle)
         self.assertEqual((False, 'run_lost', 'abandoned', 'unknown', capacity_state),
                          (status['ready'], status['reason_code'], status['terminal_state'], status['outcome'],
                           status['capacity_state']))
@@ -121,7 +137,7 @@ class LostRunAfterCrashTests(LostRunHarness):
                   'bundle': str(self.bundle)}
         log = open(base / 'crash-host.log', 'ab')
         self.addCleanup(log.close)
-        self.host_process = subprocess.Popen([sys.executable, '-B', str(FIXTURE), json.dumps(config)],
+        self.host_process = subprocess.Popen([sys.executable, *(['-B'] if self.dispatch_pycache is None else ['-X', 'pycache_prefix=' + self.dispatch_pycache]), str(FIXTURE), json.dumps(config)],
                                              cwd=REPOSITORY_ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
         process = self.host_process
         self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait(10)))
@@ -143,38 +159,69 @@ class LostRunAfterCrashTests(LostRunHarness):
         self.host_process.kill()  # SIGKILL: no cleanup of any kind runs in the host.
         self.host_process.wait(10)
         dispatch.communicate(timeout=30)
+        self.count_sweeps()
         DriverHarness.start_project_host(self, self.project)
         return orchestration, run_handle, self.launches()[0]
 
+    def count_sweeps(self):
+        """S13C-1: the sweeps the next host has completed so far (`self.sweeps`: one entry per `_settle_lost` call that
+        returned without raising), so a test that watches a hold over "several sweeps" waits for that many sweeps
+        instead of a fixed number of seconds."""
+        self.sweeps = []
+        original = project_driver.RunDriver._settle_lost
+        sweeps = self.sweeps
+
+        def counted(driver, *arguments, **options):
+            result = original(driver, *arguments, **options)
+            sweeps.append(time.monotonic())  # only a sweep that returned; a raising one is not counted
+            return result
+
+        patcher = mock.patch.object(project_driver.RunDriver, '_settle_lost', counted)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def through_sweeps(self, count):
+        """Wait until the next host has completed `count` more sweeps (bounded 60 s)."""
+        target = len(self.sweeps) + count
+        self.wait_for(lambda: len(self.sweeps) >= target, seconds=60)
+
+    @__import__('test_framework').requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_a_crashed_hosts_finished_child_is_settled_by_the_next_host_within_seconds(self):
         orchestration, run_handle, child = self.crash_while_running(2)
         # The child writes into its dead host's pipe and ends; its watchdog follows.
         started = time.monotonic()
-        self.wait_for(lambda: self.counted() == 0, seconds=30)
+        # Settled when the account counts it no longer and the host reports it released: the host's
+        # sweep hands its result over just after the account settles the claim.
+        self.wait_for(lambda: self.counted() == 0 and self.lost_capacity(orchestration, run_handle) == 'released',
+                      seconds=30)
         self.assertLess(time.monotonic() - started, 25)
         self.assert_process_gone(child)
-        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.assert_lost_status(orchestration, run_handle, 'released')
         # The slot is free: the next child claims it, and the lost one never started again.
         self.assertEqual('result', self.next_run(orchestration, 'next1')['bridge_report']['outcome'])
         self.assertEqual(2, len(self.launches()))
         self.assertEqual(child['pid'], self.launches()[0]['pid'])
 
+    @__import__('test_framework').requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_a_crashed_hosts_child_that_still_runs_keeps_its_capacity_until_it_ends(self):
         orchestration, run_handle, child = self.crash_while_running(60)
         # The child sleeps on in its own session; the new host must not settle it.
-        end = time.monotonic() + 6
-        while time.monotonic() < end:
+        # S13C-1: held across as many sweeps as the old 6 s held it across (one a second), each one completed.
+        target = len(self.sweeps) + 6
+        while len(self.sweeps) < target:
             self.assertEqual(1, self.counted())
-            time.sleep(0.25)
+            seen = len(self.sweeps)
+            self.wait_for(lambda: len(self.sweeps) > seen, seconds=60)
         self.assertEqual([('pending', None, 0)], self.claimed_bindings())
         os.killpg(child['pgid'], 0)  # Still there, untouched.
         self.assert_lost_status(orchestration, run_handle, 'held')
         os.killpg(child['pgid'], signal.SIGKILL)
         self.wait_for(lambda: self.counted() == 0, seconds=30)
-        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.assertEqual('result', self.next_run(orchestration, 'next2')['bridge_report']['outcome'])
 
+    @__import__('test_framework').requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_missing_or_unreadable_launch_evidence_falls_back_to_the_timed_rule(self):
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 3},
@@ -191,8 +238,9 @@ class LostRunAfterCrashTests(LostRunHarness):
         entries[0].write_text(entries[0].read_text()[:40])  # Damaged: no longer evidence of anything.
         child = self.launches()[0]
         self.wait_for(lambda: self.gone(child), seconds=30)
+        self.count_sweeps()
         DriverHarness.start_project_host(self, self.project)
-        time.sleep(5)  # Several sweeps of the new host.
+        self.through_sweeps(5)  # Several sweeps of the new host (S13C-1: five completed, not five seconds).
         self.assertEqual(1, self.counted())
         self.assertEqual([('pending', None, 0)], self.claimed_bindings())
         self.assertTrue(entries[0].exists())  # Left as it was found.
@@ -210,6 +258,27 @@ class LostRunAfterCrashTests(LostRunHarness):
         except PermissionError:
             return True  # The group number now belongs to another user's processes: ours is gone.
         return False
+
+
+class LedgerReadHelperTests(LostRunHarness):
+    """TESTSPEED2-2: the helpers read the account's tables through the collector thread's own connection, which
+    that thread's writes (`BEGIN IMMEDIATE` ... `COMMIT`) also use. A read between two statements of one such write
+    sees the half-written state (a run's binding already `abandoned/service_lost`, its slot not yet released),
+    so under load a poll saw `counted() == 0` with the slot still unreleased. Reads wait for the write instead."""
+
+    @__import__('test_framework').requirements('TESTSPEED2-2', 'TESTSPEED2-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED2).')
+    def test_the_ledger_read_helpers_wait_for_a_write_the_collector_has_open(self):
+        for name, read in (('counted', self.counted), ('claimed_bindings', self.claimed_bindings)):
+            with self.subTest(name):
+                seen = []
+                reader = threading.Thread(target=lambda: seen.append(read()), daemon=True)
+                with self.ledger._lock:  # what the account's write holds from its first to its last statement
+                    reader.start()
+                    reader.join(1)
+                    self.assertTrue(reader.is_alive(), 'the read did not wait for the open write: ' + repr(seen))
+                reader.join(30)
+                self.assertFalse(reader.is_alive())
+                self.assertEqual(1, len(seen))
 
 
 class LostRunAfterStopTests(LostRunHarness):
@@ -264,7 +333,7 @@ class LostRunAfterStopTests(LostRunHarness):
         dispatch.communicate(timeout=30)
         self.wait_for(lambda: self.counted() == 0, seconds=30)
         if settled:
-            self.assertIn(self.claimed_bindings()[0][::2], {('abandoned', 0), ('pending', 1)})
+            self.assertIn(self.claimed_bindings()[0][::2], {('abandoned', 1), ('pending', 1)})
         self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
         return orchestration, run_handle
 
@@ -307,6 +376,25 @@ class LostRunAfterStopTests(LostRunHarness):
         finally:
             connection.close()
 
+    def cli_until_not_settling(self, command, *arguments, end):
+        """One CLI call whose exit is 0; None while the service answers the transient `run_settling`."""
+        import io
+        from tests.test_bridge import cli as cli_module
+        stdout = io.StringIO()
+        argv = ["cli.py", command, "--state-root", str(self.state.root), "--project-root", str(self.project),
+                *arguments]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(cli_module, "BUNDLE_ROOT", self.bundle), \
+                contextlib.redirect_stdout(stdout):
+            code = cli_module.main()
+        reply = json.loads(stdout.getvalue())
+        if code == 2 and reply.get('reason_code') == 'run_settling':
+            self.assertLess(time.monotonic(), end, 'service still answered run_settling')
+            time.sleep(.05)
+            return None
+        self.assertEqual(0, code, reply)
+        return reply
+
+    @__import__('test_framework').requirements('B2-OUTCOME', 'RS-B-5', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
         # 0.3.3 requirement C3 (owner): on 0.8.22, a live project's refused claim could
         # not be fenced (C2), so its run kept its lease, and with it one of the project's places for
@@ -320,19 +408,24 @@ class LostRunAfterStopTests(LostRunHarness):
         with mock.patch.object(project_service, 'MAX_ACTIVE_ATTEMPTS', 1):
             self.start_host()
             self.wait_for(lambda: self.bindings() == ['abandoned'], seconds=30)
-            closed = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
-                              '--reason', 'recovery_unavailable')
+            # LRS-1/LRS-6: `run_settling` is the service's documented not-final answer ("ask again
+            # shortly") while it still lists earlier leases or closes an earlier fence (C3d): ask again
+            # until it is final, within the same bound as the binding wait above.
+            end, closed = time.monotonic() + 30, None
+            while closed is None:
+                closed = self.cli_until_not_settling('learning-classify-host-run-abandoned', '--run-handle',
+                                                     run_handle, '--reason', 'recovery_unavailable', end=end)
             self.assertEqual(('already_closed', 'never_claimed'), (closed['classification'], closed['capacity_state']))
             self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
-        # C7: the report counts the closed run as abandoned, not pending; the next run's result was
-        # never recorded here, so it alone is pending.
+        # C7: the report counts the closed run as abandoned, not pending; B2 (decision 92 A / 119 A): the
+        # service records the next run's result itself, so nothing is pending or active.
         status = self.cli('learning-orchestration-status', '--orchestration-handle', orchestration)
         report = self.cli('learning-orchestration-report', '--orchestration-id', status['orchestration_id'])
-        self.assertEqual((1, 1, 1), (report['runs']['abandoned'], report['runs']['pending'],
+        self.assertEqual((1, 0, 0), (report['runs']['abandoned'], report['runs']['pending'],
                                      report['runs']['current_active']), report['runs'])
         # Its usage is not known either: abandoned is never counted as fully attributed.
         self.assertNotEqual('complete', report['usage']['child_attribution'])
-        self.assertEqual(2, report['usage']['unknown_runs']['input_tokens'])
+        self.assertEqual(1, report['usage']['unknown_runs']['input_tokens'])  # B2 (119 A): the recorded run's usage is known
 
     def test_C3_the_next_service_never_fences_a_claim_request_its_run_was_not_observed_for(self):
         # The account takes the fence's identity from the run's launch observation and checks the
@@ -422,6 +515,8 @@ class LostRunAfterStopTests(LostRunHarness):
                                        "ORDER BY rowid LIMIT 1").fetchone()[0]
             connection.execute("DELETE FROM project_orchestration_checkpoints WHERE orchestration_handle=?", (first,))
             connection.execute("DELETE FROM project_orchestrations WHERE orchestration_handle=?", (first,))
+            # B6 (RS-B-B6-1): its register row goes too (a 0.8.23 store had none; one left held is refused at open).
+            connection.execute("DELETE FROM project_holds WHERE kind='orchestration' AND identity=?", (first,))
         connection.close()
         self.start_host()
         self.wait_for(lambda: self.bindings() == ['pending', 'abandoned'], seconds=60)
@@ -466,6 +561,41 @@ class LostRunAfterStopTests(LostRunHarness):
             self.start_host()
             self.closes_after_restart(run_handle, orchestration)
 
+    def test_O10_E1_an_account_that_stops_mid_fence_does_not_use_up_the_refusal_retries(self):
+        from codex_agents.account_api import AccountError
+        orchestration, run_handle = self.leave_a_refused_claim_unfenced()
+        original, calls = AccountClient.fence_claim, []
+        stops = ('account_closed_without_reply', 'service_refused_busy', 'service_refused_unavailable',
+                 'service_refused_late')
+
+        def stopping(client, fence, **options):
+            calls.append(1)
+            if len(calls) <= project_driver.MAX_FENCE_ATTEMPTS + 1:
+                raise AccountError(stops[len(calls) % len(stops)])
+            return original(client, fence, **options)
+        with mock.patch.object(project_driver, 'FENCE_RETRY_SECONDS', 0.01), \
+                mock.patch.object(project_driver, 'FENCE_RETRY_MAX_SECONDS', 0.05), \
+                mock.patch.object(AccountClient, 'fence_claim', autospec=True, side_effect=stopping):
+            self.start_host()
+            self.closes_after_restart(run_handle, orchestration)
+
+    def test_O10_E2_a_lease_the_listing_could_not_read_yet_is_listed_again_and_fenced(self):
+        from codex_agents.history_contracts import HistoryError
+        from codex_agents.orchestration_store import OrchestrationOwner
+        self.leave_a_refused_claim_unfenced(count=2)
+        original, calls = OrchestrationOwner.metadata_for, []
+
+        def not_yet(owner, binding):
+            calls.append(1)
+            if len(calls) <= 3:
+                raise HistoryError('history_service_unavailable')
+            return original(owner, binding)
+        with mock.patch.object(project_driver, 'FENCE_RETRY_SECONDS', 0.01), \
+                mock.patch.object(project_driver, 'FENCE_RETRY_MAX_SECONDS', 0.05), \
+                mock.patch.object(OrchestrationOwner, 'metadata_for', autospec=True, side_effect=not_yet):
+            self.start_host()
+            self.wait_for(lambda: self.bindings() == ['abandoned', 'abandoned'], seconds=60)
+
     def test_C3d_a_run_still_being_closed_says_so(self):
         import threading as threads
         orchestration, run_handle = self.leave_a_refused_claim_unfenced()
@@ -502,7 +632,7 @@ class LostRunAfterStopTests(LostRunHarness):
         orchestration, run_handle = self.stopped_in('consuming', [
             {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         self.assertEqual(1, len(self.launches()))  # Only the next run's child; the claimed one never started.
-        self.assertEqual(('abandoned', 'service_lost', 0), self.claimed_bindings()[0])
+        self.assertEqual(('abandoned', 'service_lost', 1), self.claimed_bindings()[0])
         self.assert_lost_status(orchestration, run_handle, 'released')
 
     def test_a_running_child_when_its_host_stops_is_settled(self):
@@ -511,7 +641,7 @@ class LostRunAfterStopTests(LostRunHarness):
             {'type': 'turn.completed', 'usage': {'input_tokens': 1}}], reached=self.launches)
         self.assertEqual(2, len(self.launches()))
         self.assert_process_gone(self.launches()[0])
-        self.assertEqual(('abandoned', 'service_lost', 0), self.claimed_bindings()[0])
+        self.assertEqual(('abandoned', 'service_lost', 1), self.claimed_bindings()[0])
 
     def test_a_finished_child_not_yet_reported_when_its_host_stops_is_settled(self):
         self.stopped_in('reporting', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
@@ -524,7 +654,7 @@ class LostRunAfterStopTests(LostRunHarness):
         self.stopped_in('releasing', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         # Released by its own host or settled by the next: either way it no longer counts, once.
         first = self.claimed_bindings()[0]
-        self.assertIn(first, {('pending', None, 1), ('abandoned', 'service_lost', 0)})
+        self.assertIn(first, {('pending', None, 1), ('abandoned', 'service_lost', 1)})
 
     def test_a_lost_reply_and_repeated_restarts_settle_the_run_exactly_once(self):
         replies, original = [], AccountClient.settle_lost_run
@@ -546,13 +676,16 @@ class LostRunAfterStopTests(LostRunHarness):
             self.restart_host()
             dispatch.communicate(timeout=30)
             self.wait_for(lambda: len(replies) >= 2, seconds=30)
+            # B4s (RS-B-B4-4): the run is settled once its journal says so (after the closure is recorded and the
+            # workspace removed); a stop before that replays the identical request, by design.
+            self.wait_for(lambda: self.journal_states() in ([], ['settled']), seconds=30)
             for _ in range(2):
                 self.restart_host()
         self.assertEqual([False, True], [reply['known'] for reply in replies[:2]])
         self.assertEqual(1, len({reply['receipt_digest'] for reply in replies}))
         self.assertEqual(2, len(replies))  # Settled runs are never sent again.
         self.assertEqual(0, self.counted())
-        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.assert_lost_status(orchestration, run_handle, 'released')
         self.assertEqual('result', self.next_run(orchestration, 'again')['bridge_report']['outcome'])
         self.assertEqual(2, len(self.launches()))
@@ -638,7 +771,7 @@ class LostRunAuthorityTests(LostRunHarness):
         reply = self.settle_as(entry, role='project', host_client=entry['host_client'], root=self.project,
                                project_id=self.project_id)
         self.assertEqual(('settled', False), (reply['state'], reply['known']))
-        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
         dispatch.communicate(timeout=30)
 

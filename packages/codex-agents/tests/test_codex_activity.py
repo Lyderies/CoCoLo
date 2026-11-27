@@ -55,12 +55,39 @@ class CodexActivityTests(unittest.TestCase):
         with self.assertRaises(CodexActivityError):
             CodexActivity().observe({"type": "turn.started"})
 
-    def test_item_cardinality_overflow_is_monitoring_failure(self):
+    def test_items_in_progress_beyond_the_cap_are_a_monitoring_failure(self):
         activity = self.start()
         with mock.patch.object(codex_activity, "MAX_ACTIVITY_ITEMS", 1):
-            activity.observe(self.item())
+            activity.observe(self.item("item.started", text="x"))
             with self.assertRaisesRegex(CodexActivityError, "^monitor_unavailable$"):
-                activity.observe(self.item(identity="item_2"))
+                activity.observe(self.item("item.started", identity="item_2", text="x"))
+
+    def test_a_long_run_of_completed_items_never_reaches_the_cap(self):
+        # O0c M5: only items still in progress are held; a completed item is forgotten.
+        activity = self.start()
+        with mock.patch.object(codex_activity, "MAX_ACTIVITY_ITEMS", 8):
+            for number in range(50):
+                identity = f"item_{number}"
+                self.assertEqual("activity", activity.observe(self.item("item.started", identity=identity)))
+                self.assertEqual("activity", activity.observe(self.item("item.updated", identity=identity)))
+                self.assertEqual("activity", activity.observe(self.item(identity=identity)))
+            for number in range(50, 100):  # Items seen only as completed.
+                self.assertEqual("activity", activity.observe(self.item(identity=f"item_{number}")))
+            self.assertLessEqual(len(vars(activity)["_items"]), 8)
+
+    def test_a_late_event_for_a_forgotten_item_is_handled_as_an_unknown_item_never_a_fault(self):
+        activity = self.start()
+        with mock.patch.object(codex_activity, "MAX_ACTIVITY_ITEMS", 8):
+            for number in range(50):
+                activity.observe(self.item(identity=f"item_{number}"))
+            # item_0 was forgotten long ago: it is a new item to the reader, as any unknown one.
+            activity.observe(self.item("item.updated", identity="item_0"))
+            activity.observe(self.item(identity="item_0"))
+            # The cap still bounds what is in progress.
+            for number in range(8):
+                activity.observe(self.item("item.started", identity=f"open_{number}", text="x"))
+            with self.assertRaisesRegex(CodexActivityError, "^monitor_unavailable$"):
+                activity.observe(self.item("item.started", identity="open_8", text="x"))
 
 
 if __name__ == "__main__":

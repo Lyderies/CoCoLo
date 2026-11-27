@@ -52,6 +52,9 @@ and tools installed under your home folder, which the rule then runs.
   checked live; for 0.169.0 the launch surface was compared without a model call, and the live
   containment check on 0.169.0 is part of this release's real-install trial. The release is not to be
   published with that range unless the check passes; otherwise the upper bound goes back to 0.164.1.
+  A Claude child also needs Claude Code 2.1.311 or later, the first version shown to hold its result to
+  the result schema (`--json-schema`); an older one is refused before launch, or stopped at its first
+  frame (`init_client_unsupported`).
   Widening the range needs the same comparison and a live containment check first.
 - **Owner-signed attestation.** Per account in each project, you sign that extra usage and credit
   purchases are off, with your one passphrase-protected owner key. `attest.py` signs only the bytes it

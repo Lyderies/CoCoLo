@@ -1,0 +1,41 @@
+~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:618: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  _LAUNCHER_CONTENT = open(path).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.~/Code/temp/cocolo-b4t/packages/codex-agents/tests/learning_support.py:621: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/fake-client-launcher-6ihkvbel/launcher' mode='r' encoding='UTF-8'>
+  if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.....
+----------------------------------------------------------------------
+Ran 15 tests in 4.871s
+
+OK

@@ -142,7 +142,7 @@ class AccountBillingExecutionTests(unittest.TestCase):
         self.assertNotIn(permit, self.owner._execution_inputs)
         self.assertEqual('released', supervisor.snapshot()['state'])
         self.assertEqual(1, len(self.model_invocations()))
-        known = self.reserve()
+        known = self.admit(self.reserve())  # decision 44 (BR-1, BR-9): a repeat is judged again, never read back
         self.assertEqual({**reply, 'known': True}, known)
         self.assertEqual(1, len(self.model_invocations()))
         with self.assertRaises(ProbeAdmissionError):
@@ -235,7 +235,7 @@ class AccountBillingExecutionTests(unittest.TestCase):
         self.executions.complete(handle)
         raw = self.row()['references_json']
         self.assertNotIn('PRIVATE-MODEL-ANSWER', raw)
-        self.assertEqual({'probe', 'reason_code', 'records', 'completion_digest'}, json.loads(raw).keys())
+        self.assertEqual({'probe', 'reason_code', 'records', 'completion_digest', 'client_version'}, json.loads(raw).keys())
 
     def test_known_reply_cannot_read_expired_records_or_relaunch_to_replace_them(self):
         handle, _, _ = self.launch()
@@ -243,7 +243,7 @@ class AccountBillingExecutionTests(unittest.TestCase):
         record = reply['records'][0]
         self.ledger._connection.execute('UPDATE records SET expires_at_ms=? WHERE project_id=? AND record_id=?',
             (self.clock, self.fixture.project_id, record['record_id']))
-        with self.assertRaises(ProbeAdmissionError):
-            self.reserve()
+        again = self.reserve()  # decision 44 (BR-1, BR-13): the judgment finds the record gone; no relaunch
+        self.assertEqual('probe_replay_stale', self.admit(again)['reason_code'])
         self.assertEqual(1, len(self.model_invocations()))
         self.assertEqual('committed', self.row()['state'])

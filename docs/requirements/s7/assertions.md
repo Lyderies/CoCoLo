@@ -1,0 +1,9 @@
+# S7 assertions changed in the fix round (all in S7's own new files; the base had none of them)
+
+| File, test | Old | New | Reason |
+| --- | --- | --- | --- |
+| `tests/test_s7_owner_load.py`, `test_a_project_backlog_of_real_ingests_yields_turns_to_another_project` | `assertLess(positions[-1], 2 * b_count)` and `assertLess(positions[0], 2)` on B's positions | `order[:6] == [A, B] * 3` and `order[6:] == [A] * 2` | review MED: the old pair accepted `A B B B A A A A`; turns must alternate while both have work |
+| `tests/test_s7_owner_load.py`, the three held-owner tests | no clock control | `RequestClock` frozen by `pause_owner`, caller waits on `handled` while frozen | review MED: real 800 ms deadlines during deliberately held phases |
+| `tests/test_e2e_owner_load.py`, `test_health_is_judged_on_answers_and_time` (renamed `..._answers_refusals_and_time`) | good case had `project` `refused: 2`; `answered + refused < 3` named `*_health_barely_asked`; project refusals accepted | good case has no refusals; fewer than 3 answered is `*_health_barely_answered`; any refusal is `*_health_refused` | review MED: zero successful replies and quick `response_invalid` errors passed |
+| `tests/test_e2e_owner_load.py`, `test_account_calls_are_judged_on_answers_and_on_what_was_recorded` (renamed `..._what_is_recorded_for_whom`) | `account_verdict(replies, unique, recorded_count)`; lost/duplicated by count | `account_verdict(replies, rows, projects)`; lost/duplicated by count, plus `account_record_misattributed`, `account_record_not_committed`, `observation_timestamp_missing` | review MED: only an aggregate count was checked |
+| `scripts/e2e_checks_owner_load.py`, L16.1 | `observations_after - observations_before` count | rows new since the before snapshot, matched by project and observation time | same |

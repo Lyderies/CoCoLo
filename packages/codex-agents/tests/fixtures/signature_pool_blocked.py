@@ -18,7 +18,8 @@ from unittest import mock
 def main():
     package_root = Path(sys.argv[1]).resolve()
     inject_failure = len(sys.argv) == 3 and sys.argv[2] == 'fail-after-offer'
-    sys.path[:0] = [str(package_root), str(package_root / 'native-package/.codex/orchestration')]
+    sys.path[:0] = [str(package_root), str(package_root / 'native-package/.codex/orchestration'),
+                   str(package_root.parents[1] / 'scripts')]
     from codex_agents import signature_worker_pool as pools
     from codex_agents import signature_execution as execution
     import tests.test_signature_inputs as capture_fixture

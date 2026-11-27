@@ -15,7 +15,8 @@ from unittest import mock
 def main():
     package = Path(sys.argv[1]).resolve()
     scenario = sys.argv[2]
-    sys.path[:0] = [str(package), str(package / 'native-package/.codex/orchestration')]
+    sys.path[:0] = [str(package), str(package / 'native-package/.codex/orchestration'),
+                   str(package.parents[1] / 'scripts')]
     from codex_agents import signature_execution as execution
     from codex_agents import signature_worker_pool as pools
     from codex_agents.signature_job_intake import SignatureIntakeLimits, SignatureJobIntake

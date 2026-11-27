@@ -118,7 +118,10 @@ class AdmissionInputOwnerTests(unittest.TestCase):
         with mock.patch("sqlite3.connect", side_effect=AssertionError("new connection")), \
                 mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("crypto")):
             captured = self.capture()
-        self.assertEqual(expected, list(captured.rows))
+        from codex_agents.admission_capture_content import unpack_content
+        expanded = [(*row[:5], unpack_content(row[5], row[2], row[8]), *row[6:]) for row in captured.rows]
+        self.assertEqual(expected, expanded)
+        self.assertLess(sum(len(row[5]) for row in captured.rows), sum(len(row[5]) for row in expected))
         self.assertEqual(ADMISSION_CAPTURE_RECORD_TYPES, {row[4] for row in captured.rows})
         self.assertEqual(NOW, captured.captured_at_ms)
         self.assertEqual(1, captured.project_created_at_ms)
@@ -136,7 +139,9 @@ class AdmissionInputOwnerTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             captured.rows = ()
         self.assertEqual({"account.health", "account.project", "account.owner_key", "account.owner_public_key",
-                          "account.open_host_run", "account.claim_launch", "account.capacity_status", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable", "account.record_rate_limit_event", "account.billing_probe"}, ACCOUNT_OPERATIONS)
+                          "account.open_host_run", "account.claim_launch", "account.capacity_status", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.lost_run_closure", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable", "account.record_rate_limit_event", "account.billing_probe", "account.withdraw_open", "account.provider_state_snapshot",
+                          "account.publish_wake",
+                          "account.takeover_report"}, ACCOUNT_OPERATIONS)  # E2a; Approved: decision 170; B4t D2.8/D2.9
 
     def test_exact_field_and_row_quotas_refuse_before_raw_fetch(self):
         baseline = self.capture()

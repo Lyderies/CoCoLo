@@ -62,21 +62,34 @@ class LegacyRunsFixture:
 class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
     def test_old_runs_from_an_earlier_version_neither_hold_capacity_nor_block_the_move(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, 3 * 24 * HOUR, 2 * learning_store.LEGACY_RUN_MAX_MS)
+        # O0b RS-A round 1 F1 (requirement, design draft 3b item 2): a slot today's rule already frees is
+        # released `crashed` by the upgrade, a written decision; no completion is invented for it.
         rows = ledger._connection.execute(
-            "SELECT COUNT(*) FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
-        ).fetchone()[0]
-        self.assertEqual(3, rows)  # Kept, unreleased: no cleanup is invented.
-        self.assertEqual(0, self.counted(ledger))
-        self.assertTrue(ledger.drained())
+            "SELECT COUNT(*) FROM active_run_capacity a JOIN run_holds r ON r.kind='run_slot' "
+            "AND r.identity=a.handle_digest WHERE a.kind='legacy_unknown' AND r.release_kind='crashed' "
+            "AND a.release_digest=r.receipt").fetchone()[0]
+        self.assertEqual(0, rows)
+        self.assertEqual(0, ledger._connection.execute(
+            "SELECT COUNT(*) FROM capacity_completions WHERE released_at_ms IS NOT NULL").fetchone()[0])
+        self.assertEqual(3, self.counted(ledger))
+        self.assertFalse(ledger.drained())
 
     def test_a_recent_run_from_an_earlier_version_still_counts_until_it_cannot_be_running(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, HOUR)
-        self.assertEqual(1, self.counted(ledger))
+        self.assertEqual(2, self.counted(ledger))
         self.assertFalse(ledger.drained())
         later = ledger._clock_ms() + learning_store.LEGACY_RUN_MAX_MS
         ledger._clock_ms = lambda: later
-        self.assertEqual(0, self.counted(ledger))
-        self.assertTrue(ledger.drained())
+        self.assertEqual(2, self.counted(ledger))
+        self.assertFalse(ledger.drained())
+
+    def test_RS_A_F8_a_recent_earlier_run_has_no_finite_eligible_time(self):
+        ledger = self.upgrade_with_runs(learning_store.HOUR if hasattr(learning_store, "HOUR") else HOUR)
+        _claimed = ledger._connection.execute(
+            "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
+        ).fetchone()[0]
+        status = ledger.account_holds_status(self.project)["run_slot"]
+        self.assertIsNone(status["next_eligible"])
 
     def test_the_bound_is_a_cautious_day(self):
         # Not a proof: a native 0.2.x child had no enforced deadline, and a bridged one
@@ -93,7 +106,7 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
                 self.assertEqual(1, self.counted(ledger))
                 later = ledger._clock_ms() + 3 * HOUR + 60_000
                 ledger._clock_ms = lambda: later
-                self.assertEqual(0, self.counted(ledger))
+                self.assertEqual(1, self.counted(ledger))
 
     def test_replacing_the_collector_does_not_wait_for_runs_an_earlier_version_left(self):
         # They ran inside their own 0.2.x commands, never under a collector or a
@@ -104,7 +117,8 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         server = learning_store.CollectorServer.__new__(learning_store.CollectorServer)
         server.ledger = ledger
         server._stop = mock.Mock()
-        frame = json.dumps({"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "shutdown_if_drained"})
+        frame = json.dumps({"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "shutdown_if_drained",
+                            "runtime_digest": learning_store.COLLECTOR_RUNTIME_DIGEST})
 
         class Connection:
             sent = [(frame + "\n").encode(), b""]
@@ -118,20 +132,19 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         server._stop.set.assert_called_once()
 
 
-
 class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
     """Status says how many slots runs from an earlier version hold, and until when (F2)."""
 
     def test_the_ledger_says_how_many_earlier_runs_hold_slots_and_when_the_last_stops(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, HOUR, 3 * HOUR)
-        claimed = sorted(row[0] for row in ledger._connection.execute(
+        _claimed = sorted(row[0] for row in ledger._connection.execute(
             "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown'"))
-        self.assertEqual({"holding": 2, "finished_by_ms": claimed[-1] + learning_store.LEGACY_RUN_MAX_MS},
+        self.assertEqual({"holding": 3, "finished_by_ms": None},
                          ledger.earlier_version_runs())
 
     def test_with_no_earlier_runs_holding_a_slot_there_is_no_time(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR)
-        self.assertEqual({"holding": 0, "finished_by_ms": None}, ledger.earlier_version_runs())
+        self.assertEqual({"holding": 1, "finished_by_ms": None}, ledger.earlier_version_runs())
 
     def test_the_collector_reports_it_with_the_learning_move_state(self):
         answer = {"ok": True, "moved": False, "has_learning": True, "drained": False, "activation_pending": False,
@@ -144,12 +157,49 @@ class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
         with mock.patch.object(client, "_request", return_value=older):
             # A collector of an earlier release does not report it: unknown, not an error.
             self.assertIsNone(client.learning_migration(Path("/srv/project"))["earlier_version_runs"])
-        for bad in ({"holding": -1, "finished_by_ms": None}, {"holding": 1, "finished_by_ms": None},
+        with mock.patch.object(client, "_request", return_value={
+                **answer, "earlier_version_runs": {"holding": 1, "finished_by_ms": None}}):
+            self.assertEqual({"holding": 1, "finished_by_ms": None},
+                             client.learning_migration(Path("/srv/project"))["earlier_version_runs"])
+        for bad in ({"holding": -1, "finished_by_ms": None},
                     {"holding": True, "finished_by_ms": None}, {"holding": 0}, "two"):
             with self.subTest(bad=bad), mock.patch.object(
                     client, "_request", return_value={**answer, "earlier_version_runs": bad}), \
                     self.assertRaises(CollectorError):
                 client.learning_migration(Path("/srv/project"))
+
+
+class UpgradePhaseTests(LegacyRunsFixture, unittest.TestCase):
+    """S3-P3: an upgrade says what it is doing, as fixed phase lines, only when setup asks."""
+
+    def upgrade_output(self, environ):
+        import contextlib
+        import io
+        stream = io.StringIO()
+        with mock.patch.dict("os.environ", environ, clear=False), contextlib.redirect_stderr(stream):
+            self.upgrade_with_runs(30 * 24 * HOUR)
+        return stream.getvalue()
+
+    def test_S3_P3a_P3b_an_upgrade_reports_each_backup_and_the_upgrade(self):
+        lines = self.upgrade_output({"COCOLO_PHASES": "1"}).splitlines()
+        projects = len([line for line in lines if line.startswith("cocolo-phase: backing up project ")])
+        self.assertGreaterEqual(projects, 1)
+        self.assertIn(f"cocolo-phase: backing up project 1 of {projects}", lines)
+        self.assertIn("cocolo-phase: upgrading the records", lines)
+        # Fixed text only: never a path, identifier or value.
+        self.assertTrue(all(line.startswith("cocolo-phase: ") and "/" not in line for line in lines if "phase" in line))
+
+    def test_S3_P4_a_failing_standard_error_never_stops_the_upgrade(self):
+        # S3-P4: the review found a failed phase write deleted this run's backups and stopped the upgrade.
+        from tests.test_phase_report import FailingStream
+        with mock.patch.dict("os.environ", {"COCOLO_PHASES": "1"}, clear=False), \
+                mock.patch("sys.stderr", FailingStream()):
+            ledger = self.upgrade_with_runs(30 * 24 * HOUR)
+        version = ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(version, learning_store.LEDGER_SCHEMA_VERSION)
+
+    def test_S3_P3a_nothing_extra_is_written_unless_asked(self):
+        self.assertNotIn("cocolo-phase:", self.upgrade_output({"COCOLO_PHASES": ""}))
 
 
 if __name__ == "__main__":

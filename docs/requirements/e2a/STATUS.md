@@ -1,0 +1,107 @@
+# E2a status (resume notes)
+
+Worktree ~/Code/temp/cocolo-e2a, branch feat/rse-e2a, base ace235a4 (0.8.56).
+REBASED: ~/Code/temp/cocolo-e2a-rb, branch rebase/e2a-0859, onto be3eb53f (0.8.59 batch head); see the last section.
+Requirements: docs/requirements/e2a.md (E2a-1..9). Tests: tests/test_e2a_launch_record.py (11),
+tests/test_e2a_wake_wire.py (14). Registered in scripts/test-{layers,stages,requirements}.json (scenario/integration).
+
+## Steps
+1. Requirements written. DONE
+2. Red tests. DONE. Red run: both modules fail at import (host_commands.launch_target_problem,
+   codex_agents.project_wake missing): `Ran 2 tests, errors=2`, 0.4 s.
+3. Code. DONE. Modules: learning_store (projects launch columns + project_wake, additive; explicit registration insert;
+   record_launch/launch_record/publish_wake/reconcile; CollectorServer record_launch op, wake key at register,
+   reconcile before ready + own thread per sweep interval), collector_client/collector_contracts (record_launch),
+   service_enrollment (wake keys, verifier subject_keys -> Enrolled.project_bound), account_host (wake keys at start,
+   WAKE_OPERATIONS, bound credential), account_service (wake_bound, dispatch), account_api + wake_contracts +
+   reply_shapes (op, payload, reply), project_wake (publisher), project_holds_schema/project_history/
+   project_result_contexts (hooks), project_service (wiring, clean_stop/writer fault), host_commands (launch target,
+   pins, prune/replace/remove), cli (install-codex-rule records via running collector), runtime_files (2 new modules).
+4. Green: tests.test_e2a_launch_record 11 OK (2.0 s); tests.test_e2a_wake_wire 14 OK (17 s).
+   Existing named modules: test_host_commands+test_project_service_startup 61 (77 s, then host_commands 65 with e2a in
+   59 s) OK after the pins fix; test_account_host, test_rsf_s1_ingress_socket, test_holds_report, test_ledger_lock_limits,
+   test_project_service_startup 66 OK except G6 idle check (fixed: periodic reconcile moved to its own thread; rerun 29 OK
+   25 s); test_collector_stale 16 OK 3 s; test_hold_lifecycle 9 OK 17 s; test_project_service 11 OK 1 s;
+   test_b4m_compatibility, test_project_holds_schema, test_account_api, test_reply_shape_compatibility OK.
+   Failing as expected (4 assertions, assertions.md): test_rsf_s1_ingress, test_admission_inputs,
+   test_signature_job_intake, test_signature_inputs. Not run: test_reply_shape_live (> 5 min; needs a DRIVERS entry).
+5. Commit: see git log.
+
+## For the primary
+- assertions.md: 4 op-set assertions (15 -> 16 mutations; three exact ACCOUNT_OPERATIONS sets + publish_wake).
+- runtime-releases.json digest needs the usual refresh (runtime files changed; two new modules).
+- Launch record is written only by install-codex-rule (the wizard's optional Codex rule step) through a running
+  collector; Claude-only setups get no launch record (E2c would show `install changed`). Decide whether setup's
+  registration/start step also installs the protected copy.
+
+## Round 2 (primary decisions 170, 171)
+- 170 applied: 4 assertions (assertions.md, "Approved: decision 170") + test_reply_shape_live DRIVERS entry (not run here).
+- 171: E2a-10 (learning-register installs the protected copy and records the launch target for every project;
+  host_commands.record_setup_launch, cli) and E2a-11 (learning-status `recovery` line via the new read-only collector
+  op `launch_status`; client_runtime). Red: SetupRecordTests 2 errors (KeyError launch_record / recovery), 0.5 s.
+  Green: test_e2a_launch_record + rsf_s1_ingress + admission_inputs + signature_job_intake + signature_inputs 105 OK
+  10 s; test_cli_status_client_boundary 12 OK 9 s; test_e2a_wake_wire 14 OK 18 s; test_host_commands 54 OK 60 s;
+  test_learning_cli 30 OK 63 s.
+
+## Review round 1 (Codex security review NOT-READY at 5a024c5e: scratchpad e2a-review-result.md)
+Red first on 5a024c5e (17 new tests; 15 red on assertions, not imports; 2 boundary tests green by design; the cap
+guard was already red): `Ran 17 tests, failures=14, errors=1 (fixture), 6 s`, then paging red `5471 not less than 2266`.
+Fixes (modules): learning_store (record_launch/launch_status owner proof + collector-side launch_target_problem;
+project_wake_instances; wake_reconcile_page by rows examined, marker-aware, budgeted startup pass, wake thread resumes),
+service_enrollment (WakeKeys in-memory table + dummy key, Enrolled.bound_project, collector owner key/proofs in
+`<state>/collector-owner/`), account_host (table, bound auth by id before any lookup), collector_client (owner-signed
+record_launch/launch_recorded), cli (offline record under CollectorMaintenance; 30 s timeout), host_commands (stable
+project lock = copies folder flock, inode-checked pins, pin-before-commit, removal keeps registered), wake_contracts
+(instance, WAKE_MARKER), account_service (instance), project_wake (marker/WakeRefused, invalidate queued exact,
+finish(final_due)), project_holds_schema (refusal propagates; next due counts releasing open-binding next_check_ms),
+project_history (withdrawal transitions guarded), project_driver/service_host (verified settlement bool),
+project_service (final read-only due read), tests/lifetime_caps.json (3 sites).
+Green: test_e2a_wake_wire 24 OK 20 s; test_e2a_launch_record 20, 1 error = the unlisted assertion (assertions.md, NOT
+applied, primary decision); test_host_commands 54 OK; contract batch (holds_schema, account_api, reply_shape_compat,
+b4m, lifetime_cap_guard, rsf_s1_ingress, admission/signature x3, project_service, collector_stale) 207 OK 16 s;
+cli_status_client_boundary OK; project_service_startup+ledger_lock_limits+account_host+holds_report 62 OK 54 s;
+learning_cli 30 OK 62 s; open_withdrawal+hold_lifecycle 58 OK 54 s; lost_run_settlement+container_recovery+
+publication_replay_driver 63 OK 107 s. Not run: test_reply_shape_live (> 5 min), --affected (primary).
+Open for the primary: the one unlisted assertion above; runtime digest refresh (not done, as instructed).
+
+## Decision 179: one final targeted fix (confirm check NOT-READY at 6f6931d2: scratchpad e2a-confirm-result.md)
+Red first on 6f6931d2 runtime (runtime files stashed, new tests only): `Ran 11 tests, failures=10, 3 s`; the
+item-8 wire test (wrong key, replay) passes at base: coverage for the round-1 fix.
+Fixes: host_commands (lock held mark->record->cleanup; registered verifying copy never replaced; unknown record
+outcome keeps both marks), learning_store (project_wake_instances keyed by (project, instance), row dropped on the
+instance's first explicit-epoch publication, old round-1 form dropped; marker folder check; probes bounded by
+probe_deadline, a cut-short probe not counted), project_host_client (probe_deadline/probe_wait_seconds),
+project_wake (per-instance flocked markers, touch invalidates queued exact, close releases the marker lock),
+wake_contracts (comment), project_driver (settled = every run released), project_service (final host.faulted()
+check), project_history (deferral guarded by wake_before).
+Green: test_e2a_launch_record + test_e2a_wake_wire + lifetime_cap_guard 59, 1 error = the owner-question-176 test
+(unchanged), 29 s; host_commands+open_withdrawal+hold_lifecycle+project_service 123 OK 105 s (after narrowing the
+unknown-outcome rule: test_remove_codex_rule_reports_what_it_removed rerun OK); lost_run_settlement+
+container_recovery+project_service_startup+ledger_lock_limits 90 OK 126 s; host_commands+learning_cli+holds_report+
+project_holds_schema+collector_stale 163 OK 125 s. Not run: --affected, test_reply_shape_live (primary).
+Digests not refreshed (as instructed).
+
+## Rebase onto 0.8.59 (be3eb53f, 2026-11-25)
+Method: `git rebase --onto be3eb53f ace235a4` (5 commits; conflicts only in commits 1 and 2; one whitespace fixup squashed
+into commit 1). Resolutions (all unions): account_api.py / account_host.py op lists keep lost_run_closure + publish_wake;
+account_service.py keeps lost_run_closure() and publish_wake(), the project op set gains both, the E2a wake_bound/source
+guard and both dispatch branches kept; project_holds_schema.py keeps B6 (timing constants, LEASE/CONSUMPTION
+expressions, _orchestration_of, adopt_orchestrations, release recheck) and E2a's wake hooks/next_hold_due, release_hold
+runs B6's recheck then wake_touch. No schema step added (E2a has none); step 21 untouched. 4 test pins: union (assertions.md).
+runtime-releases.json 0.8.59 digest refreshed to the computed COLLECTOR_RUNTIME_DIGEST.
+Tests (named, 3 batches in parallel): batch A (e2a x2, lifetime_cap_guard, admission/signature x3, rsf_s1_ingress,
+holds_schema, account_api, reply_shape_compat, b4m, collector_stale, project_service, runtime_release, upgrade_handover,
+learning_store) 377, 1 failure = lifetime_cap_guard admission_metadata classify_provider_state/reset_early unlisted,
+PRE-EXISTING at be3eb53f (reproduced on an archive of the base), 81 s; batch B (host_commands, open_withdrawal,
+hold_lifecycle, holds_report, cli_status_client_boundary) 150 OK 122 s; batch C (lost_run_settlement, container_recovery,
+project_service_startup, ledger_lock_limits, account_host, rsf_s1_ingress_socket) 105, 1 error under parallel load
+(LostRunAfterStopTests lost-reply KeyError terminal_state); alone: class 18 OK x2 (45 s), module 26 OK 74 s.
+Open: wake next_hold_due reads due_at_ms only; B6 orchestration rows are selected at max(due_at_ms, next_check_ms), so a
+refused-and-backed-off due orchestration makes the wake early (never late). Not run: test_learning_cli,
+test_publication_replay_driver, test_reply_shape_live, --affected (primary).
+
+## 0.8.60 full-run fixes (decision 245, 2026-11-25)
+All 10 failed units fixed (see assertions.md "0.8.60 full-run fixes"). 0.8.60 digest refreshed in
+runtime-releases.json (0.8.59 unchanged). Named run (17 modules, 26 units, 277 tests) via parallel_tests.py --module:
+failed_units [], metadata_errors []; test_project_start is over its 60 s scenario budget (pre-existing: its recorded
+timing is 130 s).

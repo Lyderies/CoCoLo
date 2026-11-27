@@ -10,6 +10,7 @@ from unittest import mock
 from tests import test_learning_source_image_legacy as legacy
 from tests.learning_support import backup_body, event_record
 from codex_agents import project_history as history
+from codex_agents.takeover_schema import PROJECT_COLUMNS as TAKEOVER_COLUMNS
 from codex_agents import learning_source_transfer as transfer
 from codex_agents import project_learning_source as archive
 from codex_agents.history_contracts import HistoryError
@@ -32,7 +33,7 @@ class LearningSourceTransferTests(unittest.TestCase):
 
     def target_rows(self):
         return {name: [tuple(row) for row in self.target._connection.execute('SELECT * FROM ' + name)]
-                for name in history._COLUMNS}
+                for name in history._COLUMNS if name not in {'runtime_takeover', *TAKEOVER_COLUMNS}}
 
     def reopen(self):
         self.target.close()
@@ -48,7 +49,7 @@ class LearningSourceTransferTests(unittest.TestCase):
         result = self.transfer()
         self.assertEqual(original, self.archive_body())
         self.assertEqual(hashlib.sha256(original).hexdigest(), result['source']['manifest_digest'])
-        self.assertEqual(30, len(result['counts']))
+        self.assertEqual(31, len(result['counts']))  # O0b RS-A (requirement): the hold register is backed up
         self.assertEqual((23, 2, 1), tuple(dict(result['counts'])[name] for name in
                                          ('records', 'owner_attestations', 'operational_qa')))
         self.assertTrue(all(result[part]['state'] == 'staged' for part in ('source', 'records', 'qa')))
@@ -191,7 +192,10 @@ class LearningSourceTransferTests(unittest.TestCase):
     def old14(self):
         self.transfer()
         self.old_rows = {n: rows for n, rows in self.target_rows().items()
-                         if n not in archive.SOURCE_COLUMNS and n not in ACTIVATION_COLUMNS}
+                         if n not in archive.SOURCE_COLUMNS and n not in ACTIVATION_COLUMNS
+                         and n not in history.REGISTERED_RUN_COLUMNS
+                         and n not in history.PROJECT_HOLDS_COLUMNS  # (requirement) SB: schema 18
+                         and n != 'project_result_recorders'}  # schema20 (B2, decision 114.1 A)
         directory = Path(self.fixture.temporary.name) / 'old14'
         directory.mkdir(mode=0o700)
         database = directory / 'history.sqlite3'

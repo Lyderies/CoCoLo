@@ -21,6 +21,22 @@ C = "prj_" + "c" * 32
 
 
 class ProjectFairQueueTests(unittest.TestCase):
+    @__import__('test_framework').requirements('S15-O0C-BINDINGS', why_not_scenario='A real in-memory queue crosses both population ceilings and drains before new admission.')
+    def test_both_population_caps_refuse_excess_and_drain_restores_admission(self):
+        queue = ProjectFairQueue(QueueLimits(2, 2, 8))
+        for project in (A, B):
+            queue.offer(project, b'one')
+            queue.offer(project, b'two')
+        with self.assertRaisesRegex(ServiceQueueError, 'project_queue_full'):
+            queue.offer(A, b'excess')
+        with self.assertRaisesRegex(ServiceQueueError, 'queue_project_limit'):
+            queue.offer(C, b'excess')
+        self.assertEqual(4, sum(queue.take_nowait() is not None for _ in range(4)))
+        self.assertEqual(QueueSnapshot(0, 0, 0), queue.snapshot())
+        queue.offer(C, b'fresh')
+        item = queue.take_nowait()
+        self.assertEqual((C, b'fresh'), (item.project_id, item.payload))
+
     def test_project_backlog_cannot_take_another_projects_quota_or_turn(self) -> None:
         queue = ProjectFairQueue(QueueLimits(2, 3, 8))
         for payload in (b"a1", b"a2", b"a3"):

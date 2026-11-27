@@ -75,7 +75,7 @@ class LegacyHistoryCompatibilityTests(unittest.TestCase):
             self.ledger.append(project, record, producer="owner", now_ms=1000)
         self.assertEqual(original, self.row(project, record["record_id"]))
 
-    def test_ordinary_expiry_frees_record_id_and_restarts_empty_project_sequence(self) -> None:
+    def test_ordinary_expiry_frees_record_id_and_leaves_an_event_summary_before_the_next_sequence(self) -> None:
         project, other = self.projects
         record = event_record("reusable", observed_at_ms=100)
         self.ledger.append(project, record, producer="hook", now_ms=200)
@@ -87,7 +87,7 @@ class LegacyHistoryCompatibilityTests(unittest.TestCase):
         changed = {**record, "observed_at_ms": 101}
         timestamp = 201 + DEFAULT_RETENTION_MS
         self.assertEqual(
-            {"stored": True, "duplicate": False, "source_sequence": 1, "late": False},
+            {"stored": True, "duplicate": False, "source_sequence": 3, "late": False},
             self.ledger.append(project, changed, producer="host", now_ms=timestamp),
         )
         stored = self.row(project, record["record_id"])

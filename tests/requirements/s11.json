@@ -1,0 +1,85 @@
+{
+ "authority": "docs/requirements/s11-hm2a.md",
+ "requirements": [
+  {
+   "id": "HM2A-1",
+   "source": "tests/requirements/s11.json#HM2A-1",
+   "statement": "A leftover prepare-* folder is removed only with positive proof that its owner is gone: its owner marker (written when the folder was made) names this state root and a launch-journal instance whose lock is free, and no live or pending record names it; no marker, another state root, a missing lock or a held lock (even after a clock jump) is never a removal. Removal is proven only by FileNotFoundError and reported fixed; a removal not proven is reported and retried. No mode is changed before that proof (a folder that is not listable is looked into through a search-only descriptor or not at all). A marker that could not be written in full (an open, write or close error) never fails the preparation and leaves no marker, so its folder is only reported."
+  },
+  {
+   "id": "HM2A-2",
+   "source": "tests/requirements/s11.json#HM2A-2",
+   "statement": "A folder a live driver owns (named by any launch-journal entry) or a young folder is kept."
+  },
+  {
+   "id": "HM2A-3",
+   "source": "tests/requirements/s11.json#HM2A-3",
+   "statement": "A symlink, a foreign-owned folder or a file named like a preparation folder is reported and left exactly as it is, never followed."
+  },
+  {
+   "id": "HM2A-4",
+   "source": "tests/requirements/s11.json#HM2A-4",
+   "statement": "A folder pending under decision 309 is left to the driver (no double removal); one still pending after PENDING_REPORT_PASSES passes is reported."
+  },
+  {
+   "id": "HM2A-5",
+   "source": "tests/requirements/s11.json#HM2A-5",
+   "statement": "Path safety equals remove_recorded_workspace: absolute, no .., prepare-* name, the real scratch container as parent, a real folder owned by this user; an unsafe container removes nothing. Removal goes through pinned, fstat-verified directory descriptors, so swapping the container or a subfolder for a link mid-removal never reaches the link target. After owner proof a mode is changed only through fchmod on a descriptor opened O_NOFOLLOW and verified by fstat (device, inode, user), never by name, so a folder swapped in before the change keeps its mode."
+  },
+  {
+   "id": "HM2A-6",
+   "source": "tests/requirements/s11.json#HM2A-6",
+   "statement": "Reads and work are bounded (entries examined and folders listed per pass with a rotating cursor so nothing is starved, removals and removed entries per pass, removal depth, the time share checked before every removal step, journal projects, names and entries, record items and paths); a folder not finished keeps its marker and resumes at the next pass (the last check comes before the marker goes, the folder's rmdir follows it at once, and a failed rmdir puts the marker back); every container entry read, however far the listing has gone, counts toward the scan cap and the time share is checked while listing, the listing going on across passes; each limit is in lifetime_caps.json with a past-the-limit test."
+  },
+  {
+   "id": "HM2A-7",
+   "source": "tests/requirements/s11.json#HM2A-7",
+   "statement": "Records that cannot be read completely (an error or any truncation: listing, entry, item or distinct-path limits, counted while reading and after deduplication) mean nothing is removed and one finding says the records are incomplete; a check without both readers does nothing."
+  },
+  {
+   "id": "HM2A-8",
+   "source": "tests/requirements/s11.json#HM2A-8",
+   "statement": "Findings are plain, closed, machine-scope, one sentence naming the folder and never a path, exception message or decision number."
+  },
+  {
+   "id": "HM2A-9",
+   "source": "tests/requirements/s11.json#HM2A-9",
+   "statement": "The module never touches the ledger, history or preparation state: no SQLite or ledger import, its pending reader is injected (owner thread, E1b-1)."
+  },
+  {
+   "id": "HM2A-10",
+   "source": "tests/requirements/s11.json#HM2A-10",
+   "statement": "register adds the check to a health monitor with the journal live set and the caller's pending reader; a pass removes an orphan and shows it."
+  },
+  {
+   "id": "HM2A-11",
+   "source": "tests/requirements/s11.json#HM2A-11",
+   "statement": "The collector registers the workspaces check with a read-only pending reader over the project histories (no I/O at registration); a pass removes an orphan folder and keeps a live driver's folder."
+  },
+  {
+   "id": "HM2A-12",
+   "source": "tests/requirements/s11.json#HM2A-12",
+   "statement": "A project whose history has no project_holds table counts zero only when it is a validated older store (PRAGMA user_version 1..17, the versions before project_holds in step 18, with exactly one history_identity row); an empty, zero-byte, table-less, current-version-without-the-table, truncated or otherwise unrecognised database is unknown with history_unrecognised:<project id>, never zero; a corrupt or unreadable store still fails. Success is accepted only inside the single deadline, checked after the open and after the last query."
+  },
+  {
+   "id": "HM2A-13",
+   "source": "tests/requirements/s11.json#HM2A-13",
+   "statement": "Every remaining unknown pending read names its reason (too_many_projects, projects_unreadable:<Class>, history_unreadable:<Class>:<project id>, history_unrecognised:<project id>, too_many_pending:<project id>, evidence_unreadable:<project id>, deadline); decoded evidence that is not an object, or a pending row without a text workspace, is evidence_unreadable:<project id>; the workspaces finding carries it in its text and subject with a plain next step, within the existing length bounds. No dedupe exists in the health monitor for findings (it shows the last pass's findings), so none was added."
+  },
+  {
+   "id": "PREP-1",
+   "source": "tests/requirements/s11.json#PREP-1",
+   "statement": "All leftover CoCoLo preparation folders whose owner cannot be proven are reported as ONE owner_unknown finding (subject folders) with a count, plain wording and a safe next step (where to look; delete only after quitting CoCoLo); each removed orphan stays its own finding."
+  },
+  {
+   "id": "PREP-2",
+   "source": "tests/requirements/s11.json#PREP-2",
+   "statement": "The grouped finding stays within the 240-character finding bound (the path is dropped for a short step when it does not fit); folder names are not in it (the finding has no detail field)."
+  },
+  {
+   "id": "PREP-3",
+   "source": "tests/requirements/s11.json#PREP-3",
+   "statement": "Behaviour is otherwise unchanged: nothing is removed without owner proof, folders younger than the orphan age are not counted, and no unproven folder means no finding."
+  }
+ ]
+}

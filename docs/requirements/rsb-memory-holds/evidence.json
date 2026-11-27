@@ -1,0 +1,887 @@
+{
+  "base": "4a00f22d",
+  "memory_measurements": {
+    "memory_limit_ms": 5,
+    "memory_recovery_ms": 0.254,
+    "memory_recovery_samples_ms": [
+      0.254,
+      0.252792,
+      0.296416
+    ],
+    "memory_rows_released": 2,
+    "memory_transactions_samples_ms": [
+      [
+        0.34425,
+        0.245,
+        0.220667,
+        0.206791
+      ],
+      [
+        0.366542,
+        0.271375,
+        0.228625,
+        0.183208
+      ],
+      [
+        0.321208,
+        0.218875,
+        0.210583,
+        0.1695
+      ]
+    ],
+    "memory_warmup_runs": 1,
+    "memory_writer_ms": 1.016708
+  },
+  "requirement": "RS-B-4",
+  "runs": [
+    {
+      "label": "rsb-memory-red-registered",
+      "metadata_errors": [],
+      "seconds": 0.676,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_L7_handoff_kills",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_transition_kills",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M4_hung_and_missing_lock"
+          ],
+          "module": "tests.test_memory_holds_crash",
+          "outcomes": {
+            "error": 3
+          },
+          "returncode": 1,
+          "seconds": 0.607,
+          "tests": 3
+        },
+        {
+          "failed_tests": [
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_interleaved_observations",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_L4_never_launch_predicates",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_L6_live_handoff",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_unknown_cleanup_keeps_both_holds",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M6_autonomous_retirement",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M8_submit_refused_compensates",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M3_close_and_takes_both_orders",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M5_recovery_once_and_graceful_stop",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M7_registration_refusal_preserves_duty",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_registration_rollback_validator_and_status"
+          ],
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "error": 10
+          },
+          "returncode": 1,
+          "seconds": 0.666,
+          "tests": 10
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-prune-red",
+      "metadata_errors": [],
+      "seconds": 1.792,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M4_sweeper_cannot_prune_memory_stopping_evidence"
+          ],
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "failed": 1,
+            "passed": 10
+          },
+          "returncode": 1,
+          "seconds": 0.784,
+          "tests": 11
+        },
+        {
+          "module": "tests.test_memory_holds_lane",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 1.783,
+          "tests": 4
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-purge-red",
+      "metadata_errors": [],
+      "seconds": 0.708,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_live_memory_prevents_attempt_source_purge"
+          ],
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "failed": 1,
+            "passed": 11
+          },
+          "returncode": 1,
+          "seconds": 0.701,
+          "tests": 12
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-closed-red",
+      "metadata_errors": [],
+      "seconds": 13.344,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M6_denied_closed_run_retires_without_another_client"
+          ],
+          "module": "tests.test_memory_holds_lane",
+          "outcomes": {
+            "failed": 1,
+            "passed": 4
+          },
+          "returncode": 1,
+          "seconds": 13.339,
+          "tests": 5
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-status-red",
+      "metadata_errors": [],
+      "seconds": 0.597,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_status_memory_blocks_close_eligibility_and_has_holds",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_validator_refuses_missing_tracked_registration_hold"
+          ],
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "failed": 2,
+            "passed": 14
+          },
+          "returncode": 1,
+          "seconds": 0.589,
+          "tests": 16
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-abandon-red",
+      "metadata_errors": [],
+      "seconds": 0.591,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_abandon_does_not_drop_entry_before_preparation_retirement"
+          ],
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "failed": 1,
+            "passed": 16
+          },
+          "returncode": 1,
+          "seconds": 0.588,
+          "tests": 17
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-view-red",
+      "metadata_errors": [],
+      "seconds": 0.643,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_existing_failed_view_oracle_remains_valid"
+          ],
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "failed": 1,
+            "passed": 17
+          },
+          "returncode": 1,
+          "seconds": 0.637,
+          "tests": 18
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-final-core",
+      "metadata_errors": [],
+      "seconds": 7.471,
+      "workers": [
+        {
+          "module": "tests.test_b7b_recovery",
+          "outcomes": {
+            "passed": 13
+          },
+          "returncode": 0,
+          "seconds": 0.753,
+          "tests": 13
+        },
+        {
+          "checks": {
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_interleaved_observations": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_take_and_release_reply_interleavings": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_L4_never_launch_predicates": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_L6_live_handoff": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_unknown_cleanup_keeps_both_holds": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M6_autonomous_retirement": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M8_submit_refused_compensates": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_retired_tombstones_rotate_past_bound": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M3_close_and_takes_both_orders": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M4_sweeper_cannot_prune_memory_stopping_evidence": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M5_recovery_once_and_graceful_stop": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M7_registration_refusal_preserves_duty": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_live_memory_prevents_attempt_source_purge": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_registration_rollback_validator_and_status": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_status_memory_blocks_close_eligibility_and_has_holds": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_validator_refuses_missing_tracked_registration_hold": "passed"
+          },
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "passed": 16
+          },
+          "returncode": 0,
+          "seconds": 0.88,
+          "tests": 16
+        },
+        {
+          "module": "tests.test_holds_report",
+          "outcomes": {
+            "passed": 26
+          },
+          "returncode": 0,
+          "seconds": 0.993,
+          "tests": 26
+        },
+        {
+          "module": "tests.test_project_orchestration",
+          "outcomes": {
+            "passed": 38
+          },
+          "returncode": 0,
+          "seconds": 0.977,
+          "tests": 38
+        },
+        {
+          "module": "tests.test_lifetime_cap_guard",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 1.034,
+          "tests": 4
+        },
+        {
+          "module": "tests.test_project_holds_schema",
+          "outcomes": {
+            "passed": 40
+          },
+          "returncode": 0,
+          "seconds": 1.625,
+          "tests": 40
+        },
+        {
+          "checks": {
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_L4_L6_ten_refused_fences_handoff_detaches_real_lane_and_same_service_lists": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_L6_same_service_fences_handed_over_lease_once": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M1_writer_commit_waits_before_submit_and_retire_receipt_follows_actual_retire": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M5_graceful_stop_retires_rows_before_unlock": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M6_denied_closed_run_retires_without_another_client": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_faulted_writer_sends_one_memory_withdrawal": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_refused_registration_drops_entry_and_keeps_withdrawal_outbox": "passed"
+          },
+          "module": "tests.test_memory_holds_lane",
+          "outcomes": {
+            "passed": 7
+          },
+          "returncode": 0,
+          "seconds": 2.656,
+          "tests": 7
+        },
+        {
+          "module": "tests.test_rsf_s6_classify",
+          "outcomes": {
+            "passed": 7
+          },
+          "returncode": 0,
+          "seconds": 3.764,
+          "tests": 7
+        },
+        {
+          "checks": {
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_L7_handoff_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_transition_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M4_hung_and_missing_lock": "passed"
+          },
+          "module": "tests.test_memory_holds_crash",
+          "outcomes": {
+            "passed": 3
+          },
+          "returncode": 0,
+          "seconds": 4.91,
+          "tests": 3
+        },
+        {
+          "module": "tests.test_b6_unattended_close",
+          "outcomes": {
+            "passed": 41
+          },
+          "returncode": 0,
+          "seconds": 7.455,
+          "tests": 41
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-final-green",
+      "metadata_errors": [],
+      "seconds": 29.318,
+      "workers": [
+        {
+          "module": "tests.test_b7b_budgets#1",
+          "outcomes": {
+            "passed": 1
+          },
+          "returncode": 0,
+          "seconds": 0.435,
+          "tests": 1
+        },
+        {
+          "checks": {
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_interleaved_observations": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_take_and_release_reply_interleavings": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_L4_never_launch_predicates": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_L6_live_handoff": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_abandon_does_not_drop_entry_before_preparation_retirement": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_unknown_cleanup_keeps_both_holds": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M6_autonomous_retirement": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M8_submit_refused_compensates": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_retired_tombstones_rotate_past_bound": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M3_close_and_takes_both_orders": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M4_sweeper_cannot_prune_memory_stopping_evidence": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M5_recovery_once_and_graceful_stop": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M7_registration_refusal_preserves_duty": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_live_memory_prevents_attempt_source_purge": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_registration_rollback_validator_and_status": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_status_memory_blocks_close_eligibility_and_has_holds": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_validator_refuses_missing_tracked_registration_hold": "passed"
+          },
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "passed": 17
+          },
+          "returncode": 0,
+          "seconds": 0.7,
+          "tests": 17
+        },
+        {
+          "module": "tests.test_lifetime_cap_guard",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 0.799,
+          "tests": 4
+        },
+        {
+          "checks": {
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_L4_L6_ten_refused_fences_handoff_detaches_real_lane_and_same_service_lists": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_L6_same_service_fences_handed_over_lease_once": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M1_writer_commit_waits_before_submit_and_retire_receipt_follows_actual_retire": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M5_graceful_stop_retires_rows_before_unlock": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M6_denied_closed_run_retires_without_another_client": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_faulted_writer_sends_one_memory_withdrawal": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_refused_registration_drops_entry_and_keeps_withdrawal_outbox": "passed"
+          },
+          "module": "tests.test_memory_holds_lane",
+          "outcomes": {
+            "passed": 7
+          },
+          "returncode": 0,
+          "seconds": 2.401,
+          "tests": 7
+        },
+        {
+          "checks": {
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_L7_handoff_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_entry_deleted_before_release_record": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_transition_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M4_hung_and_missing_lock": "passed"
+          },
+          "module": "tests.test_memory_holds_crash",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 5.062,
+          "tests": 4
+        },
+        {
+          "module": "tests.test_b7b_budgets#0",
+          "outcomes": {
+            "passed": 1,
+            "skipped": 1
+          },
+          "returncode": 0,
+          "seconds": 29.314,
+          "tests": 2
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-final-verified",
+      "metadata_errors": [],
+      "seconds": 5.595,
+      "workers": [
+        {
+          "checks": {
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_interleaved_observations": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_take_and_release_reply_interleavings": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_L4_never_launch_predicates": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_L6_live_handoff": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_abandon_does_not_drop_entry_before_preparation_retirement": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_unknown_cleanup_keeps_both_holds": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M6_autonomous_retirement": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M8_submit_refused_compensates": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_existing_failed_view_oracle_remains_valid": "passed",
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_retired_tombstones_rotate_past_bound": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M3_close_and_takes_both_orders": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M4_sweeper_cannot_prune_memory_stopping_evidence": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M5_recovery_once_and_graceful_stop": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_M7_registration_refusal_preserves_duty": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_live_memory_prevents_attempt_source_purge": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_registration_rollback_validator_and_status": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_status_memory_blocks_close_eligibility_and_has_holds": "passed",
+            "codex:tests.test_memory_holds.MemoryHoldTests.test_validator_refuses_missing_tracked_registration_hold": "passed"
+          },
+          "module": "tests.test_memory_holds",
+          "outcomes": {
+            "passed": 18
+          },
+          "returncode": 0,
+          "seconds": 0.7,
+          "tests": 18
+        },
+        {
+          "module": "tests.test_lifetime_cap_guard",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 0.802,
+          "tests": 4
+        },
+        {
+          "checks": {
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_L4_L6_ten_refused_fences_handoff_detaches_real_lane_and_same_service_lists": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_L6_same_service_fences_handed_over_lease_once": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M1_writer_commit_waits_before_submit_and_retire_receipt_follows_actual_retire": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M5_graceful_stop_retires_rows_before_unlock": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M6_denied_closed_run_retires_without_another_client": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_faulted_writer_sends_one_memory_withdrawal": "passed",
+            "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_refused_registration_drops_entry_and_keeps_withdrawal_outbox": "passed"
+          },
+          "module": "tests.test_memory_holds_lane",
+          "outcomes": {
+            "passed": 7
+          },
+          "returncode": 0,
+          "seconds": 3.124,
+          "tests": 7
+        },
+        {
+          "checks": {
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_L7_handoff_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_entry_deleted_before_release_record": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_transition_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M4_hung_and_missing_lock": "passed"
+          },
+          "module": "tests.test_memory_holds_crash",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 5.474,
+          "tests": 4
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-crash-gated",
+      "metadata_errors": [],
+      "seconds": 4.859,
+      "workers": [
+        {
+          "checks": {
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_L7_handoff_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_entry_deleted_before_release_record": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_transition_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M4_hung_and_missing_lock": "passed"
+          },
+          "module": "tests.test_memory_holds_crash",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 4.744,
+          "tests": 4
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-crash-successor",
+      "metadata_errors": [],
+      "seconds": 5.172,
+      "workers": [
+        {
+          "checks": {
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_L7_handoff_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_entry_deleted_before_release_record": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_transition_kills": "passed",
+            "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M4_hung_and_missing_lock": "passed"
+          },
+          "module": "tests.test_memory_holds_crash",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 5.061,
+          "tests": 4
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-copiers-final",
+      "metadata_errors": [],
+      "seconds": 50.427,
+      "workers": [
+        {
+          "module": "tests.test_large_project_backups#1",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 9.111,
+          "tests": 4
+        },
+        {
+          "module": "tests.test_run_holds#1",
+          "outcomes": {
+            "passed": 35
+          },
+          "returncode": 0,
+          "seconds": 18.168,
+          "tests": 35
+        },
+        {
+          "module": "tests.test_run_holds#0",
+          "outcomes": {
+            "passed": 36
+          },
+          "returncode": 0,
+          "seconds": 19.005,
+          "tests": 36
+        },
+        {
+          "module": "tests.test_large_project_backups#0",
+          "outcomes": {
+            "passed": 4
+          },
+          "returncode": 0,
+          "seconds": 23.325,
+          "tests": 4
+        },
+        {
+          "module": "tests.test_owner_backup_streamed#1",
+          "outcomes": {
+            "passed": 20
+          },
+          "returncode": 0,
+          "seconds": 18.402,
+          "tests": 20
+        },
+        {
+          "module": "tests.test_owner_backup_streamed#0",
+          "outcomes": {
+            "passed": 20
+          },
+          "returncode": 0,
+          "seconds": 10.546,
+          "tests": 20
+        },
+        {
+          "failed_tests": [
+            "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself"
+          ],
+          "module": "tests.test_learning_migration#0",
+          "outcomes": {
+            "failed": 1,
+            "passed": 5
+          },
+          "returncode": 1,
+          "seconds": 4.532,
+          "tests": 6
+        },
+        {
+          "module": "tests.test_b7b_budgets#1",
+          "outcomes": {
+            "passed": 1
+          },
+          "returncode": 0,
+          "seconds": 0.393,
+          "tests": 1
+        },
+        {
+          "module": "tests.test_reply_shape_compatibility",
+          "outcomes": {
+            "passed": 3
+          },
+          "returncode": 0,
+          "seconds": 0.177,
+          "tests": 3
+        },
+        {
+          "module": "tests.test_learning_source_transfer",
+          "outcomes": {
+            "passed": 13
+          },
+          "returncode": 0,
+          "seconds": 4.784,
+          "tests": 13
+        },
+        {
+          "module": "tests.test_learning_source_image_legacy",
+          "outcomes": {
+            "passed": 7
+          },
+          "returncode": 0,
+          "seconds": 2.577,
+          "tests": 7
+        },
+        {
+          "failed_tests": [
+            "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back"
+          ],
+          "module": "tests.test_learning_migration#1",
+          "outcomes": {
+            "failed": 1,
+            "passed": 10
+          },
+          "returncode": 1,
+          "seconds": 12.807,
+          "tests": 11
+        },
+        {
+          "module": "tests.test_backup_reply_private",
+          "outcomes": {
+            "passed": 11
+          },
+          "returncode": 0,
+          "seconds": 4.067,
+          "tests": 11
+        },
+        {
+          "module": "tests.test_account_observation_schema",
+          "outcomes": {
+            "passed": 7
+          },
+          "returncode": 0,
+          "seconds": 1.919,
+          "tests": 7
+        },
+        {
+          "module": "tests.test_backup_installed_project",
+          "outcomes": {
+            "passed": 2
+          },
+          "returncode": 0,
+          "seconds": 0.846,
+          "tests": 2
+        },
+        {
+          "module": "tests.test_cleanup_contracts",
+          "outcomes": {
+            "passed": 5
+          },
+          "returncode": 0,
+          "seconds": 2.935,
+          "tests": 5
+        },
+        {
+          "module": "tests.test_history_service_upgrade",
+          "outcomes": {
+            "passed": 30
+          },
+          "returncode": 0,
+          "seconds": 0.653,
+          "tests": 30
+        },
+        {
+          "module": "tests.test_learning_source_image",
+          "outcomes": {
+            "passed": 33
+          },
+          "returncode": 0,
+          "seconds": 2.918,
+          "tests": 33
+        },
+        {
+          "module": "tests.test_account_open_schema",
+          "outcomes": {
+            "passed": 10
+          },
+          "returncode": 0,
+          "seconds": 0.657,
+          "tests": 10
+        },
+        {
+          "module": "tests.test_refusal_steps",
+          "outcomes": {
+            "passed": 14
+          },
+          "returncode": 0,
+          "seconds": 0.353,
+          "tests": 14
+        },
+        {
+          "module": "tests.test_learning_chunk_upgrade",
+          "outcomes": {
+            "passed": 5
+          },
+          "returncode": 0,
+          "seconds": 0.292,
+          "tests": 5
+        },
+        {
+          "module": "tests.test_account_cleanup_schema",
+          "outcomes": {
+            "passed": 3
+          },
+          "returncode": 0,
+          "seconds": 0.463,
+          "tests": 3
+        },
+        {
+          "failed_tests": [
+            "codex:tests.test_b7b_budgets.BudgetMeasurements.test_measured_budgets_report_numbers_without_relabelling_failures"
+          ],
+          "module": "tests.test_b7b_budgets#0",
+          "outcomes": {
+            "failed": 1,
+            "passed": 1
+          },
+          "returncode": 1,
+          "seconds": 31.415,
+          "tests": 2
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-base-workers",
+      "metadata_errors": [],
+      "seconds": 11.087,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_result_lease_lane.ResultLeaseLaneTests.test_preclaim_lease_arm_claim_bind_then_actual_worker_result_persists"
+          ],
+          "module": "tests.test_result_lease_lane",
+          "outcomes": {
+            "error": 1,
+            "passed": 4
+          },
+          "returncode": 1,
+          "seconds": 1.603,
+          "tests": 5
+        },
+        {
+          "failed_tests": [
+            "codex:tests.test_result_persistence.ResultPersistenceTests.test_actual_client_usage_reaches_writer_without_model_usage_or_content",
+            "codex:tests.test_result_persistence.ResultPersistenceTests.test_explicit_lost_commit_reply_retry_keeps_first_facts_body_and_retention",
+            "codex:tests.test_result_persistence.ResultPersistenceTests.test_full_sized_bytes_are_handed_off_without_owner_json_or_byte_copy",
+            "codex:tests.test_result_persistence.ResultPersistenceTests.test_original_prelaunch_assignment_and_actual_return_reach_one_writer",
+            "codex:tests.test_result_persistence.ResultPersistenceTests.test_slow_database_does_not_block_control_cancellation_or_second_result_intake",
+            "codex:tests.test_result_persistence.ResultPersistenceTests.test_validator_reason_survives_commit_without_rejected_answer_or_reasoning"
+          ],
+          "module": "tests.test_result_persistence",
+          "outcomes": {
+            "failed": 6,
+            "passed": 19
+          },
+          "returncode": 1,
+          "seconds": 11.079,
+          "tests": 25
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-base-journal",
+      "metadata_errors": [],
+      "seconds": 21.782,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_a_child_and_watchdog_that_are_both_gone_are_gone",
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_a_descendant_left_in_the_childs_process_group_keeps_it_alive",
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_a_descendant_that_left_the_group_but_not_the_session_keeps_it_alive",
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_a_detached_process_carrying_the_runs_marker_keeps_it_from_settling",
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_a_pid_reused_by_an_unrelated_process_is_never_taken_for_the_child",
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_a_setsid_escapee_whose_watchdog_never_confirmed_the_tree_is_never_settled",
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_a_watchdog_that_confirms_its_tracked_tree_lets_the_run_settle",
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_sessions_of_other_users_processes_can_be_read",
+            "codex:tests.test_launch_journal.LaunchJournalTests.test_the_kernel_checks_must_come_back_empty_twice"
+          ],
+          "module": "tests.test_launch_journal",
+          "outcomes": {
+            "failed": 9,
+            "passed": 31
+          },
+          "returncode": 1,
+          "seconds": 21.774,
+          "tests": 40
+        }
+      ]
+    },
+    {
+      "label": "rsb-memory-base-migration",
+      "metadata_errors": [],
+      "seconds": 12.385,
+      "workers": [
+        {
+          "failed_tests": [
+            "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself"
+          ],
+          "module": "tests.test_learning_migration#0",
+          "outcomes": {
+            "failed": 1,
+            "passed": 5
+          },
+          "returncode": 1,
+          "seconds": 4.904,
+          "tests": 6
+        },
+        {
+          "failed_tests": [
+            "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back"
+          ],
+          "module": "tests.test_learning_migration#1",
+          "outcomes": {
+            "failed": 1,
+            "passed": 10
+          },
+          "returncode": 1,
+          "seconds": 12.378,
+          "tests": 11
+        }
+      ]
+    }
+  ],
+  "version": "0.8.62",
+  "wider_budgets": {
+    "B1": "unmeasured",
+    "B6": "unmeasured"
+  }
+}

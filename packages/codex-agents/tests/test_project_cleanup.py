@@ -128,6 +128,40 @@ class ProjectCleanupReservationTests(unittest.TestCase):
         self.assertEqual(0, self.count())
         self.assertEqual(legacy, self.store.reserve_result_lease(fixtures.lease_binding(), assignment()))
 
+    def test_O10_D3_a_never_admitted_leases_cleanup_slot_is_purged_once_the_lease_is_released(self):
+        """O10 D3: a lease that was never admitted (withdrawn unsent, or unarmed past its time) can never
+        have an account release, so the purge waited for ever and its cleanup row counted against
+        MAX_CLEANUP_RESERVATIONS for good. Once released and past the purge grace, it goes."""
+        from codex_agents.project_history import RESULT_PURGE_GRACE_MS
+        with mock.patch.object(project_cleanup, 'MAX_CLEANUP_RESERVATIONS', 2):
+            self.base.reserve(1)
+            self.store.arm_result_lease(fixtures.lease_binding(1))
+            self.store.release_unsent_result_lease(fixtures.lease_binding(1))  # withdrawn before any claim
+            self.base.reserve(2)
+            self.base.fixture.now = 61_000
+            self.assertEqual(1, self.store.expire_result_leases())  # unarmed, past its time
+            with self.assertRaisesRegex(HistoryError, 'history_result_capacity'):
+                self.base.reserve(3)
+            self.assertEqual(2, self.count())
+            self.base.fixture.now = 61_001 + RESULT_PURGE_GRACE_MS
+            owner = type(self.store._orchestration_owner())
+            with mock.patch.object(owner, 'closed_for', return_value=True):
+                self.assertEqual(2, self.store._purge_finished_results(self.base.fixture.now, 10))
+            self.assertEqual(0, self.count())
+            self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM result_leases').fetchone()[0])
+            self.assertEqual('reserved', self.base.reserve(3).state)  # the slot is free again
+        self.assertEqual(1, self.count())
+
+    def test_O10_D3_a_released_lease_whose_cleanup_row_does_not_verify_is_kept(self):
+        from codex_agents.project_history import RESULT_PURGE_GRACE_MS
+        self.base.reserve(1)
+        self.store.release_unsent_result_lease(fixtures.lease_binding(1))
+        self.store._connection.execute("UPDATE project_cleanup_reservations SET state_digest='" + 'f' * 64 + "'")
+        self.base.fixture.now = 61_001 + RESULT_PURGE_GRACE_MS
+        with mock.patch.object(type(self.store._orchestration_owner()), 'closed_for', return_value=True):
+            self.assertEqual(0, self.store._purge_finished_results(self.base.fixture.now, 10))
+        self.assertEqual(1, self.count())
+
 
 if __name__ == '__main__':
     unittest.main()

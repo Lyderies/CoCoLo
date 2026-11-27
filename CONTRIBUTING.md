@@ -11,6 +11,12 @@ public issue.
 - `feature/<name>` branches come off the current version branch and merge back into it once their checks
   and any required review pass.
 - The owner merges a version branch into `main` after the full regression run and CI pass.
+- `main` is protected by a ruleset: changes only through pull requests, one approving review (admins
+  may bypass), every review conversation resolved, the branch up to date with `main`, and these checks
+  passing: `checks`, `unit (ubuntu-latest)`, `unit (macos-latest)` and `integration (1)` to
+  `integration (6)`. No force push and no deletion. Release tags (`v*`) cannot be moved or deleted.
+  Changing the number of integration shards in `.github/workflows/ci.yml` means changing the
+  ruleset's required checks too.
 - `planning` is a separate branch, with no shared history, for plans, design working documents and
   research. See [Planning material](#planning-material).
 
@@ -25,13 +31,23 @@ ruff check .
 python3 scripts/parallel_tests.py            # all three suites, in parallel
 ```
 
-`parallel_tests.py` runs the three suites (the repository root, `packages/codex-agents` and
-`packages/claude-agents`) split into units across your cores, and prints one summary; a failed unit's
-log tail is shown. Run them one after another only to debug, since that takes over half an hour.
-While working, run only the modules you touched, for example
-`python3 scripts/parallel_tests.py --module codex:tests.test_bridge --module root:test_install`.
+CI runs the identifier guard and Ruff, then the tests by stage: a pull request runs the unit tests on
+Linux and macOS and the integration tests on Linux; `main`, tags and a nightly run add the end-to-end
+tests on both systems and the integration tests on macOS. The integration tests run in six shards,
+balanced by `scripts/test-timings.json`, each at half the runner's cores
+(`parallel_tests.py --shard K/6`). Measured on GitHub's runners (November 2026), a pull request's
+checks take about 4 minutes, its slowest shard about 2 to 5 minutes. A failing shard uploads its failed
+units' logs as an artifact for 7 days.
 
-CI runs the identifier guard, Ruff and all three suites on Linux and macOS.
+`python3 -B scripts/parallel_tests.py` runs all three suites in parallel and prints one summary; a
+failed unit's log tail is shown. Never run them one after another except to debug: that takes over half
+an hour. Every test module has a stage in `scripts/test-stages.json`: `unit` (no process, socket or
+sleep; a unit test that does one fails), `integration` (real services, children, sockets, git,
+sandboxes) or `e2e` (the setup wizard and the installer run as programs). `--stage unit` runs only the
+unit tests, in seconds. While working, run only the modules you touched, for example
+`python3 scripts/parallel_tests.py --module codex:tests.test_bridge --module root:test_install`. A new
+module needs a stage; `python3 scripts/measure_test_behaviour.py` measures what each module does and
+proposes one.
 
 - Every runtime change needs a Codex package version bump and an entry in
   `packages/codex-agents/runtime-releases.json`.
@@ -41,6 +57,9 @@ CI runs the identifier guard, Ruff and all three suites on Linux and macOS.
 - Before opening a release pull request from `version/*` to `main`, try that release on a real
   install from its `version/*` branch. Record what ran and its results; unit tests and a disposable
   install alone do not satisfy this release gate.
+- The release-end gate also runs the release-gate replays (soak layer, not in local full runs):
+  `python -B scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live`
+  (see TESTING-framework.md).
 
 ## No identifiers
 
@@ -48,8 +67,11 @@ This repository is public. Never commit personal names, email addresses, hostnam
 machine pins, and keep run records and ledgers out of it (they live in `~/.local/state/codex-agents`).
 Commit with a GitHub `noreply` address.
 
-`scripts/check_identifiers.py` scans tracked files, and the pre-commit hook scans staged content and your
-commit identity. Findings report only a category, path and line, never the matched text. Terms specific
+`scripts/check_identifiers.py` scans the files git lists (tracked files, plus untracked files no `.gitignore`
+ignores), and the pre-commit hook scans staged content and your commit identity. Operational QA scans the same
+list through `scripts/qa-security.template`. Findings report only a category, path and line, never the matched
+text; a file name that holds a value prints as `[redacted]`, and a file the scan cannot read is a refusal, never a skip. Only exact placeholder accounts such as `/Users/x`
+are allowed. Terms specific
 to you can go in a private denylist outside the repository, one per line:
 `~/.config/codex-claude-agent-orchestration/identifier-denylist.txt`, or the file `$AO_IDENTIFIER_DENYLIST`
 names.

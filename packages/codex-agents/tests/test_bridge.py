@@ -22,6 +22,9 @@ from copy import deepcopy
 from pathlib import Path
 from unittest import mock
 
+# Subprocess fixtures import this module outside the parallel runner.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))
+
 from tests.support import FIXTURES_ROOT, ORCHESTRATION_ROOT, TEMP_ROOT
 from tests.service_harness import ServiceHarness
 
@@ -39,7 +42,7 @@ from codex_agents.learning_adapters import load_client_capabilities
 from codex_agents.learning_contracts import (
     DISPATCH_RESULT_V3_FIELDS,
     canonical_json,
-    content_digest,
+    content_digest, route_identity,
     validate_learning_record,
 )
 from codex_agents.learning_engine import installed_execution_configuration
@@ -96,18 +99,29 @@ def init_frame(**changes) -> dict:
     return {
         "type": "system", "subtype": "init", "session_id": "session-1",
         "apiKeySource": "none", "model": "claude-opus-5-5", "plugins": [],
-        "mcp_servers": [], "tools": ["Read", "Glob", "Grep"], **changes,
+        # Corrected for O10 VF (requirement): a client held to --json-schema also advertises its output tool.
+        # and reports its version (O10 VF-6: a schema-held run refuses an init with none).
+        "claude_code_version": "2.1.311",
+        "mcp_servers": [], "tools": ["StructuredOutput", "Read", "Glob", "Grep"], **changes,
     }
 
 
 def result_frame(text: str | None = None) -> dict:
+    text = text if text is not None else json.dumps(result())
+    try:
+        structured = json.loads(text)
+    except ValueError:
+        structured = None
+    # Corrected for O10 VF (requirement): under --json-schema the client gives the validated object as
+    # structured_output; text that is not one object gives none.
+    extra = {"structured_output": structured} if type(structured) is dict else {}
     return {
-        "type": "result", "subtype": "success", "is_error": False,
-        "result": text if text is not None else json.dumps(result()),
+        "type": "result", "subtype": "success", "is_error": False, **extra,
+        "result": text,
         "usage": {"input_tokens": 120, "output_tokens": 30,
                   "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
         "total_cost_usd": 0.42,
-        "permission_denials": [{"tool_name": "Read", "tool_input": {"file_path": "/x"}}],
+        "permission_denials": [],
     }
 
 
@@ -224,7 +238,7 @@ class BridgeTestCase(unittest.TestCase):
     def task(self) -> dict:
         return {
             "id": "task-1", "objective": "Read one fixture", "family": "research",
-            "complexity": "medium", "risk": "low", "meaningful": True,
+            "complexity": "medium", "risk": "high", "meaningful": True,
             **routing_fields(acceptance_strength="independent_judgment"),
             "deterministic_validation": False, "independent_parts": 1,
             "parallel_safe": False, "failed_attempts": 0, "failure_events": [],
@@ -370,8 +384,38 @@ class ClaudeBridgeTests(BridgeTestCase):
         report = output["bridge_report"]
         self.assertEqual(("result", None), (report["outcome"], report["terminal_state"]))
         self.assertEqual(0.42, report["usage"]["api_equivalent_cost_usd_estimate"])
-        self.assertEqual({"count": 1, "tools": ["Read"]}, report["permission_denials"])
-        self.assertNotIn("/x", json.dumps(output))
+        self.assertEqual({"count": 0, "tools": []}, report["permission_denials"])
+
+    def test_l6_1_a_tool_the_client_denied_stops_the_run_with_a_fixed_reason(self) -> None:
+        route, assigned, handle = self.claude_run()
+        frame = result_frame()
+        frame["permission_denials"] = [{"tool_name": "Write", "tool_input": {"file_path": "/PRIVATE-CANARY"}}]
+        self.frames("claude", [init_frame(), RATE_LIMIT, frame])
+        output = self.dispatch(route, assigned, handle)
+        report = output["bridge_report"]
+        self.assertEqual(("claude_tool_not_allowed", "failed"), (report["outcome"], report["terminal_state"]))
+        self.assertEqual({"count": 1, "tools": ["Write"]}, report["permission_denials"])
+        self.assertIn("claude_tool_not_allowed", output["result"]["summary"])
+        self.assertNotIn("PRIVATE-CANARY", json.dumps(output))
+
+    def test_l6_1_a_denial_once_seen_is_not_erased_by_a_later_clean_result(self) -> None:
+        route, assigned, handle = self.claude_run()
+        denied = result_frame()
+        denied["permission_denials"] = [{"tool_name": "Write", "tool_input": {}}]
+        self.frames("claude", [init_frame(), RATE_LIMIT, denied, result_frame()])
+        report = self.dispatch(route, assigned, handle)["bridge_report"]
+        self.assertEqual(("claude_tool_not_allowed", "failed"), (report["outcome"], report["terminal_state"]))
+        self.assertEqual({"count": 1, "tools": ["Write"]}, report["permission_denials"])
+
+    def test_l6_1_a_tool_name_that_is_not_a_known_client_tool_is_reported_as_other(self) -> None:
+        route, assigned, handle = self.claude_run()
+        frame = result_frame()
+        frame["permission_denials"] = [{"tool_name": "PRIVATE_CANARY_TOKEN", "tool_input": {}},
+                                       {"tool_name": "Bash", "tool_input": {}}]
+        self.frames("claude", [init_frame(), RATE_LIMIT, frame])
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual({"count": 2, "tools": ["Bash", "other"]}, output["bridge_report"]["permission_denials"])
+        self.assertNotIn("PRIVATE_CANARY_TOKEN", json.dumps(output))
 
     def test_run_is_contained_and_a_late_rejection_stops_it_and_blocks_until_reset(
         self,
@@ -472,7 +516,7 @@ class ClaudeBridgeTests(BridgeTestCase):
         cases = {
             "init_api_key_source": init_frame(apiKeySource="ANTHROPIC_API_KEY"),
             "init_model_mismatch": init_frame(model="claude-sonnet-5-5"),
-            "init_plugin_loaded": init_frame(plugins=[{"name": "cc-plugin-easel"}]),
+            "init_plugin_not_allowed": init_frame(plugins=[{"name": "cc-plugin-easel"}]),
             "init_mcp_server_loaded": init_frame(mcp_servers=[{"name": "x"}]),
             "init_tool_not_allowed": init_frame(tools=["Read", "Bash"]),
             "missing_init_frame": result_frame(),
@@ -513,7 +557,9 @@ class ClaudeBridgeTests(BridgeTestCase):
     def test_unparseable_output_fails_closed(self) -> None:
         for frames, reason in (
             ([init_frame(), {"raw": "not json"}], "unparseable_stream"),
-            ([init_frame(), result_frame("I could not finish.")], "unparseable_result"),
+            # Corrected for O10 VF-5 (requirement): text is never the result; without a structured
+            # output the run is invalid_result (structured_output_missing), checked in VF's own tests.
+            ([init_frame(), result_frame("I could not finish.")], "invalid_result"),
             ([init_frame()], "missing_result"),
             ([init_frame(), {**result_frame(), "is_error": True}], "child_reported_error"),
         ):
@@ -537,9 +583,9 @@ class ClaudeBridgeTests(BridgeTestCase):
         self.assertEqual([], self.workspace_entries())
 
     def test_client_change_before_launch_aborts(self) -> None:
-        # Admitted on 2.1.200; an upgrade inside the range still differs.
+        # Admitted on 2.1.311; an upgrade inside the range still differs.
         for version, message in (
-            ("2.1.201 (Claude Code)", "differs from the admitted client"),
+            ("2.1.312 (Claude Code)", "differs from the admitted client"),
             ("", "differs from the admitted client"),
             ("2.2.0 (Claude Code)", "differs from the admitted client"),
         ):
@@ -2338,6 +2384,7 @@ class BridgeCliLifecycleTests(ServiceHarness, CliTestCase):
             recorded["dispatch_diagnostics"]["client_diagnostics"],
         )
 
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_codex_primary_bridges_a_codex_child_through_the_cli(self) -> None:
         # A native Codex child would share the primary's session and command
         # rule, so a Codex primary dispatches its Codex children like Claude's.
@@ -2382,7 +2429,7 @@ class BridgeCliLifecycleTests(ServiceHarness, CliTestCase):
             "--result", self.write("made-up.json", made_up),
             "--observation", observation, expected=2,
         )
-        self.assertEqual("history_conflict", refused["reason_code"])
+        self.assertEqual("recheck_result_mismatch", refused["reason_code"])  # B2-5 (decision 92 A / 119 A): a body that is not the stored one has its own reason
         recorded = self.cli(
             "learning-record-host-result", *context,
             "--result", self.write("result.json", dispatched["result"]),
@@ -2553,7 +2600,8 @@ class BridgeLifecycleTests(CliTestCase):
         with self.assertRaisesRegex(LedgerError, "differs from the bridged child's result"):
             self.commit(
                 route, assigned, handle,
-                {**output["result"], "status": "failed", "execution_state": "timed_out"},
+                {**output["result"], "status": "failed", "execution_state": "timed_out",
+                 "semantic_verdict": "not-applicable"},
                 "timed_out",
             )
         self.commit(route, assigned, handle, output["result"])
@@ -2769,7 +2817,7 @@ class BridgeLifecycleTests(CliTestCase):
                     output = self.dispatch(route, assigned, handle)
                     if candidate["execution_state"] == "timed_out":
                         self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
-                        self.assertEqual("inconsistent_axes", output["bridge_report"]["result_validation_reason_code"])
+                        self.assertEqual("child_set_timeout", output["bridge_report"]["result_validation_reason_code"])
                     else:
                         expected_verdict = "not-applicable" if rerouted else candidate["semantic_verdict"]
                         self.assertEqual("result", output["bridge_report"]["outcome"])
@@ -2793,7 +2841,7 @@ class BridgeLifecycleTests(CliTestCase):
                     route = self.bridged_route(provider)
                     assigned = self.assignment_for(route)
                     handle = self.open(route, assigned)
-                    candidate = {**result(), "status": "blocked"}
+                    candidate = {**result(), "status": "blocked", "semantic_verdict": "blocked"}
                     if explicit_axes:
                         candidate.update(execution_state="completed", semantic_verdict="blocked",
                                          admission_state="unverified")
@@ -2871,11 +2919,15 @@ class BridgeLifecycleTests(CliTestCase):
 
     @parser_matrix_capacity
     def test_child_cannot_claim_host_admission_or_timeout(self) -> None:
-        for changes in (
-            {"admission_state": "accepted"},
-            {"admission_state": "rejected"},
-            {"admission_state": "pending"},
-            {"status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
+        # Owner decision 26 (VF-INV-d): this rejection holds for every role except a verifier, whose
+        # admission the host resets and records (VerifierHostSetFieldsDispatchTests, VerifierInvalidResultTests).
+        # A child's timeout claim is rejected for every role. Reason codes follow VF-INV-b.
+        for changes, reason in (
+            ({"admission_state": "accepted"}, "child_set_admission"),
+            ({"admission_state": "rejected"}, "child_set_admission"),
+            ({"admission_state": "pending"}, "child_set_admission"),
+            ({"status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
+             "child_set_timeout"),
         ):
             with self.subTest(changes=changes):
                 route, assigned, handle = self.claude_run()
@@ -2883,12 +2935,12 @@ class BridgeLifecycleTests(CliTestCase):
                 self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(invalid))])
                 output = self.dispatch(route, assigned, handle)
                 self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
-                self.assertEqual("inconsistent_axes", output["bridge_report"]["result_validation_reason_code"])
+                self.assertEqual(reason, output["bridge_report"]["result_validation_reason_code"])
                 self.assertEqual("failed", output["bridge_report"]["terminal_state"])
                 committed = self.commit(route, assigned, handle, output["result"], "failed")
                 self.assertFalse(committed["outcome"]["accepted"])
                 self.assertEqual(
-                    {"result_validation_reason_code": "inconsistent_axes",
+                    {"result_validation_reason_code": reason,
                      "client_diagnostics": output["bridge_report"]["client_diagnostics"]}, committed["dispatch_diagnostics"]
                 )
         with self.ledger.repository(self.project_id) as repository:
@@ -2953,11 +3005,13 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertFalse(committed["outcome"]["accepted"])
 
     def test_invalid_utf8_result_text_keeps_the_parse_failure_outcome(self) -> None:
+        # Corrected for O10 VF-5 (requirement): the text is no longer read, so text that cannot be
+        # parsed leaves no structured output, and the run is refused with that fixed reason.
         route, assigned, handle = self.claude_run()
         self.frames("claude", [init_frame(), RATE_LIMIT, result_frame("\ud800")])
         output = self.dispatch(route, assigned, handle)
-        self.assertEqual("unparseable_result", output["bridge_report"]["outcome"])
-        self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+        self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+        self.assertEqual("structured_output_missing", output["bridge_report"]["result_validation_reason_code"])
         committed = self.commit(route, assigned, handle, output["result"], "failed")
         self.assertFalse(committed["outcome"]["accepted"])
 
@@ -3237,6 +3291,12 @@ class ClaudePrimaryCase(ServiceHarness, CliTestCase):
         finally:
             self.ledger.close()
 
+    def bounded_codex_model(self) -> str:
+        """The model this branch's routing policy names for bounded coding work on Codex."""
+        policy = json.loads((ORCHESTRATION_ROOT / "config" / "routing-policy.json").read_text())
+        return next(candidate["model"] for candidate in policy["provider_candidates"]["coding"]["bounded"]
+                    if candidate["provider"] == "codex")
+
     def coding_task(self, **shape) -> dict:
         return {**self.task(), "family": "coding", **shape}
 
@@ -3293,7 +3353,7 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
         )
         bounded = self.cli("learning-route", "--task", self.write("b.json", self.bounded()))
         self.assertEqual(
-            ("codex", "bridge", "gpt-6.1-sol", "medium"),
+            ("codex", "bridge", self.bounded_codex_model(), "medium"),
             (bounded["provider"], bounded["dispatch"], bounded["model"], bounded["effort"]),
         )
         refused = self.cli(
@@ -3367,7 +3427,7 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
             context, opened["run_handle"], dispatched["result"],
             dispatched["bridge_report"]["terminal_state"], route_path,
         )
-        self.assertEqual("gpt-6.1-sol", recorded["outcome"]["model"])
+        self.assertEqual(self.bounded_codex_model(), recorded["outcome"]["model"])
 
 
     def test_provider_observe_shows_an_attested_credits_waiver(self) -> None:
@@ -3517,6 +3577,48 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
                 "paid_usage_usable", self.open_claude(expected=2)["reason_code"]
             )
 
+    def test_CI_3_each_init_reason_reaches_the_reply_and_survives_a_replay(self) -> None:
+        # Through the services: the worker's packet, the committed row, the CLI reply and a replay of it.
+        from codex_agents.billing_probe_contracts import PROBE_INIT_REASONS
+        from tests.test_claude_init_plugins import PRIVACY, builtin, frame_2_1_323
+        cases = {
+            "init_plugin_not_allowed": frame_2_1_323(plugins=[builtin("cc-plugin-sec-default")]),
+            "init_plugin_not_disabled": frame_2_1_323(plugins=[PRIVACY, builtin("cc-plugin-telemetry")]),
+            "init_api_key_source": frame_2_1_323(apiKeySource="ANTHROPIC_API_KEY"),
+            "init_model_mismatch": frame_2_1_323(model="claude-sonnet-5-5"),
+            "init_mcp_server_loaded": frame_2_1_323(mcp_servers=[{"name": "x"}]),
+            "init_tool_not_allowed": frame_2_1_323(tools=["Read"]),
+            "init_permission_mode_mismatch": frame_2_1_323(permissionMode="bypassPermissions"),
+            "init_additional_directories_present": frame_2_1_323(additional_directories=["/x"]),
+        }
+        self.assertEqual(PROBE_INIT_REASONS, set(cases))
+        for reason, init in cases.items():
+            with self.subTest(reason=reason):
+                self.setUp_fresh_project()
+                before = self.launches()
+                with self.stale_evidence():
+                    self.frames("claude", [init, RATE_LIMIT, result_frame("OK")])
+                    failed = self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)
+                    self.assertEqual(reason, failed["reason_code"])
+                    self.assertEqual(before + 1, self.launches())
+                    # The same request again reads the committed row: the same reason, no second launch.
+                    again = self.cli("provider-observe", "--provider", "claude", "--billing-probe",
+                                     "--request-id", failed["request_id"], expected=2)
+                self.assertEqual(reason, again["reason_code"])
+                self.assertEqual(before + 1, self.launches())
+
+    def test_CI_4_a_real_settings_probe_completes_and_a_replay_keeps_the_client_version(self) -> None:
+        from tests.test_claude_init_plugins import frame_2_1_323
+        self.admit("claude")
+        self.frames("claude", [frame_2_1_323(), FAVOURABLE, result_frame("OK")])
+        observed = self.cli("provider-observe", "--provider", "claude", "--billing-probe")
+        self.assertEqual(("launched", "2.1.323"), (observed["probe"], observed["client_version"]))
+        before = self.launches()
+        again = self.cli("provider-observe", "--provider", "claude", "--billing-probe",
+                         "--request-id", observed["request_id"])
+        self.assertEqual((True, "2.1.323"), (again["known"], again["client_version"]))
+        self.assertEqual(before, self.launches())
+
     def test_probe_is_admitted_like_a_run(self) -> None:
         # Without an owner attestation nothing is launched.
         self.ledger.observe_provider(
@@ -3577,6 +3679,62 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
         self.setUp_fresh_project(new_account=False)
         self.assertEqual("probe_cooldown", self.probe(FAVOURABLE, expected=2)["reason_code"])
         self.assertEqual(1, self.launches())
+
+    def test_D40_a_real_problem_during_the_cooldown_is_reported_before_probe_cooldown(self) -> None:
+        # Regression guard only: an API key is also stopped by check_backend before the ledger's 40 (a) ordering,
+        # and this CLI path is the account owner's. The ledger ordering is proved by test_M1a_ledger_*.
+        self.admit("claude")
+        self.frames("claude", [PROBE_INIT, result_frame("OK")])
+        self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "key"}):
+            self.assertEqual(
+                "provider_api_key_present", self.probe(FAVOURABLE, expected=2)["reason_code"]
+            )
+        self.assertEqual("probe_cooldown", self.probe(FAVOURABLE, expected=2)["reason_code"])
+
+    def test_H2_a_recent_paid_usage_record_is_refused_by_the_ledger_not_reused(self) -> None:
+        self.admit("claude")
+        with self.stale_evidence():
+            self.assertEqual("probe_incomplete", self.probe(OVERAGE, expected=2)["reason_code"])
+        before = self.launches()
+        with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
+            self.ledger.observe_claude_billing(self.project_id, project_root=self.tools, environ=CLEAN)
+        self.assertEqual(before, self.launches())
+
+    def test_M1a_ledger_paid_usage_during_a_cooldown_is_refused_paid_usage_usable(self) -> None:
+        self.admit("claude")
+        self.frames("claude", [PROBE_INIT, result_frame("OK")])
+        self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)  # no events: cooldown runs
+        before = self.launches()
+        # paid usage that is older than the reuse window but inside the cooldown (the probe started it)
+        from codex_agents.learning_store import PROBE_REUSE_SECONDS
+        old = time.time_ns() // 1_000_000 - (PROBE_REUSE_SECONDS + 100) * 1000
+        fingerprint = self.ledger.observe_provider(
+            self.project_id, "claude", project_root=self.tools, environ=CLEAN)[0]["account_fingerprint"]
+        records = claude_rate_limit_records(OVERAGE["rate_limit_info"], account_fingerprint=fingerprint,
+                                            observed_at_ms=old)
+        self.ledger._store_provider_observations(self.project_id, records, timestamp=old)
+        with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
+            self.ledger.observe_claude_billing(self.project_id, project_root=self.tools, environ=CLEAN)
+        self.assertEqual(before, self.launches())
+
+    def test_BR1_ledger_path_a_saved_reused_then_paid_usage_then_a_repeat_refuses(self) -> None:
+        # BR-1 (decision 44), LearningLedger path: a 'reused' answer is never trusted on its own; paid usage that
+        # arrives after it (stamped now, the same clock as the saved answer) refuses the repeat.
+        self.admit("claude")
+        self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
+        self.setUp_fresh_project(new_account=False)
+        self.assertEqual("reused", self.probe(FAVOURABLE)["probe"])
+        before = self.launches()
+        fingerprint = self.ledger.observe_provider(
+            self.project_id, "claude", project_root=self.tools, environ=CLEAN)[0]["account_fingerprint"]
+        now = time.time_ns() // 1_000_000
+        records = claude_rate_limit_records(OVERAGE["rate_limit_info"], account_fingerprint=fingerprint,
+                                            observed_at_ms=now)
+        self.ledger._store_provider_observations(self.project_id, records, timestamp=now)
+        with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
+            self.ledger.observe_claude_billing(self.project_id, project_root=self.tools, environ=CLEAN)
+        self.assertEqual(before, self.launches())
 
     def test_a_second_project_reuses_or_waits_instead_of_probing(self) -> None:
         self.admit("claude")
@@ -3665,7 +3823,7 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
         for flag in ("--client-version", "--host-client"):
             with self.subTest(flag=flag):
                 explicit = self.cli("learning-route", "--task", task, flag, "claude-host-v1")
-                self.assertEqual(implicit, explicit)
+                self.assertEqual(route_identity(implicit), route_identity(explicit))
         refused = self.cli(
             "learning-route", "--task", task, "--client-version", "codex-host-v1",
             expected=2,
@@ -4266,6 +4424,28 @@ class BridgedUsageTests(BridgeTestCase):
             "unavailable", committed["outcome"]["usage_sources"]["model_calls"]["source"]
         )
 
+    def test_a_bridged_run_with_its_token_counts_recorded_is_usage_complete(self) -> None:
+        # RT-8: `usage_complete` required all eight outcome usage fields, and a bridged child never reports
+        # model calls, tool calls, latency or cost, so no run was ever complete (242 of 242 unknown in the
+        # control project). A run whose provider reported its token counts is complete.
+        route, assigned, handle = self.claude_run()
+        frame = result_frame()
+        frame["usage"] = {"input_tokens": 120, "output_tokens": 30,
+                          "cache_read_input_tokens": 400, "cache_creation_input_tokens": 80}
+        self.frames("claude", [init_frame(), RATE_LIMIT, frame])
+        output = self.dispatch(route, assigned, handle)
+        self.ledger.commit_host_result(
+            self.project_id, assignment=assigned, task=self.task(), route=route,
+            result=output["result"],
+            observation={"run_handle": handle, "result_attempts": ACCEPTED},
+            execution_configuration=route["execution_configuration"],
+        )
+        complete = self.ledger._connection.execute(
+            "SELECT usage_complete FROM host_run_bindings WHERE project_id=? AND consumed_at_ms IS NOT NULL",
+            (self.project_id,)
+        ).fetchall()
+        self.assertEqual([(1,)], [tuple(row) for row in complete])
+
     def test_a_bridged_run_without_recorded_usage_stays_unknown(self) -> None:
         route, assigned, handle = self.claude_run(timeout_seconds=1)
         self.frames("claude", [init_frame(), {"sleep": 60}])
@@ -4282,6 +4462,336 @@ class BridgedUsageTests(BridgeTestCase):
             execution_configuration=route["execution_configuration"],
         )
         self.assertIsNone(committed["outcome"]["usage"]["input_tokens"])
+
+
+
+class RawAnswerKeptTests(BridgeTestCase):
+    """0.4.0 item 0.5 (VF-INV-a): a child's raw final answer outlives its private directory."""
+
+    def codex_run(self) -> tuple[dict, dict, str]:
+        self.admit("codex")
+        route = self.bridged_route("codex")
+        assigned = self.assignment_for(route)
+        return route, assigned, self.open(route, assigned)
+
+    def kept_files(self) -> list[Path]:
+        partition = self.state.artifacts / self.project_id
+        return sorted(partition.glob("child_answer_*.json")) if partition.exists() else []
+
+    def answer(self, value) -> None:
+        self.frames("codex", [{"type": "turn.completed", "usage": {}}])
+        text = value if isinstance(value, str) else json.dumps(null_filled(value))
+        (self.tools / "codex-last-message.json").write_text(text)
+
+    def test_an_invalid_codex_answer_is_kept_owner_only_with_its_digest(self) -> None:
+        import hashlib
+        import stat
+
+        route, assigned, handle = self.codex_run()
+        self.answer({**result(), "admission_state": "accepted"})
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+        self.assertEqual([], self.workspace_entries())
+        (path,) = self.kept_files()
+        raw = path.read_bytes()
+        kept = output["bridge_report"]["raw_answer"]
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), kept["sha256"])
+        self.assertEqual((len(raw), False), (kept["bytes"], kept["truncated"]))
+        self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE(path.parent.stat().st_mode))
+        # The child's own claim stays readable there, though the result was fenced.
+        self.assertEqual("accepted", json.loads(raw)["admission_state"])
+        with self.ledger._held():
+            row = self.ledger._connection.execute(
+                "SELECT content_digest FROM stored_files WHERE project_id=? AND file_id=?",
+                (self.project_id, path.stem)).fetchone()
+        self.assertEqual(kept["sha256"], row["content_digest"])
+
+    def test_a_valid_result_is_kept_too_and_never_readable_by_others(self) -> None:
+        import stat
+
+        route, assigned, handle = self.codex_run()
+        self.answer(result())
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual("result", output["bridge_report"]["outcome"])
+        (path,) = self.kept_files()
+        self.assertEqual(0, stat.S_IMODE(path.stat().st_mode) & 0o077)
+        self.assertEqual(0, stat.S_IMODE(path.parent.stat().st_mode) & 0o077)
+        self.assertEqual(path.stem.removeprefix("child_answer_"), output["bridge_report"]["raw_answer"]["sha256"][:40])
+
+    def test_an_over_cap_answer_is_truncated_with_a_flag_not_skipped(self) -> None:
+        route, assigned, handle = self.codex_run()
+        self.answer(json.dumps({"filler": "x" * 600}))
+        with mock.patch.object(bridge, "MAX_RESULT_BYTES", 200):
+            output = self.dispatch(route, assigned, handle)
+        self.assertEqual("unparseable_result", output["bridge_report"]["outcome"])
+        kept = output["bridge_report"]["raw_answer"]
+        self.assertEqual((True, 200), (kept["truncated"], kept["bytes"]))
+        (path,) = self.kept_files()
+        self.assertEqual(200, len(path.read_bytes()))
+
+    def test_an_unparseable_answer_is_kept(self) -> None:
+        route, assigned, handle = self.codex_run()
+        self.answer("this is not json")
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual("unparseable_result", output["bridge_report"]["outcome"])
+        (path,) = self.kept_files()
+        self.assertEqual(b"this is not json", path.read_bytes())
+
+    def test_a_claude_structured_output_is_kept(self) -> None:
+        route, assigned, handle = self.claude_run()
+        invalid = {**result(), "admission_state": "rejected"}
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(invalid))])
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+        (path,) = self.kept_files()
+        self.assertEqual("rejected", json.loads(path.read_bytes())["admission_state"])
+        self.assertEqual([], self.workspace_entries())
+        self.assertEqual(path.read_bytes().__len__(), output["bridge_report"]["raw_answer"]["bytes"])
+
+    def test_a_run_with_no_answer_keeps_nothing_and_says_so(self) -> None:
+        route, assigned, handle = self.codex_run()
+        self.frames("codex", [{"type": "turn.completed", "usage": {}}])
+        (self.tools / "codex-last-message.json").unlink(missing_ok=True)
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual([], self.kept_files())
+        self.assertIsNone(output["bridge_report"]["raw_answer"])
+
+    def test_a_kept_answer_never_holds_a_secret(self) -> None:
+        route, assigned, handle = self.codex_run()
+        secrets = ["sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX", "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+                   "Bearer abcdefghijklmnopqrstuvwxyz012345", "AKIAABCDEFGHIJKLMNOP",
+                   "hunter2-very-secret-value"]
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE KEY-----"
+        invalid = {**result(), "admission_state": "accepted",
+                   "summary": " ".join(secrets) + " " + pem + ' "password": "swordfish-long"'}
+        self.answer(invalid)
+        output = self.dispatch(route, assigned, handle, environ={"DEPLOY_TOKEN": "hunter2-very-secret-value"})
+        text = self.kept_files()[0].read_text()
+        for secret in [*secrets, "MIIEvQIBADANBgkq", "swordfish-long"]:
+            self.assertNotIn(secret, text)
+        self.assertIn("[removed]", text)
+        self.assertTrue(output["bridge_report"]["raw_answer"]["scrubbed"])
+        # The stored text is still the child's JSON, with its claim intact.
+        self.assertEqual("accepted", json.loads(text)["admission_state"])
+
+    def test_a_non_ascii_secret_in_a_claude_answer_is_not_kept(self) -> None:
+        # Review r2 LOW: the structured answer is re-serialized for keeping; an escaped (\\u00e4) form
+        # of a non-ASCII secret value must not slip past the scrub.
+        route, assigned, handle = self.claude_run()
+        canary = "p\u00e4ssw\u00f6rd-\u20ac-geheim-wert"
+        invalid = {**result(), "admission_state": "rejected", "summary": f"the value is {canary}"}
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(invalid))])
+        output = self.dispatch(route, assigned, handle, environ={"DEPLOY_TOKEN": canary})
+        (path,) = self.kept_files()
+        text = path.read_text()
+        self.assertNotIn(canary, text)
+        self.assertNotIn(json.dumps(canary)[1:-1], text)
+        self.assertNotIn("geheim", text)
+        self.assertTrue(output["bridge_report"]["raw_answer"]["scrubbed"])
+
+    def test_a_secret_straddling_the_cut_is_scrubbed_before_the_answer_is_cut(self) -> None:
+        # Review r2 LOW: cutting first would leave the first ten characters of this token.
+        route, assigned, handle = self.codex_run()
+        self.answer("y" * 189 + " ghp_abcdefghijklmnopqrstuvwxyz0123456789 " + "z" * 300)
+        with mock.patch.object(bridge, "MAX_RESULT_BYTES", 200):
+            output = self.dispatch(route, assigned, handle)
+        (path,) = self.kept_files()
+        text = path.read_text()
+        self.assertNotIn("ghp_", text)
+        self.assertLessEqual(len(text.encode()), 200)
+        self.assertTrue(output["bridge_report"]["raw_answer"]["truncated"])
+
+    def test_a_failed_keep_is_recorded_and_never_changes_the_outcome(self) -> None:
+        # Review r2 LOW: a database error from the keep is the same best-effort failure.
+        import sqlite3
+
+        for error in (sqlite3.OperationalError("database is locked"), LedgerError("no room")):
+            with self.subTest(error=type(error).__name__):
+                route, assigned, handle = self.codex_run()
+                self.answer({**result(), "admission_state": "accepted"})
+                with mock.patch.object(self.ledger, "keep_child_answer", side_effect=error):
+                    output = self.dispatch(route, assigned, handle)
+                self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+                self.assertEqual({"kept": False, "reason": "keep_failed"}, output["bridge_report"]["raw_answer"])
+                self.assertEqual([], self.kept_files())
+
+    def test_a_kept_answer_expires_with_the_worker_result_retention(self) -> None:
+        route, assigned, handle = self.codex_run()
+        self.answer(result())
+        self.dispatch(route, assigned, handle)
+        (path,) = self.kept_files()
+        later = (learning_store.WORKER_RESULT_RETENTION_MS // 1000 + 60) * 1000
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=self.ledger._clock_ms() + later):
+            self.assertGreaterEqual(self.ledger.sweep_worker_results(), 1)
+        self.assertFalse(path.exists())
+
+
+class CodexCommandCountTests(BridgeTestCase):
+    """0.4.0 item 0.5 (VF-INV-e): Codex turns and commands are counted and the call limit is enforced."""
+
+    def codex_run(self, *, limit: int | None = None) -> tuple[dict, dict, str]:
+        self.admit("codex")
+        route = self.bridged_route("codex")
+        assigned = self.assignment_for(route)
+        if limit is not None:
+            assigned["bounds"]["max_tool_calls"] = limit
+        return route, assigned, self.open(route, assigned)
+
+    def commands(self, count: int, *, with_ids: bool = True) -> list[dict]:
+        frames = [{"type": "thread.started", "thread_id": "t1"}, {"type": "turn.started"}]
+        for number in range(count):
+            item = {"type": "command_execution", **({"id": f"cmd-{number}"} if with_ids else {})}
+            frames += [{"type": "item.started", "item": item}, {"type": "item.completed", "item": item}]
+        return frames
+
+    def test_turns_commands_and_peak_input_are_recorded(self) -> None:
+        route, assigned, handle = self.codex_run()
+        self.frames("codex", [*self.commands(3), {"type": "turn.completed", "usage": {"input_tokens": 100}},
+                              {"type": "turn.started"}, {"type": "turn.completed", "usage": {"input_tokens": 250}}])
+        (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(result())))
+        report = self.dispatch(route, assigned, handle)["bridge_report"]
+        self.assertEqual("result", report["outcome"])
+        self.assertEqual((3, 2, 250), (report["codex_commands"], report["codex_turns"],
+                                       report["peak_turn_input_tokens"]))
+
+    def test_commands_without_ids_and_completion_only_streams_are_counted_once(self) -> None:
+        route, assigned, handle = self.codex_run()
+        self.frames("codex", [*self.commands(2, with_ids=False),
+                              {"type": "item.completed", "item": {"type": "command_execution", "id": "late"}},
+                              {"type": "turn.completed", "usage": {}}])
+        (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(result())))
+        self.assertEqual(3, self.dispatch(route, assigned, handle)["bridge_report"]["codex_commands"])
+
+    def test_a_run_over_the_call_limit_stops_with_a_fixed_reason_and_a_recordable_result(self) -> None:
+        route, assigned, handle = self.codex_run(limit=2)
+        self.frames("codex", [*self.commands(3), {"type": "turn.completed", "usage": {}}])
+        (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(result())))
+        output = self.dispatch(route, assigned, handle)
+        report = output["bridge_report"]
+        self.assertEqual("tool_call_limit_exceeded", report["outcome"])
+        self.assertEqual(("failed", 2), (report["terminal_state"], report["effective_bounds"]["command_limit"]))
+        self.assertEqual("failed", output["result"]["execution_state"])
+        self.assertEqual(3, report["codex_commands"])
+        with self.ledger.repository(self.project_id) as repository:
+            (record,) = repository.records("dispatch_result")
+        self.assertEqual(("failed", True), (record["terminal_state"], record["fenced"]))
+
+    def test_a_run_at_the_limit_is_unchanged(self) -> None:
+        route, assigned, handle = self.codex_run(limit=3)
+        self.frames("codex", [*self.commands(3), {"type": "turn.completed", "usage": {}}])
+        (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(result())))
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual("result", output["bridge_report"]["outcome"])
+        self.assertEqual(result(), output["result"])
+
+    def test_a_run_with_no_bounds_anywhere_completes_and_reports_that_no_limit_applied(self) -> None:
+        # Review r2 MED: the limit was 0 when neither route nor assignment named one, so the first
+        # command stopped the run as tool_call_limit_exceeded.
+        route = {"model": "gpt-6-astra", "effort": "high"}
+        assigned = assignment()
+        assigned["bounds"].pop("max_tool_calls")
+        self.assertIsNone(bridge._command_limit(route, assigned))
+        frames = [*self.commands(4), {"type": "turn.completed", "usage": {"input_tokens": 9}}]
+
+        def child(arguments, *, on_frame, **_):
+            try:
+                for frame in frames:
+                    on_frame(frame)
+            except bridge._Abort as stop:
+                return {"returncode": None, "abort": stop.reason}
+            Path(arguments[arguments.index("-o") + 1]).write_text(json.dumps(null_filled(result())))
+            return {"returncode": 0, "abort": None}
+
+        # A validated assignment always carries its bound, so the prompt (which needs one) is stubbed.
+        with mock.patch.object(bridge, "run_child", side_effect=child), \
+                mock.patch.object(bridge, "child_prompt", return_value="Read only."):
+            _, report = bridge.run_codex(
+                ledger=object(), project_id=self.project_id, route=route, assignment=assigned,
+                role_prompt="Read only.", schema=RESULT_SCHEMA, export=self.tools, control=self.tools,
+                environ={"PATH": os.defpath}, deadline_seconds=5, executable="/usr/bin/false")
+        self.assertEqual("result", report["outcome"])
+        self.assertEqual(4, report["codex_commands"])
+        self.assertIsNone(report["command_limit"])
+
+    def test_claude_runs_report_no_codex_counts_and_no_command_limit(self) -> None:
+        route, assigned, handle = self.claude_run()
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame()])
+        report = self.dispatch(route, assigned, handle)["bridge_report"]
+        self.assertNotIn("codex_commands", report)
+        self.assertIsNone(report["effective_bounds"]["command_limit"])
+
+
+class VerifierHostSetFieldsDispatchTests(BridgeTestCase):
+    """0.4.0 item 0.5 (VF-INV-c, -d; owner decision 26) through `dispatch`, for both providers.
+
+    The fixture route cannot open a verification-role run (that needs a recorded worker result), so
+    the role test is patched to say verifier; which roles count is tested in test_result_diagnostics.
+    """
+
+    def as_verifier(self, is_verifier: bool = True):
+        return mock.patch.object(bridge, "_is_verification_assignment", return_value=is_verifier)
+
+    def schema_seen(self, provider: str, route: dict, assigned: dict, handle: str) -> dict:
+        runner = "run_claude" if provider == "claude" else "run_codex"
+        with mock.patch.object(bridge, runner, wraps=getattr(bridge, runner)) as spy:
+            self.dispatch(route, assigned, handle)
+        return json.loads(spy.call_args.kwargs["schema"])
+
+    def test_both_providers_hand_a_verifier_the_narrowed_schema_and_a_worker_the_plain_one(self) -> None:
+        for provider in ("claude", "codex"):
+            for verifier in (True, False):
+                with self.subTest(provider=provider, verifier=verifier), self.as_verifier(verifier):
+                    if provider == "claude":
+                        route, assigned, handle = self.claude_run()
+                        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame()])
+                    else:
+                        self.admit("codex")
+                        route = self.bridged_route("codex")
+                        assigned = self.assignment_for(route)
+                        handle = self.open(route, assigned)
+                        self.frames("codex", [{"type": "turn.completed", "usage": {}}])
+                        (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(result())))
+                    schema = self.schema_seen(provider, route, assigned, handle)
+                    if verifier:
+                        self.assertEqual(["unverified"], schema["properties"]["admission_state"]["enum"])
+                        self.assertNotIn("timed_out", schema["properties"]["execution_state"]["enum"])
+                    else:
+                        self.assertEqual(json.loads(RESULT_SCHEMA), schema)
+
+    def test_a_verifier_that_sets_its_own_admission_and_status_is_repaired_and_recorded(self) -> None:
+        route, assigned, handle = self.claude_run()
+        claimed = {**result(), "admission_state": "accepted", "status": "blocked",
+                   "execution_state": "completed", "semantic_verdict": "pass"}
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(claimed))])
+        with self.as_verifier():
+            output = self.dispatch(route, assigned, handle)
+        report = output["bridge_report"]
+        self.assertEqual("result", report["outcome"])
+        self.assertEqual(("unverified", "completed", "pass"),
+                         tuple(output["result"][name] for name in ("admission_state", "status", "semantic_verdict")))
+        self.assertEqual([{"field": "admission_state", "was": "accepted", "now": "unverified"},
+                          {"field": "status", "was": "blocked", "now": "completed"}], report["host_set_fields"])
+        # The child's own claim stays in the kept raw answer.
+        (kept,) = (self.state.artifacts / self.project_id).glob("child_answer_*.json")
+        self.assertEqual("accepted", json.loads(kept.read_bytes())["admission_state"])
+
+    def test_a_verifier_still_fails_on_a_timeout_claim(self) -> None:
+        # A missing verdict still fails too (`missing_required_fields`); that rule keys on the real
+        # verification role, so it is tested in test_result_diagnostics.
+        for changes, reason in (({"status": "failed", "execution_state": "timed_out",
+                                  "semantic_verdict": "not-applicable"}, "child_set_timeout"),):
+            with self.subTest(reason=reason):
+                route, assigned, handle = self.claude_run()
+                claimed = {**result(), "execution_state": "completed", "semantic_verdict": "pass",
+                           "admission_state": "unverified", **changes}
+                self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(claimed))])
+                with self.as_verifier():
+                    report = self.dispatch(route, assigned, handle)["bridge_report"]
+                self.assertEqual(("invalid_result", reason, "failed"),
+                                 (report["outcome"], report["result_validation_reason_code"],
+                                  report["terminal_state"]))
+                self.assertNotIn("host_set_fields", report)
 
 
 if __name__ == "__main__":

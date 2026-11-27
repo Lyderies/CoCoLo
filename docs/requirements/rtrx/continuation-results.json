@@ -1,0 +1,136 @@
+{
+  "run_record": "/tmp/rtrx2-continue.json.run.json",
+  "raw_log": "/tmp/rtrx2-continue.log",
+  "worker_logs": "/private/tmp/ptfg_an879",
+  "elapsed_seconds": 10.943857583974022,
+  "modules": {
+    "codex:tests.test_admission_metadata": 0.1738424999639392,
+    "codex:tests.test_provider_restrictions": 0.34540641703642905,
+    "codex:tests.test_providers": 20.91644104104489,
+    "codex:tests.test_route_exhausted": 0.18089799996232614,
+    "codex:tests.test_route_exhausted_open": 1.4990462090354413,
+    "codex:tests.test_routing": 2.1474142909864895,
+    "codex:tests.test_routing_judgment": 3.3533723339787684,
+    "codex:tests.test_routing_risk": 1.885228959028609
+  },
+  "test_count": 247,
+  "passed": 246,
+  "failing_tests": {
+    "codex:tests.test_admission_metadata.AdmissionMetadataTests.test_empty_unified_windows_keep_rejection_or_warning_until_fallback_expiry": "failed"
+  },
+  "new_tests": {
+    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_boundaries_unknown_and_billing_share_the_admission_classifier": "passed",
+    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_chronology_five_hours_explicit_resets_and_rollback": "passed",
+    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_every_same_provider_pair_has_an_explicit_non_independent_marker": "passed",
+    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_merge_preserves_resetless_provenance_and_later_clearing": "passed",
+    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_policy_order_survives_all_non_exhausted_states_and_retries": "passed",
+    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct": "passed",
+    "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny": "passed",
+    "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick": "passed",
+    "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry": "passed",
+    "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence": "passed"
+  },
+  "fixed_regressions": {
+    "codex:tests.test_providers.AdmissionTests.test_a_run_cannot_record_rate_limit_events_without_bound": "passed",
+    "codex:tests.test_providers.HeadroomThresholdTests.test_claude_windows_use_the_codex_thresholds": "passed"
+  },
+  "metadata_errors": [],
+  "budget_failures": [],
+  "over_budget": [],
+  "unmeasured_budget_debts": [
+    {
+      "ceiling": 299.5,
+      "module": "codex:tests.test_bridge",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 67.62,
+      "module": "codex:tests.test_container_stop",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 119.56,
+      "module": "codex:tests.test_host_commands",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 95.44,
+      "module": "codex:tests.test_learning_cli",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 98.64,
+      "module": "codex:tests.test_lost_run_settlement",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 390.32,
+      "module": "codex:tests.test_project_driver",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 70.22,
+      "module": "codex:tests.test_trial_run_driver_bugs",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 241.24,
+      "module": "codex:tests.test_write_merge",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 110.14,
+      "module": "root:test_install",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 120.33,
+      "module": "root:test_install_claude_upgrade",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 177.88,
+      "module": "root:test_setup_sh",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 264.44,
+      "module": "root:test_setup_straight",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 167.88,
+      "module": "root:test_setup_update",
+      "seconds": null,
+      "status": "not_measured"
+    },
+    {
+      "ceiling": 265.86,
+      "module": "root:test_setup_wizard_direct",
+      "seconds": null,
+      "status": "not_measured"
+    }
+  ],
+  "existing_test_line_entries": 35,
+  "affected_execution": "deferred to primary per continuation instruction",
+  "socket_tests_blocked": [],
+  "required_stop": "Six launch billing-freshness subcases exposed by literal 124e; see conflicts.md",
+  "production_locations": {
+    "legacy_single_record_rating": "admission_metadata.py:66",
+    "conservative_measured_reset_merge": "admission_metadata.py:417",
+    "null_clearing_guard": "admission_metadata.py:440",
+    "retention_null_guard": "provider_restrictions.py:78"
+  }
+}

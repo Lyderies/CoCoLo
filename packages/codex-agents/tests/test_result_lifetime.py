@@ -6,12 +6,24 @@ Integration stage: the in-process collector, account and project services run a 
 import json
 import sqlite3
 import unittest
+from unittest import mock
 
+from codex_agents import project_driver
 from tests.test_bridge import null_filled, result
 from tests.test_project_driver import DriverHarness
 
+# How often the service looks for results to retire (production: every 10 s). These tests wait for that
+# look, up to six times each; a shorter wait changes no rule they check, only how long they sit idle.
+TEST_EXPIRY_SECONDS = 0.5
+
 
 class ResultLifetimeTests(DriverHarness):
+    def setUp(self):
+        patcher = mock.patch.object(project_driver, 'EXPIRY_SECONDS', TEST_EXPIRY_SECONDS)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
     def result_states(self):
         """The states of this project's results, read without the service's help."""
         states = []
@@ -56,6 +68,60 @@ class ResultLifetimeTests(DriverHarness):
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
 
+    def test_RC_1_space_held_by_running_results_says_to_wait(self):
+        """O10 RC-1: a run refused because running results hold the space is told to wait for them,
+        not that the store is full."""
+        from unittest import mock
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        context, route_path, _, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, '_check_result_capacity',
+                               side_effect=HistoryError('history_result_capacity_busy')):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('result_capacity_busy', refused['reason_code'], refused)
+        self.assertIn('running', refused['error'])
+        self.assertNotIn('full', refused['error'])
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+
+    def test_DR_3_a_result_whose_dispatch_reply_was_lost_is_read_and_recorded_by_a_later_command(self):
+        """O10 DR-3: the first dispatch's reply is dropped; dispatching the same run again returns the same
+        result without a second child, and the host records it."""
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        first = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)  # reply lost
+        later = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('result.json', later['result']), '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
+        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+        # review r1 MED-2: the later read is the same result, and exactly one record is stored for it
+        self.assertEqual(first['result'], later['result'])
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        self.assertEqual(['committed'], self.result_states())
+
+    def test_RC_3_a_run_refused_for_result_space_ends_its_account_binding_at_once(self):
+        """O10 RC-3 (B0-1): the refused run's binding is abandoned and its slot released now, not after 24 h."""
+        from unittest import mock
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        context, route_path, _, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, '_check_result_capacity',
+                               side_effect=HistoryError('history_result_capacity_busy')):
+            self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        ledger = self.collector_ledger
+        self.wait_for(lambda: ledger._connection.execute(
+            "SELECT COUNT(*) FROM host_run_bindings WHERE binding_state='abandoned'").fetchone()[0] == 1, seconds=30)
+        self.assertEqual(0, ledger._connection.execute(
+            "SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()[0])
+
+    def test_RC_2_status_shows_the_results_in_flight_against_the_space_for_them(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        capacity = self.cli('learning-status')['project_capacity']
+        self.assertEqual({'live': 0, 'limit': 3}, capacity['results_in_flight'])  # 3 MiB, 1 MiB each
+
     def test_034_R9_status_shows_each_project_limit_with_its_live_count(self):
         """R9: learning-status shows, for this project's store, how near each limit is."""
         context, route_path, orchestration, run_handle = self.open_run()
@@ -63,8 +129,9 @@ class ResultLifetimeTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         capacity = self.cli('learning-status')['project_capacity']
-        self.assertEqual({'results', 'orchestrations', 'cleanup_reservations', 'operational_qa', 'qa_check_receipts'},
-                         set(capacity))
+        # Corrected for O10 RC-2 (requirement): status also shows the results in flight.
+        self.assertEqual({'results', 'results_in_flight', 'orchestrations', 'cleanup_reservations', 'operational_qa',
+                          'qa_check_receipts'}, set(capacity))
         for name, limit in (('results', 64), ('orchestrations', 256), ('cleanup_reservations', 4096),
                             ('operational_qa', 16_384), ('qa_check_receipts', 16_384)):
             self.assertEqual(limit, capacity[name]['limit'], name)
@@ -83,9 +150,13 @@ class ResultLifetimeTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         capacity = self.cli('learning-status')['account_capacity']
-        self.assertEqual({'observations', 'cleanup_receipts'}, set(capacity))
+        # Corrected for O0b B0 (narrowed, requirement): status also shows the run bindings and billing
+        # probes still held, against their limits.
+        # Corrected for OP-3 (requirement): and the open requests in flight, against their own limit of 4.
+        self.assertEqual({'observations', 'cleanup_receipts', 'pending_bindings', 'billing_probes', 'open_requests'},
+                         set(capacity))
         for name in capacity:
-            self.assertEqual(4096, capacity[name]['limit'], name)
+            self.assertEqual(4 if name == 'open_requests' else 4096, capacity[name]['limit'], name)
             self.assertIs(int, type(capacity[name]['live']), name)
 
 
@@ -266,6 +337,21 @@ class ResultLifetimeTests(DriverHarness):
         with mock.patch.object(orchestration_store.OrchestrationOwner, 'end_earlier', recorded):
             self.wait_for(lambda: scopes, seconds=30)
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, scopes[0].runtime_digest)
+
+    def test_O0c_P5_the_service_ends_idle_orchestrations_by_itself(self):
+        """O0c P5: the project service's own cleanup pass asks the store to end idle orchestrations."""
+        from unittest import mock
+        from codex_agents import orchestration_store
+        calls = []
+        original = orchestration_store.OrchestrationOwner.end_idle
+
+        def recorded(owner, now, limit):
+            calls.append((now, limit))
+            return original(owner, now, limit)
+        self.open_run()  # The project service is running.
+        with mock.patch.object(orchestration_store.OrchestrationOwner, 'end_idle', recorded):
+            self.wait_for(lambda: calls, seconds=30)
+        self.assertEqual(4, calls[0][1])  # B6 (RS-B-B6-4): at most UNATTENDED_CLOSE_BATCH (4) per pass; was 10
 
 
 class ResultLimitTests(DriverHarness):

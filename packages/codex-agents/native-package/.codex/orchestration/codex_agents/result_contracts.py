@@ -86,7 +86,7 @@ class ResultLeaseBinding:
 
     def as_data(self):
         self.__post_init__()
-        return asdict(self)
+        return dict(vars(self))  # same as asdict: every field is a plain str or int, no slots
 
     def matches_attempt(self, binding):
         self.__post_init__()
@@ -239,8 +239,10 @@ class ResultReservation:
         ):
             raise HistoryError("history_invalid_input")
         self.binding.as_data()
+        # D2 (SH-4): the lease deadline no longer bounds when a result is prepared or committed. A row prepared or
+        # committed past it is valid (the attempt's obligation was still held); retention starts at preparation.
         prepared = (
-            valid_integer(self.prepared_at_ms, minimum=self.created_at_ms, maximum=self.reserved_until_ms - 1)
+            valid_integer(self.prepared_at_ms, minimum=self.created_at_ms)
             and valid_integer(self.retained_until_ms, minimum=self.prepared_at_ms + 1)
             and self.retained_until_ms - self.prepared_at_ms <= MAX_RESULT_RETENTION_MS
         )
@@ -248,15 +250,15 @@ class ResultReservation:
         empty = (self.committed_at_ms is None and self.body_size is None
                  and self.result_digest is None and self.terminal_record_id is None)
         full = (
-            prepared and valid_integer(self.committed_at_ms, minimum=self.prepared_at_ms,
-                                       maximum=min(self.reserved_until_ms, self.retained_until_ms) - 1)
+            prepared and valid_integer(self.committed_at_ms, minimum=self.prepared_at_ms)
             and valid_integer(self.body_size, minimum=1, maximum=MAX_RESULT_BODY_BYTES)
             and matches(self.result_digest, _DIGEST) and matches(self.terminal_record_id, _ID)
         )
         expiry_valid = (
             self.expires_at_ms == self.reserved_until_ms if unprepared else
-            prepared and self.expires_at_ms == (min(self.reserved_until_ms, self.retained_until_ms)
-                                                if empty else self.retained_until_ms)
+            prepared and (self.expires_at_ms in (min(self.reserved_until_ms, self.retained_until_ms),
+                                                 self.reserved_until_ms)  # D2: a lease-born row keeps its deadline
+                          if empty else self.expires_at_ms == self.retained_until_ms)
         )
         if ((self.state == "reserved" and not empty) or (self.state == "committed" and not full)
                 or not (empty or full) or not (prepared or unprepared) or not expiry_valid):

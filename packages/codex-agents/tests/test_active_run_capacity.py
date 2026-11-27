@@ -141,6 +141,47 @@ class ActiveRunCapacityTests(unittest.TestCase):
             with self.ledger._account_transaction(), self.assertRaisesRegex(ClaimError, "claim_busy"):
                 self.ledger._check_active_capacity_locked("codex", "f" * 64)
 
+    def test_H1a_3_slot_health_counts_a_slot_past_its_deadline_by_the_two_clock_rule(self):
+        self.case.claim()
+        row = self.rows()[0]
+        grace = learning_store.CRASHED_CLAIM_GRACE_MS
+        ended = row["execution_deadline_ns"] + 1
+        for wall, monotonic, past in (
+                (row["deadline_at_ms"] - 1, row["clock_reference_ns"] + 1, 0),       # before it
+                (row["deadline_at_ms"], ended, 0),                                     # exactly at it
+                (row["deadline_at_ms"] + 1, row["execution_deadline_ns"] - 1, 0),      # wall clock only
+                (row["deadline_at_ms"] + 1, ended, 1),                                 # both clocks past
+                (row["deadline_at_ms"] + 1, row["clock_reference_ns"] - 1, 1),         # rebooted
+                (row["deadline_at_ms"] + grace + 1, ended + grace * 1_000_000, 0)):    # crashed: not counted
+            with self.subTest(wall=wall, monotonic=monotonic), \
+                    mock.patch.object(learning_store.time, "time_ns", return_value=wall * 1_000_000), \
+                    mock.patch.object(learning_store.time, "monotonic_ns", return_value=monotonic):
+                health = self.ledger.account_slot_health(self.project)
+                self.assertEqual(past, health["runs_past_deadline"], health)
+        self.assertIsNone(self.rows()[0]["released_at_ms"])  # reading released nothing
+
+    def test_H1c_2_machine_idle_names_each_project_with_a_counted_slot(self):
+        self.assertEqual({'run_slots': [], 'probes': []}, self.ledger.machine_idle())
+        self.case.claim()
+        self.assertEqual({'run_slots': [self.project], 'probes': []}, self.ledger.machine_idle())
+        row = self.rows()[0]
+        crashed = (row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1) * 1_000_000
+        ended = row["execution_deadline_ns"] + learning_store.CRASHED_CLAIM_GRACE_MS * 1_000_000 + 1
+        with mock.patch.object(learning_store.time, "time_ns", return_value=crashed), \
+                mock.patch.object(learning_store.time, "monotonic_ns", return_value=ended):
+            # C1 (review 040-s1-h1c): no longer counted, but its child may outlive that: still listed.
+            self.assertEqual({'run_slots': [self.project], 'probes': []}, self.ledger.machine_idle())
+        # D1 (review 040-s1-h1c-2): a wall clock jumped past the day while the child's monotonic deadline
+        # has not passed: still counted, so still listed.
+        jumped = (row["claimed_at_ms"] + learning_store.LEGACY_RUN_MAX_MS + 1) * 1_000_000
+        with mock.patch.object(learning_store.time, "time_ns", return_value=jumped), \
+                mock.patch.object(learning_store.time, "monotonic_ns", return_value=row["execution_deadline_ns"] - 1):
+            self.assertEqual({'run_slots': [self.project], 'probes': []}, self.ledger.machine_idle())
+        day_after = (row["claimed_at_ms"] + learning_store.LEGACY_RUN_MAX_MS + 1) * 1_000_000
+        with mock.patch.object(learning_store.time, "time_ns", return_value=day_after), \
+                mock.patch.object(learning_store.time, "monotonic_ns", return_value=ended):
+            self.assertEqual({'run_slots': [], 'probes': []}, self.ledger.machine_idle())
+
     def test_an_unsettled_claim_long_past_its_hard_deadline_stops_counting_but_stays_unreleased(self):
         self.case.claim()
         row = self.rows()[0]
@@ -253,6 +294,21 @@ class ActiveRunCapacityTests(unittest.TestCase):
                                               digest=hashlib.sha256(raw).hexdigest(), expires_at_ms=self.case.stamp + 60_000)
         self.ledger.close()
 
+    def test_C8_an_earlier_versions_slot_is_held_until_it_ages_out_by_the_capacity_rule(self):
+        from codex_agents.active_run_capacity import CRASHED_CLAIM_GRACE_MS
+        self.schema_eight(backup=True)
+        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
+        self.addCleanup(self.case.ledger.close)
+        deadline = self.ledger._connection.execute(
+            "SELECT json_extract(CAST(content AS TEXT),'$.deadline_at_ms') FROM records "
+            "WHERE record_type='dispatch_intent'").fetchone()[0]
+        self.assertEqual(0, self.ledger.account_slot_health(self.project)['runs_held_without_deadline'])
+        boundary = deadline + CRASHED_CLAIM_GRACE_MS
+        for wall, holding in ((boundary - 1, 1), (boundary, 1), (boundary + 1, 0)):
+            with mock.patch.object(learning_store.time, 'time_ns', return_value=wall * 1_000_000):
+                self.assertEqual(0, self.ledger.account_slot_health(self.project)['runs_held_without_deadline'])
+                self.assertEqual(holding, self.ledger.earlier_version_runs()['holding'])
+
     def test_schema_eight_requires_verified_backup_and_stays_unmodified_on_refusal(self):
         self.schema_eight(backup=False)
         with self.assertRaisesRegex(LedgerError, "registered verified schema 8"):
@@ -270,7 +326,7 @@ class ActiveRunCapacityTests(unittest.TestCase):
         self.schema_eight(backup=True)
         self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.case.ledger.close)
-        self.assertEqual(14, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(18, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual(["legacy_unknown"], [row["kind"] for row in self.rows()])
         self.assertTrue(all(self.rows()[0][field] is None for field in ("provider", "account_fingerprint", "released_at_ms")))
         after = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid")]

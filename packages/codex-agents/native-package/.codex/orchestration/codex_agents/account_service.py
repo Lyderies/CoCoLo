@@ -16,21 +16,25 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .account_api import (
-    ACCOUNT_OPERATIONS, ACCOUNT_PROTOCOL_VERSION, MAX_ACCOUNT_FRAME_BYTES,
+    ACCOUNT_OPERATIONS, ACCOUNT_READ_OPERATIONS, ACCOUNT_PROTOCOL_VERSION, MAX_ACCOUNT_FRAME_BYTES,
     AccountError, AccountRequest, _DIGEST, _PROJECT, account_request_digest,
     decode_account_request, decode_account_response, encode_account_request, integer, matches,
 )
 from .admission_inputs import (
-    ADMISSION_CAPTURE_PUBLIC_REASONS, ADMISSION_CAPTURE_RECORD_TYPES, AdmissionCaptureError, AdmissionCaptureLimits,
+    ADMISSION_CAPTURE_PUBLIC_REASONS, ADMISSION_CAPTURE_RECORD_TYPES, ADMISSION_DECODED_CONTENT_MULTIPLE,
+    AdmissionCaptureError, AdmissionCaptureLimits,
     AdmissionInputPolicy, AdmissionInputSnapshot, admission_input_size, public_capture_reason,
 )
-from .learning_contracts import MAX_RECORD_BYTES, canonical_json
+from .contracts import ContractError
+from .collector_contracts import RUNTIME_UPDATE_COMMAND, RUNTIME_UPGRADE_MESSAGE
+from .learning_contracts import MAX_RECORD_BYTES, canonical_json, parse_bounded_json
 from .learning_store import (
     COLLECTOR_RUNTIME_DIGEST, OWNER_SIGNER_LINE, OWNER_SIGNERS_MAX_BYTES,
-    LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
+    LearningLedger, LedgerError, OwnerSignerNotConfigured, ProjectNotRegisteredError, StateError,
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
+from . import ledger_waits, lane_health
 from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
@@ -45,6 +49,17 @@ from .provider_observation_contracts import OBSERVATION_REASONS, ObservationErro
 from .observation_failure_contracts import decode_observation_failure
 from .account_observation_failure import record_observation_failure, recheck_observation_failure
 from .billing_probe_contracts import PROBE_STEP_REASONS, ProbeAdmissionError
+from .open_withdrawal import WithdrawError
+from .admission_capture_content import unpack_content
+
+# B3: the ledger's withdrawal refusals, as public reasons. An exact replay presented by another caller scope, and a
+# request whose run id, inputs digest or caller scope is not the open's, are not authorized, whatever they name.
+WITHDRAW_LEDGER_REASONS = {
+    'withdrawal is unavailable': 'withdraw_unavailable',
+    'withdrawal is stale': 'withdraw_stale',
+    'generation_required': 'withdraw_generation_required',
+    'withdrawal is not authorized': 'account_not_authorized',
+}
 
 # Fixed owner query over the history that can still change an admission decision.
 # `:a` is the capture's anchor: the first capture's own clock, kept in its snapshot
@@ -53,7 +68,7 @@ from .billing_probe_contracts import PROBE_STEP_REASONS, ProbeAdmissionError
 # keeps every row a consumer could read at any such `now` (admission_metadata
 # and its account, claim and probe callers):
 #   identities: observed in the last 30 minutes (or later);
-#   attestations: all, the latest verified one wins at any age;
+#   attestations: applicable candidates not yet proven invalid or superseded;
 #   decisions and probes: the last 5 hours (run cap, probe cooldown, a run's own
 #     decision); and the first passing Claude decision per account, any age (the
 #     one bootstrap run per account);
@@ -62,7 +77,7 @@ from .billing_probe_contracts import PROBE_STEP_REASONS, ProbeAdmissionError
 #     age; and for Claude, the latest older billing and headroom per account,
 #     keeping ties (a probe may reuse old evidence; a bootstrap needs none).
 # Rows from the future are kept by every time rule. Foreign-account/provider
-# candidates are still charged. Content is never parsed here: the account, a
+# candidates are still charged until checked. Content is never parsed here: the account, a
 # headroom record's latest reset and a passing Claude decision come from the
 # admission_evidence index, which a trigger fills as each record is written.
 _ADMISSION_EVIDENCE = "SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id"
@@ -85,10 +100,66 @@ _ADMISSION_INPUT_SCOPE = (
     " AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint"
     " AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000)))))"
 )
+# U3: seek each non-attestation rule's candidates before applying the unchanged
+# scope. The recursive MIN seeks visit each account once, skipping its
+# historical rows. P9's projected attestation membership remains the source for
+# attestations (its own bounded branch below). CTE names avoid an `r` prefix so
+# a plan's `SCAN <cte>` line never reads as a records scan (P9b-2 plan check).
+_ADMISSION_CANDIDATES = (
+    "WITH RECURSIVE pass(fp) AS ("
+    "SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1"
+    " UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence"
+    " WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL),"
+    " older(t,fp) AS ("
+    "SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude'"
+    " AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL)"
+    " FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k"
+    " UNION ALL SELECT older.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude'"
+    " AND source='provider' AND record_type=older.t AND account_fingerprint>older.fp)"
+    " FROM older WHERE older.fp IS NOT NULL)"
+    " SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity'"
+    " AND observed_at_ms>=:a-1800000 AND project_id=:p"
+    " UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p"
+    " AND record_type='admission_decision' AND source<>'lifecycle'"
+    " UNION SELECT rowid FROM records INDEXED BY records_type_observed"
+    " WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000"
+    " UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x"
+    " ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1"
+    " AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude'"
+    " ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL"
+    " UNION SELECT rowid FROM records INDEXED BY records_type_observed"
+    " WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000"
+    " UNION SELECT x.rowid FROM admission_evidence e JOIN records x"
+    " ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a"
+    " UNION SELECT x.rowid FROM older CROSS JOIN admission_evidence g JOIN records x"
+    " ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE older.fp IS NOT NULL"
+    " AND g.provider='claude' AND g.source='provider' AND g.record_type=older.t"
+    " AND g.account_fingerprint=older.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms)"
+    " FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider'"
+    " AND h.record_type=older.t AND h.account_fingerprint=older.fp AND h.observed_at_ms<:a-86400000)"
+)
 _ADMISSION_INPUT_JOIN = (
-    " FROM records r LEFT JOIN owner_attestations a "
-    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE "
-    + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT :limit"
+    # P9b-2: attestations start from bounded projected membership; other
+    # admission evidence from U3's indexed candidate seeks, keeping its original
+    # scope. Each branch's first :limit rows contain every possible row in the
+    # global first :limit, so both are bounded before the final sort and the
+    # record/signature joins.
+    " FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates "
+    "WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) "
+    "UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM (" + _ADMISSION_CANDIDATES + ") k "
+    "CROSS JOIN records r ON r.rowid=k.id WHERE r.record_type IN "
+    "('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') "
+    "AND " + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r "
+    "LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
+    "WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit"
+)
+# Guard the streaming packing query even though headers have already
+# validated these lengths inside this same read snapshot.
+_ADMISSION_CONTENT = (
+    f"CASE WHEN typeof(r.content)='blob' AND length(r.content) BETWEEN 1 AND {MAX_RECORD_BYTES} "
+    "AND typeof(r.record_id)='text' AND length(CAST(r.record_id AS BLOB)) BETWEEN 1 AND 640 "
+    "AND typeof(r.observed_at_ms)='integer' AND r.observed_at_ms>=0 "
+    "THEN admission_capture_content(r.record_type,r.content,r.record_id,r.observed_at_ms) ELSE NULL END"
 )
 
 
@@ -113,6 +184,8 @@ class AccountAuthorization:
     open_context: AccountOpenContext | None = None
     cleanup_evidence: bytes | None = None
     observation_context: ObservationContext | None = None
+    # RS-E E2a-5: set only by the account host for a credential its verifier bound to this one project.
+    wake_bound: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -125,6 +198,7 @@ class AccountAuthorization:
             or (self.caller_scope is not None and not matches(self.caller_scope, _DIGEST))
             or (self.open_context is not None and type(self.open_context) is not AccountOpenContext)
             or (self.observation_context is not None and type(self.observation_context) is not ObservationContext)
+            or type(self.wake_bound) is not bool
         ):
             raise AccountError("account_not_authorized")
         from .claim_storage import capture_storage_evidence
@@ -185,7 +259,7 @@ class AccountOwnerViews:
 
     def project(self, project_id: str) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             self._ledger.state.harden_database_files()
             return self._project_locked(project_id)
 
@@ -205,7 +279,7 @@ class AccountOwnerViews:
 
     def capacity_status(self, project_id: str, status: CapacityStatusInput) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             if self._ledger._connection.in_transaction:
                 raise AccountError("account_unavailable")
             self._project_locked(project_id)
@@ -260,6 +334,44 @@ class AccountOwnerViews:
         from .account_lost_run import settle_lost_run
         return settle_lost_run(self._ledger, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                settle=settle, storage_binding=storage_binding, storage_evidence=storage_evidence)
+
+    def lost_run_closure(self, project_id, *, runtime_digest, caller_scope, settle, storage_binding, storage_evidence,
+                         request_digest):
+        self._guard()
+        from .account_lost_run import lost_run_closure
+        return lost_run_closure(self._ledger, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                settle=settle, storage_binding=storage_binding, storage_evidence=storage_evidence,
+                                request_digest=request_digest)
+
+    def publish_wake(self, project_id, wake):
+        """RS-E E2a-6: one wake publication for the bound project; a stale one is refused, only counted."""
+        self._guard()
+        self._project_locked(project_id)
+        try:
+            result = self._ledger.publish_wake(project_id, epoch=wake.epoch, seq=wake.seq, state=wake.state,
+                                               next_due_at_ms=wake.next_due_at_ms, instance=wake.instance)
+        except ProjectNotRegisteredError:
+            raise AccountError('account_project_not_found') from None
+        if result['outcome'] == 'stale':
+            raise AccountError('wake_stale')
+        return result
+
+    def withdraw_open(self, project_id, *, caller_scope, withdrawal, request_digest):
+        """B3: the ledger's withdrawal for an authenticated caller, its refusals as public reasons."""
+        self._guard()
+        try:
+            return self._ledger.withdraw_open(project_id, run_handle=withdrawal.run_handle,
+                                              request_digest=request_digest, generation=withdrawal.generation,
+                                              owner={'caller_scope': caller_scope, 'run_id': withdrawal.run_id,
+                                                     'inputs_digest': withdrawal.inputs_digest,
+                                                     'attempt': withdrawal.attempt, 'reason': withdrawal.reason})
+        except LedgerError as error:
+            reason = WITHDRAW_LEDGER_REASONS.get(str(error))
+            if reason is None:
+                raise
+        if reason == 'account_not_authorized':
+            raise AccountError(reason)
+        raise WithdrawError(reason)
 
     def release_capacity(self, project_id, **options):
         self._guard()
@@ -324,7 +436,7 @@ class AccountOwnerViews:
         reason = "admission_capture_unavailable"
         try:
             work_limits.__post_init__()
-            with self._ledger._lock:
+            with self._ledger._held():
                 connection = self._ledger._connection
                 connection._read_owner()
                 unavailable = connection._sql_scope is not None or connection._sql_foreign_progress
@@ -350,6 +462,8 @@ class AccountOwnerViews:
             if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
                 raise
         except SQLReadError as error:
+            if error.reason_code == "sql_read_busy":
+                raise  # M4b E1a-2: busy, not admission_capture_unavailable
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "admission_capture_invalid_request"
             elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit"}:
@@ -405,7 +519,7 @@ class AccountOwnerViews:
         elif type(anchor_ms) is not int or not 0 <= anchor_ms <= timestamp:
             # A clock earlier than the anchor could need history the scope left out.
             raise AdmissionCaptureError("admission_capture_unavailable")
-        scope = {"p": project_id, "a": anchor_ms, "limit": limits.max_rows + 1}
+        scope = {"p": project_id, "provider": provider, "a": anchor_ms, "limit": limits.max_rows + 1}
         owner_header = connection.execute(
             "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,"
             "typeof(signer_line),length(signer_line),"
@@ -433,16 +547,26 @@ class AccountOwnerViews:
             "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
             "CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,"
             "CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,"
-            "typeof(a.signature),length(a.signature)" + _ADMISSION_INPUT_JOIN,
+            "typeof(a.signature),length(a.signature),"
+            # Charge the actual shared copies of these immutable strings. The
+            # join has already bounded the candidate set before these windows.
+            "CASE WHEN r.rowid=MIN(r.rowid) OVER (PARTITION BY r.project_id) "
+            "THEN length(CAST(r.project_id AS BLOB)) ELSE 0 END,"
+            "CASE WHEN r.rowid=MIN(r.rowid) OVER (PARTITION BY r.record_type) "
+            "THEN length(CAST(r.record_type AS BLOB)) ELSE 0 END,"
+            "CASE WHEN r.rowid=MIN(r.rowid) OVER (PARTITION BY r.source) "
+            "THEN length(CAST(r.source AS BLOB)) ELSE 0 END" + _ADMISSION_INPUT_JOIN,
             scope,
         ).fetchall()
         if len(headers) > limits.max_rows:
             raise AdmissionCaptureError("admission_capture_limit")
+        expanded = 0
         for header in headers:
             connection._before_statement()
             rowid, project_type, project_bytes, identifier_type, identifier_bytes, kind_type, kind_bytes, \
                 content_type, content_bytes, digest_type, digest_bytes, source_type, source_bytes, \
-                sequence, observed, ingested, signature_type, signature_bytes = header
+                sequence, observed, ingested, signature_type, signature_bytes, \
+                project_charge, kind_charge, source_charge = header
             if (any(type(value) is not int or value < 0 for value in
                     (rowid, project_bytes, identifier_bytes, kind_bytes, content_bytes, digest_bytes,
                      source_bytes, sequence, observed, ingested))
@@ -457,10 +581,39 @@ class AccountOwnerViews:
                     or (signature_type == "blob" and
                         (type(signature_bytes) is not int or not 0 <= signature_bytes <= 16_384))):
                 raise AdmissionCaptureError("admission_capture_incompatible")
-            size += (32 + project_bytes + identifier_bytes + kind_bytes + content_bytes + digest_bytes
-                     + source_bytes + (signature_bytes or 0))
-            if size > limits.max_bytes:
+            if any(type(charge) is not int or charge not in (0, length) for charge, length in
+                   ((project_charge, project_bytes), (kind_charge, kind_bytes), (source_charge, source_bytes))):
+                raise AdmissionCaptureError("admission_capture_incompatible")
+            # Even packed content must retain at least one byte. This lower
+            # bound rejects impossible charges before fetching/compressing any
+            # content; exact packed bytes are added once as rows are streamed.
+            size += (32 + project_charge + identifier_bytes + kind_charge + 1 + digest_bytes
+                     + source_charge + (signature_bytes or 0))
+            expanded += content_bytes
+            if size > limits.max_bytes or expanded > ADMISSION_DECODED_CONTENT_MULTIPLE * limits.max_bytes:
                 raise AdmissionCaptureError("admission_capture_limit")
+        # Pack one bounded record at a time, after the cheap refusal checks.
+        # Retain only its packed bytes; charge streamed values and stop on
+        # overflow. Reuse this cache in the final raw tuples.
+        contents = []
+        if headers:
+            # Indexed rowid order streams expressions without sorting BLOBs.
+            # One cursor also preserves the unchanged SQL cursor budget.
+            packed_rows = connection.execute(
+                "SELECT r.rowid," + _ADMISSION_CONTENT + " FROM records r WHERE r.rowid IN (" +
+                ",".join("?" for _ in headers) + ") ORDER BY r.rowid", tuple(header[0] for header in headers),
+            )
+            for header in headers:
+                packed = packed_rows.fetchone()
+                if (packed is None or packed[0] != header[0] or type(packed[1]) is not bytes
+                        or not 0 < len(packed[1]) <= header[8]):
+                    raise AdmissionCaptureError("admission_capture_incompatible")
+                size += len(packed[1]) - 1
+                if size > limits.max_bytes:
+                    raise AdmissionCaptureError("admission_capture_limit")
+                contents.append(packed[1])
+            if packed_rows.fetchone() is not None:
+                raise AdmissionCaptureError("admission_capture_incompatible")
         # Complete every row/aggregate check before copying even the bounded
         # owner-history value. The current public signer was observed separately.
         incompatible = False
@@ -471,30 +624,42 @@ class AccountOwnerViews:
         if incompatible:
             raise AdmissionCaptureError("admission_capture_incompatible")
         raw = connection.execute(
-            "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,"
+            "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,NULL,"
             "r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature" + _ADMISSION_INPUT_JOIN,
             scope,
-        ).fetchall()
-        if len(raw) != len(headers):
-            raise AdmissionCaptureError("admission_capture_incompatible")
-        rows = []
-        for header, row in zip(headers, raw, strict=True):
+        )
+        rows, shared = [], {}
+        for header, content in zip(headers, contents, strict=True):
             connection._before_statement()
-            values = tuple(row)
+            row = raw.fetchone()
+            if row is None:
+                raise AdmissionCaptureError("admission_capture_incompatible")
+            values = (*row[:5], content, *row[6:])
             rowid, project, identifier, sequence, kind, content, digest, source, observed, ingested, signature = values
             if (any(type(value) is not int for value in (rowid, sequence, observed, ingested))
                     or rowid != header[0] or not matches(project, _PROJECT) or type(identifier) is not str
                     or type(kind) is not str or kind not in ADMISSION_CAPTURE_RECORD_TYPES
                     or type(content) is not bytes or not matches(digest, _DIGEST) or type(source) is not str
                     or (signature is not None and type(signature) is not bytes)
-                    or (len(project.encode("utf-8")), len(identifier.encode("utf-8")), len(kind), len(content),
+                    or (len(project.encode("utf-8")), len(identifier.encode("utf-8")), len(kind),
                         len(digest), len(source.encode("utf-8")), sequence, observed, ingested,
                         None if signature is None else len(signature)) !=
-                       (header[2], header[4], header[6], header[8], header[10], header[12],
-                        header[13], header[14], header[15], header[17])
-                    or hashlib.sha256(content).hexdigest() != digest):
+                       (header[2], header[4], header[6], header[10], header[12],
+                        header[13], header[14], header[15], header[17])):
                 raise AdmissionCaptureError("admission_capture_incompatible")
-            rows.append(values)
+            original = None
+            try:
+                original = unpack_content(content, identifier, observed)
+            except ValueError:
+                pass
+            if original is None or len(original) != header[8] or hashlib.sha256(original).hexdigest() != digest:
+                raise AdmissionCaptureError("admission_capture_incompatible")
+            # Local pool only: no global intern table can grow with history.
+            rows.append((rowid, shared.setdefault(project, project), identifier, sequence,
+                         shared.setdefault(kind, kind), content, digest, shared.setdefault(source, source),
+                         observed, ingested, signature))
+        if raw.fetchone() is not None:
+            raise AdmissionCaptureError("admission_capture_incompatible")
         rows = tuple(rows)
         retained = admission_input_size(project_id, provider, COLLECTOR_RUNTIME_DIGEST, policy, owner, signer, rows)
         if retained != size:
@@ -510,7 +675,8 @@ class AccountOwnerViews:
     ) -> SignatureInputSnapshot:
         """Capture unverified inputs within explicit field and SQL work limits.
 
-        All project billing rows are charged before the legacy provider filter.
+        Checked foreign-provider and superseded history is omitted. Unknown
+        and changed inputs remain candidates until collector verification.
         The cooperative callback budget does not bound OS I/O or global job
         capacity. No RPC, worker or installed defaults are activated here.
         """
@@ -522,7 +688,7 @@ class AccountOwnerViews:
         reason = "signature_capture_unavailable"
         try:
             work_limits.__post_init__()
-            with self._ledger._lock:
+            with self._ledger._held():
                 # read_call guards unusable connections and outer transactions.
                 return self._ledger._connection.read_call(
                     work_limits, lambda: self._capture_signature_inputs_locked(project_id, provider, limits),
@@ -531,9 +697,11 @@ class AccountOwnerViews:
             if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
                 raise
         except SQLReadError as error:
+            if error.reason_code == "sql_read_busy":
+                raise  # M4b E1a-2: busy, not a work limit
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "signature_capture_invalid_request"
-            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit", "sql_read_busy"}:
+            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit"}:
                 reason = "signature_capture_work_limit"
         except (StateError, OSError, UnicodeError):
             pass
@@ -582,7 +750,7 @@ class AccountOwnerViews:
             raise SignatureCaptureError("signature_capture_limit")
         # Only type/length/integer metadata is returned. In particular,
         # no JSON expression or content/signature value is selected.
-        # LIMIT bounds returned metadata, not the underlying scan work.
+        # Indexed candidate membership bounds work before ORDER BY/LIMIT.
         headers = self._ledger._connection.execute(
             "SELECT typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
             "typeof(r.content),length(r.content),"
@@ -590,11 +758,11 @@ class AccountOwnerViews:
             "typeof(r.source),length(CAST(r.source AS BLOB)),"
             "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
             "typeof(a.signature),length(a.signature) "
-            "FROM records r LEFT JOIN owner_attestations a "
+            "FROM temp.capture_candidates c CROSS JOIN records r LEFT JOIN owner_attestations a "
             "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-            "WHERE r.project_id=? AND r.record_type='billing_attestation' "
-            "ORDER BY r.source_sequence LIMIT ?",
-            (project_id, limits.max_rows + 1),
+            "WHERE c.consumer=? AND c.project_id=? AND c.record_type='billing_attestation' "
+            "AND r.rowid=c.record_rowid ORDER BY c.source_sequence LIMIT ?",
+            (provider, project_id, limits.max_rows + 1),
         ).fetchall()
         if len(headers) > limits.max_rows:
             raise SignatureCaptureError("signature_capture_limit")
@@ -633,7 +801,7 @@ class AccountOwnerViews:
 
     def _owner_key_view(self, project_id: str, *, include_public_key: bool) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             self._ledger.state.harden_database_files()
             self._project_locked(project_id)
             try:
@@ -758,6 +926,8 @@ class AccountService:
             "protocol_version": ACCOUNT_PROTOCOL_VERSION,
             **labels,
             "ready": reason is None, "result": result, "reason_code": reason,
+            **({"message": RUNTIME_UPGRADE_MESSAGE, "update_command": RUNTIME_UPDATE_COMMAND}
+               if reason == "runtime_upgrade_required" else {}),
         })
 
     def handle(self, raw: bytes, transport_context: object = None) -> bytes:
@@ -773,6 +943,9 @@ class AccountService:
         return self._handle(raw, transport_context, deferred=True, ingress=_ingress)
 
     def drive_claims(self):
+        owner = getattr(self._views._ledger, "_owner", None)
+        if owner is not None and owner.owns_thread() and not owner._running:
+            return owner.call(self.drive_claims, caller="account_drive")
         if self._claim_jobs is None and self._observation_jobs is None:
             raise ClaimError("claim_unavailable")
         if self._claim_jobs is not None:
@@ -780,33 +953,61 @@ class AccountService:
         if self._observation_jobs is not None:
             self._observation_jobs.drive()
 
-    def _billing_reply(self, key, result, context, before_publish):
+    def _billing_reply(self, key, result, context, before_publish, history=None, judgment=None):
         project, runtime, caller, identity = key
         request = AccountRequest(1, 'account.billing_probe', identity, project, runtime, {})
         labels = {'request_id': identity, 'project_id': project, 'runtime_digest': runtime,
                   'request_digest': account_request_digest(request)}
         try:
             records = result['records']
-            waivers = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
-            raw = self._reply(labels, result={**result, 'billing_waivers': waivers})
-            decode_account_response(raw, request)
+            # Decision 50 (BR-16): the caller's callback runs first and is untrusted; the waiver display and the
+            # provenance are read next; the one final gate (verify_committed, which asks the caller once more
+            # before it) is the last thing, and nothing external runs after it.
             if before_publish() is not True:
                 raise ProbeAdmissionError('probe_not_authorized')
-            current = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
-            retained = self._billing_jobs._owner.known_reply(*key, context, before_commit=before_publish)
-            if waivers != current or retained != {**result, 'known': True}:
-                raise ProbeAdmissionError('probe_not_authorized')
+            waivers = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
+            raw = self._reply(labels, result={**result, 'billing_waivers': waivers})
+            try:
+                decode_account_response(raw, request)
+            except AccountError:
+                # R3: the reply failed its own contract: say so, and record it in the billing lane.
+                lane_health.safely(lambda: self._billing_jobs.health.note_failure(
+                    self._billing_jobs._note, 'probe_reply_invalid', None))
+                raise ProbeAdmissionError('probe_reply_invalid') from None
             self._provenance_live()
+            # BR-8 (decision 44, 47, 50): the exact committed row and reply of the judgment; a yes is gated here.
+            self._billing_jobs._owner.verify_committed(*key, context, before_commit=before_publish,
+                                                       reply=result, history=history, judgment=judgment)
             with self._front_lock:
                 if self._closed:
                     raise ProbeAdmissionError('probe_not_authorized')
                 return raw
         except ProbeAdmissionError as error:
             return self._reply(labels, reason=error.reason_code)
-        except Exception:
+        except SQLReadError as error:  # M4b E1a-2
+            if error.reason_code != 'sql_read_busy':
+                self._name_probe_failure('probe_sql_read_failed', error)
+            return self._reply(labels, reason='account_busy' if error.reason_code == 'sql_read_busy'
+                               else 'probe_unavailable')
+        except Exception as error:
+            self._name_probe_failure('probe_reply_failed', error)
             return self._reply(labels, reason='probe_unavailable')
 
+    def _name_probe_failure(self, cause, error=None):
+        """Record why a probe was answered probe_unavailable in the billing lane's last_failure."""
+        if self._billing_jobs is not None:
+            lane_health.safely(lambda: self._billing_jobs.health.note_failure(
+                self._billing_jobs._note, cause, error))
+
     def take_claim_reply(self, ticket, *, _ingress=None):
+        """Deferred publication has its own request deadline (M4b E1a revision 3)."""
+        with ledger_waits.request():
+            owner = getattr(self._views._ledger, "_owner", None)
+            if owner is not None and owner.owns_thread() and not owner._running:
+                return owner.call(lambda: self._take_claim_reply(ticket, _ingress=_ingress), caller="account_publish")
+            return self._take_claim_reply(ticket, _ingress=_ingress)
+
+    def _take_claim_reply(self, ticket, *, _ingress=None):
         if self._billing_jobs is not None and type(ticket) is object and ticket in self._billing_jobs._jobs:
             reply = self._billing_jobs.take(ticket, _ingress=_ingress)
             if reply is None:
@@ -816,12 +1017,16 @@ class AccountService:
             labels = {'request_id': identity, 'project_id': project, 'runtime_digest': runtime,
                       'request_digest': account_request_digest(request)}
             if reply.reason is not None:
-                return self._reply(labels, reason=reply.reason if reply.reason in {
+                allowed = {
                     'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
-                    'probe_full', 'probe_busy', 'probe_not_ready', *ADMISSION_CAPTURE_PUBLIC_REASONS,
+                    'probe_full', 'probe_busy', 'probe_not_ready', 'probe_reply_invalid', 'account_busy',
+                    'probe_replay_stale', 'provider_api_key_present', *ADMISSION_CAPTURE_PUBLIC_REASONS,
                     *PROBE_STEP_REASONS, *OBSERVATION_REASONS}
-                    else 'probe_unavailable')
-            return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)
+                if reply.reason not in allowed:
+                    self._name_probe_failure('probe_reason_unrecognised')
+                return self._reply(labels, reason=reply.reason if reply.reason in allowed else 'probe_unavailable')
+            return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish, reply.history,
+                                       reply.judgment)
         if (self._observation_jobs is not None and type(ticket) is object
                 and ticket in self._observation_jobs._jobs):
             reply = self._observation_jobs.take(ticket, _ingress=_ingress)
@@ -848,6 +1053,9 @@ class AccountService:
                     return raw
             except ObservationError as error:
                 return self._reply(labels, reason=error.reason_code)
+            except SQLReadError as error:  # M4b E1a-2
+                return self._reply(labels, reason='account_busy' if error.reason_code == 'sql_read_busy'
+                                   else 'observation_unavailable')
             except Exception:
                 return self._reply(labels, reason='observation_unavailable')
         if self._claim_jobs is None:
@@ -887,17 +1095,72 @@ class AccountService:
                 self._provenance_live()
                 with self._front_lock:
                     if self._closed:
-                        raise OpenError('open_not_authorized')
+                        raise OpenError('open_account_closing')  # S1-U10a (verifier of review 040-s1-u10)
                     return raw
             except OpenError as error:
                 return self._reply(labels, reason=error.reason_code)
-            except Exception:
-                return self._reply(labels, reason='open_unavailable')
+            except SQLReadError as error:  # S1-U10b
+                return self._reply(labels, reason='open_account_busy' if error.reason_code == 'sql_read_busy'
+                                   else 'open_failed')
+            except AccountError as error:  # an authorization or service refusal keeps its own reason
+                return self._reply(labels, reason=error.reason_code)
+            except Exception:  # S1-U10f
+                return self._reply(labels, reason='open_failed')
         return raw
 
     def _handle(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
+        """M4b E1a (revision 3): every ledger wait in one request shares one deadline, set here, where
+        both handle() and begin() arrive, and restored on return."""
+        with ledger_waits.request():
+            owner = getattr(self._views._ledger, "_owner", None)
+            if owner is None or not owner.owns_thread():
+                return self._handle_request(raw, transport_context, deferred=deferred, ingress=ingress)
+            upgrade = self.runtime_upgrade_reply(raw)
+            if upgrade is not None:
+                return upgrade
+            try:
+                request = decode_account_request(raw)
+            except AccountError:
+                return self._handle_request(raw, transport_context, deferred=deferred, ingress=ingress)
+            try:
+                return owner.call(lambda: self._handle_request(
+                    raw, transport_context, deferred=deferred, ingress=ingress),
+                    project_id=request.project_id, caller="account")
+            except SQLReadError as error:
+                if error.reason_code != "sql_read_busy":
+                    raise
+                labels = {"request_id": request.request_id, "project_id": request.project_id,
+                          "runtime_digest": request.runtime_digest, "request_digest": account_request_digest(request)}
+                return self._reply(labels, reason=busy_reason(request.operation))
+
+    def runtime_upgrade_reply(self, raw: bytes) -> bytes | None:
+        """RSF-S1: bounded, side-effect-free gate, also safe on the socket front thread."""
+        if type(raw) is not bytes or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:
+            return None  # retain the normal malformed/oversized refusal
+        try:
+            envelope = parse_bounded_json(raw, max_bytes=MAX_ACCOUNT_FRAME_BYTES - 1)
+        except (ContractError, TypeError, ValueError, RecursionError):
+            return None
+        if (type(envelope.get("operation")) is not str
+                or envelope["operation"] not in ACCOUNT_OPERATIONS - ACCOUNT_READ_OPERATIONS
+                or envelope.get("runtime_digest") == self._runtime):
+            return None
         labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
         try:
+            request = decode_account_request(raw)
+            labels = {"request_id": request.request_id, "project_id": request.project_id,
+                      "runtime_digest": request.runtime_digest, "request_digest": account_request_digest(request)}
+        except AccountError:
+            pass  # missing identity or invalid payload: never echo unchecked fields
+        return self._reply(labels, reason="runtime_upgrade_required")
+
+    def _handle_request(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
+        labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
+        operation = None  # known once decoded; chooses the busy answer
+        try:
+            upgrade = self.runtime_upgrade_reply(raw)
+            if upgrade is not None:
+                return upgrade
             request = decode_account_request(raw)
             digest = account_request_digest(request)
             operation = request.operation
@@ -915,7 +1178,10 @@ class AccountService:
             closure = decode_close_denied(request.payload) if operation == 'account.close_denied_attempt' else None
             fence = decode_fence_claim(request.payload) if operation == 'account.fence_claim' else None
             from .lost_run_contracts import decode_settle_lost
-            lost = decode_settle_lost(request.payload) if operation == 'account.settle_lost_run' else None
+            lost = (decode_settle_lost(request.payload)
+                    if operation in {'account.settle_lost_run', 'account.lost_run_closure'} else None)
+            from .open_withdrawal import decode_withdraw_open
+            withdrawal = decode_withdraw_open(request.payload) if operation == 'account.withdraw_open' else None
             provenance = decode_run_provenance_input(request.payload) if operation == 'account.run_provenance' else None
             open_provenance = decode_open_provenance_input(request.payload) if operation == 'account.open_provenance' else None
             opening = decode_account_open_input(request.payload, project, runtime) if operation == 'account.open_host_run' else None
@@ -924,6 +1190,8 @@ class AccountService:
                 observation = decode_observation_failure(request.payload)
             from .rate_limit_contracts import decode_rate_limit_event
             rate_event = decode_rate_limit_event(request.payload) if operation == 'account.record_rate_limit_event' else None
+            from .wake_contracts import decode_wake_publish
+            wake = decode_wake_publish(request.payload) if operation == 'account.publish_wake' else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -949,9 +1217,16 @@ class AccountService:
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
-                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
-                    "account.record_rate_limit_event"})
-                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance",
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.lost_run_closure", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
+                    "account.record_rate_limit_event", "account.withdraw_open", "account.publish_wake"})
+                # RS-E E2a-5: only a credential bound to this one project publishes its wake, and it does nothing else.
+                or (operation == "account.publish_wake") != (authorization.wake_bound is True)
+                or (operation == "account.publish_wake" and authorization.source != "project")
+                # B3: a withdrawal comes from the run's project service or the host that opened it, each with the
+                # caller scope of the run's host class (the ledger matches it to the open's receipt).
+                or (operation == "account.withdraw_open" and (authorization.source not in {"project", "host"}
+                                                              or authorization.caller_scope is None))
+                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.lost_run_closure", "account.run_provenance", "account.open_provenance",
                                   "account.record_rate_limit_event"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status", 'account.open_host_run'} and
@@ -1014,6 +1289,10 @@ class AccountService:
                         self._provenance_live()
                         self._views._guard()
                         return True
+                    except SQLReadError as error:
+                        if error.reason_code == 'sql_read_busy':
+                            raise  # M4b E1a-2: busy, answered at the reply, never "not authorized"
+                        raise ObservationError('observation_not_authorized') from None
                     except Exception:
                         raise ObservationError('observation_not_authorized') from None
 
@@ -1032,11 +1311,13 @@ class AccountService:
                 return self._observation_jobs.submit(project, runtime, caller, identity, observation,
                     context, authorize_observation, _ingress=ingress)
             elif operation == 'account.open_host_run':
-                if not deferred or self._claim_jobs is None or self._claim_jobs._open_limits is None:
-                    raise OpenError('open_unavailable')
+                if not deferred:  # An open is always deferred; a synchronous call is a misuse (S1-U10f).
+                    raise OpenError('open_failed')
                 self._provenance_live()
-                if authorization.open_context is None:
+                if authorization.open_context is None:  # Authorization before anything about readiness.
                     raise OpenError('open_not_authorized')
+                if self._claim_jobs is None or self._claim_jobs._open_limits is None:
+                    raise OpenError('open_account_starting')  # S1-U10a
                 original_context, captured = authorization.open_context.snapshot()
                 expected_context = AccountOpenContext.from_snapshot(captured)
                 caller = authorization.caller_scope
@@ -1056,11 +1337,23 @@ class AccountService:
                             raise ValueError()
                         self._provenance_live()
                         self._views._guard()
+                    except SQLReadError as error:
+                        if error.reason_code == 'sql_read_busy':
+                            raise  # M4b E1a-2
+                        raise OpenError('open_not_authorized') from None
                     except Exception:
                         raise OpenError('open_not_authorized') from None
 
-                return self._claim_jobs.submit_open(project, runtime_digest=runtime, caller_scope=caller,
-                    request_id=identity, request=opening, context=expected_context, before_commit=authorize_open, _ingress=ingress)
+                try:
+                    return self._claim_jobs.submit_open(project, runtime_digest=runtime, caller_scope=caller,
+                        request_id=identity, request=opening, context=expected_context, before_commit=authorize_open,
+                        _ingress=ingress)
+                except SQLReadError as error:  # S1-U10b: the database, as the open's own reason
+                    raise OpenError('open_account_busy' if error.reason_code == 'sql_read_busy' else 'open_failed') from None
+                except Exception as error:
+                    if type(getattr(error, 'reason_code', None)) is str:
+                        raise  # a refusal with its own public reason (admission capture, claims) stays as it is
+                    raise OpenError('open_failed') from None  # S1-U10f: nothing unexplained is account_unavailable
             elif operation == "account.claim_launch":
                 from .claim_storage import capture_storage_evidence
 
@@ -1180,8 +1473,25 @@ class AccountService:
                 result = self._views.settle_lost_run(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
                                                      settle=lost, storage_binding=storage_binding,
                                                      storage_evidence=storage_evidence)
+            elif operation == 'account.lost_run_closure':
+                from .claim_storage import capture_storage_evidence
+                storage_binding, storage_evidence = capture_storage_evidence(authorization.storage_binding, authorization.storage_evidence)
+                result = self._views.lost_run_closure(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
+                                                      settle=lost, storage_binding=storage_binding,
+                                                      storage_evidence=storage_evidence, request_digest=digest)
+            elif operation == 'account.publish_wake':
+                result = self._views.publish_wake(project, wake)
+            elif operation == 'account.withdraw_open':
+                result = self._views.withdraw_open(project, caller_scope=authorization.caller_scope,
+                                                   withdrawal=withdrawal, request_digest=digest)
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
+            elif request.operation == 'account.takeover_report':
+                from .account_takeover import takeover_report
+                result = takeover_report(self._views, project, request.payload)
+            elif request.operation == "account.provider_state_snapshot":
+                self._views._guard()
+                result = self._views._ledger.provider_state_snapshot(project).audit()
             elif request.operation == "account.project":
                 result = self._views.project(request.project_id)
             elif operation == "account.capacity_status":
@@ -1222,8 +1532,12 @@ class AccountService:
             reason = exc.reason_code
         except ProbeAdmissionError as exc:
             reason = exc.reason_code
+        except WithdrawError as exc:
+            reason = exc.reason_code
         except AdmissionCaptureError as exc:
             reason = public_capture_reason(exc)
+        except SQLReadError as exc:  # M4b E1a-2: a busy ledger is answered as busy
+            reason = busy_reason(operation) if exc.reason_code == "sql_read_busy" else "account_unavailable"
         except Exception:
             reason = "account_unavailable"
         return self._reply(labels, reason=reason)
@@ -1240,3 +1554,9 @@ class AccountService:
             raise AccountError("account_wrong_owner")
         with self._front_lock:
             self._closed = True
+
+
+def busy_reason(operation) -> str:
+    """M4b E1a-2: the public answer to a busy ledger; an open's own busy reason on open paths
+    (review 040-m4b-e1a-code)."""
+    return "open_account_busy" if operation == "account.open_host_run" else "account_busy"

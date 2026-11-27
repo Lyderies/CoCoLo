@@ -75,7 +75,7 @@ class LearningSourceImageTests(unittest.TestCase):
         before = self.settings()
         changes = self.connection.total_changes
         result = self.capture()
-        self.assertEqual(30, len(result['counts']))
+        self.assertEqual(31, len(result['counts']))  # O0b RS-A (requirement): the hold register is backed up
         self.assertTrue(all(n == 0 for _, n in result['counts']))
         self.assertEqual(changes, self.connection.total_changes)
         self.assertEqual(before, self.settings())
@@ -210,11 +210,31 @@ class LearningSourceImageTests(unittest.TestCase):
         self.refuse('history_conflict')
 
     def test_schema_version_columns_and_primary_key_are_exact(self):
-        self.connection.execute('PRAGMA user_version=15').close()
+# B4t: schema 18 is supported; 19 is newer and refused.
+        self.connection.execute('PRAGMA user_version=19').close()
         self.refuse('history_incompatible')
-        self.connection.execute('PRAGMA user_version=14').close()
+        self.connection.execute('PRAGMA user_version=17').close()
         self.connection.execute('ALTER TABLE sessions ADD COLUMN unexpected TEXT').close()
         self.refuse('history_incompatible')
+
+    def test_generated_columns_on_wake_and_projects_refuse(self):
+        """0.8.60 fix round (decision 247): table_info hides generated columns; table_xinfo does not."""
+        # A STORED column cannot be added in place: rebuild the (empty) wake table; projects takes a VIRTUAL one.
+        wake = self.connection.execute("SELECT sql FROM sqlite_master WHERE name='project_wake'").fetchone()[0]
+        self.connection.execute('DROP TABLE project_wake').close()
+        self.connection.execute(wake[:-1] + ',extra INTEGER GENERATED ALWAYS AS (allocated_epoch+1) STORED)').close()
+        self.refuse('history_incompatible')
+        self.connection.execute('DROP TABLE project_wake').close()
+        self.connection.execute(wake).close()
+        self.connection.execute('ALTER TABLE projects ADD COLUMN extra2 INTEGER GENERATED ALWAYS AS (created_at_ms+1) VIRTUAL').close()
+        self.refuse('history_incompatible')
+
+    def test_an_extra_column_on_an_allowed_extra_table_refuses(self):
+        """Decision 249 (c): additive_migrations, owner_key_history and admission_evidence have exact columns."""
+        for table in ('additive_migrations', 'owner_key_history', 'admission_evidence'):
+            self.connection.execute(f'ALTER TABLE {table} ADD COLUMN extra TEXT').close()
+            self.refuse('history_incompatible')
+            self.connection.execute(f'ALTER TABLE {table} DROP COLUMN extra').close()
 
     def test_changed_primary_key_is_not_inferred_from_columns(self):
         self.connection.execute('DROP TABLE sessions').close()
@@ -293,9 +313,10 @@ class LearningSourceImageTests(unittest.TestCase):
         pages = []
         original = image._page
         def observe(*args):
-            rows = original(*args)
+            result = original(*args)
+            rows = result[0]  # _page returns (rows, encoded bytes) since 0f1cc213; assertions unchanged
             pages.append((args[4], len(rows), sum(len(canonical_json(r)) for r in rows)))
-            return rows
+            return result
         with mock.patch.object(image, '_page', side_effect=observe):
             result = self.capture()
         self.assertEqual(71, dict(result['counts'])['stored_files'])
@@ -318,12 +339,14 @@ class LearningSourceImageTests(unittest.TestCase):
         self.assertIs(False, self.capture()['learning_ready'])
 
     def test_callback_budget_bounds_global_pending_scan_and_preserves_owner(self):
+        # Corrected for O0b B0-1 (requirement): the live-binding index means the pending scan reads only
+        # pending rows, so the rows that load it are pending (and expired), not consumed.
         for number in range(200):
             self.connection.execute('INSERT INTO host_run_bindings(project_id,handle_digest,run_id,'
                 'assignment_digest,task_digest,route_digest,configuration_digest,client_version,'
                 'created_at_ms,expires_at_ms,binding_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                 (self.fixture.project_b_id, str(number).zfill(64), str(number), 'b' * 64, 'c' * 64,
-                 'd' * 64, 'e' * 64, 'fixture', 1, 2, 'consumed')).close()
+                 'd' * 64, 'e' * 64, 'fixture', 1, 2, 'pending')).close()
         before = self.settings()
         self.refuse('history_learning_capacity', lambda: self.capture(limits=SQLReadLimits(1, 1000, 1_048_576)))
         self.assertEqual(before, self.settings())
@@ -382,3 +405,11 @@ class LearningSourceImageTests(unittest.TestCase):
             self.refuse('history_conflict')
         with mock.patch.object(self.source.state, 'digest_key', side_effect=[self.key, b'x' * 32]):
             self.refuse('history_conflict')
+
+
+class ProbeSchemaSourceMetadataTests(unittest.TestCase):
+    def test_PC4_schema16_source_metadata_is_supported(self):
+        from codex_agents import project_learning_source as source
+        metadata = {field: 'a'*64 for field in source._FIELDS}
+        metadata.update(project_id='project', ledger_schema_version=16, total_bytes=1)
+        self.assertEqual(metadata, source._metadata(metadata, 'project'))

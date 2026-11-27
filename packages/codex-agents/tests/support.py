@@ -28,6 +28,20 @@ def assert_dropped(test, client):
         pass
 
 
+def assert_refused(test, client, reason):
+    """R7b: the service sent its fixed refusal line, then closed. Linux may reset the connection instead
+    when unread input remains, which loses the line; that is the documented best effort."""
+    try:
+        received = client.recv(64)
+    except ConnectionResetError:
+        return
+    test.assertIn(received, (b'{"refused":"' + reason.encode() + b'"}\n', b""))
+    try:
+        test.assertEqual(b"", client.recv(1))
+    except ConnectionResetError:
+        pass
+
+
 # Operational QA runs checks inside macOS Seatbelt (sandbox-exec); other platforms fail closed.
 MACOS_SANDBOX_ONLY = unittest.skipUnless(
     sys.platform == "darwin", "operational-check sandbox (sandbox-exec) is macOS-only"

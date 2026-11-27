@@ -14,11 +14,13 @@ import threading
 import time
 
 from .account_api import account_request_digest
+from .open_withdrawal import custody_matches, decode_withdraw_open
 from .account_billing_jobs import AccountBillingJobs, BillingJobLimits
 from .account_claim_jobs import AccountClaimJobs
 from .account_ingress import AccountIngress, AccountIngressLimits
 from .account_observation import AccountObservationOwner, ObservationContext
-from .account_open_contracts import MAX_ACCOUNT_OPEN_CONTEXT_BYTES, AccountOpenContext, OpenOwnerLimits
+from .account_open_contracts import (MAX_ACCOUNT_OPEN_CONTEXT_BYTES, OPEN_REQUESTS_IN_FLIGHT, AccountOpenContext,
+                                     OpenOwnerLimits)
 from .account_observation_jobs import AccountObservationJobs, ObservationJobLimits
 from .account_service import AccountAuthorization, AccountOwnerViews, AccountService
 from .result_contracts import ResultLeaseBinding
@@ -31,20 +33,24 @@ from .provider_observation_contracts import ObservationError, decode_observation
 from .learning_contracts import keyed_digest, parse_bounded_json
 from .owned_execution import OwnedExecutionRegistry
 from .service_enrollment import (
-    EnrollmentVerifier, account_endpoint_path, issue_capability, prepare_proof_directory, proof_directory, revoke_capability,
+    EnrollmentError, EnrollmentVerifier, account_endpoint_path, issue_capability, issue_wake_capability,
+    prepare_proof_directory, proof_directory, revoke_capability, wake_keys,
 )
 from .service_host import EnrolledFrontend, ServiceHostLimits
 from .signature_job_intake import SignatureIntakeLimits
 from .signature_worker_pool import SignatureWorkerLimits
-from .sql_read_budget import SQLReadLimits
+from .sql_read_budget import SQLReadError, SQLReadLimits
 
 SECOND = 1_000_000_000
 # What an enrolled primary may ask the account owner. Owner-only operations are
 # never offered. A host open must carry its originals; a claim, the run's lease.
 HOST_OPERATIONS = frozenset({
+    'account.takeover_report',
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
+    'account.provider_state_snapshot',
     'account.observe_provider', 'account.record_observation_unavailable', 'account.billing_probe',
     'account.open_host_run', 'account.claim_launch',
+    'account.withdraw_open',  # B3: the host that opened a run may withdraw it before its claim
 })
 # A project host's custody calls for one admitted run, each bound to its lease.
 PROJECT_OPERATIONS = frozenset({
@@ -52,12 +58,19 @@ PROJECT_OPERATIONS = frozenset({
     'account.open_provenance', 'account.register_execution', 'account.run_provenance',
     'account.submit_terminal', 'account.release_capacity', 'account.close_denied_attempt',
     'account.fence_claim', 'account.settle_lost_run', 'account.record_rate_limit_event',
+    'account.withdraw_open',  # B3: a run that ends before its claim withdraws its open (it has no lease)
+    'account.lost_run_closure',  # B4s: a settled lost run's closure, with the run's own custody
+    'account.publish_wake',  # RS-E E2a-5: only under a credential the verifier bound to one project
 })
+# RS-E E2a-5: all a project-bound wake credential may do.
+WAKE_OPERATIONS = frozenset({'account.publish_wake'})
 # The owner's terminal (setup, status, attestation): reads that spend nothing, and
 # never an open, a claim or a probe. Its provider observation is the standalone kind
 # (who is signed in): one for a run's launch evidence is refused.
 OWNER_OPERATIONS = frozenset({
+    'account.takeover_report',
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
+    'account.provider_state_snapshot',
     'account.observe_provider',
 })
 GENERATION = 1
@@ -74,6 +87,39 @@ ACCOUNT_INTAKE_LIMITS = SignatureIntakeLimits(8, 3, 4096, 2 * 1_048_576, 4)
 ACCOUNT_WORKER_LIMITS = SignatureWorkerLimits(2, 32 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000)
 
 
+def unended_processes(pool, workers, observations=None):
+    """O0c M8-M10: per account lane, the processes it started that are not proven gone, as
+    {lane: [{'pid', 'why'}]} (a lane is absent once all are), asked by the self-restart before it frees
+    what the account holds in memory. Three lanes start children here, each in a session of its own,
+    so the collector's own exit ends none of them: the signature helper (reaped inside its no-fork
+    confinement), the probe's model (its tree confirmed empty, or never possible) and, review M4, the
+    observation lane's provider CLIs (their group killed, reaped, and the group empty). Owner thread;
+    never raises."""
+    pending = {}
+    for lane, owner in (('signature', pool), ('probe_worker', workers), ('observations', observations)):
+        if owner is None:
+            continue
+        try:
+            items = owner.unproven_children()
+            if type(items) is not list:
+                raise ValueError()
+        except Exception:
+            items = [{'pid': None, 'why': 'unchecked'}]
+        if items:
+            pending[lane] = items
+    return pending
+
+
+def unended_children(pool, workers, observations=None):
+    """O0c M8-M10: the account lanes whose children are not proven gone ([] when every one is)."""
+    return sorted(unended_processes(pool, workers, observations))
+
+
+def held_processes(workers):
+    """Retained probe models behind admitted rows, for a waiting restart's status."""
+    return [{'lane': name, **item} for name, items in unended_processes(None, workers).items() for item in items]
+
+
 def account_endpoint(state):
     return account_endpoint_path(state)
 
@@ -86,6 +132,9 @@ class AccountServiceHost:
     def __init__(self, ledger, state, *, clock_ns=time.monotonic_ns):
         if type(state) is not CollectorPaths or not callable(clock_ns):
             raise HistoryError('history_invalid_input')
+        self._ledger_owner = getattr(ledger, "_owner", None)
+        if self._ledger_owner is not None:
+            self._ledger_owner.guard()
         self._state, self._clock_ns = state, clock_ns
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._closed = self._issued = False
@@ -96,7 +145,7 @@ class AccountServiceHost:
             self._views = AccountOwnerViews(ledger)
             limits = ACCOUNT_READ_LIMITS
             self._claims = AccountClaimJobs(self._views, ACCOUNT_INTAKE_LIMITS, ACCOUNT_WORKER_LIMITS, limits,
-                open_limits=OpenOwnerLimits(4, 256, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
+                open_limits=OpenOwnerLimits(OPEN_REQUESTS_IN_FLIGHT, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
             self._observations = AccountObservationJobs(AccountObservationOwner(self._views, limits),
                                                         ObservationJobLimits(8, 3, 3, 3))
             self._workers = BillingProbeWorkers(OwnedExecutionRegistry(), ProbeWorkerLimits(1, PROBE_SLOT_BYTES))
@@ -118,7 +167,14 @@ class AccountServiceHost:
             prepare_proof_directory(proofs)
             key = issue_capability(state, None, 'account')
             self._issued = True
-            self._frontend = EnrolledFrontend(EnrollmentVerifier(key, frozenset({'account', 'project'}), GENERATION, proofs),
+            # RS-E E2a-5: a fresh wake key per active project (registration issues one for a project added later).
+            for project, root in ledger.active_project_roots():
+                try:
+                    issue_wake_capability(state, Path(root), project)
+                except EnrollmentError:
+                    pass  # a project whose folder is gone cannot publish; reconcile counts it unknown
+            self._frontend = EnrolledFrontend(EnrollmentVerifier(key, frozenset({'account', 'project'}), GENERATION, proofs,
+                                                                 subject_keys=self._wake_key),
                 ServiceHostLimits(32, 2 * SECOND, 64, 65 * SECOND, 30_000, 4_096),
                 lambda kind, connection, token: self._ingress.attach(connection, token), proofs, clock_ns=clock_ns)
             self._frontend.listen(account_endpoint(state), 'account')
@@ -132,6 +188,10 @@ class AccountServiceHost:
                 raise HistoryError('history_service_unavailable') from None
             raise
 
+    def _wake_key(self, subject):
+        """E2a-5: (project id, key) of the wake key issued for this subject, or a dummy key; in memory only."""
+        return wake_keys(self._state).lookup(subject)
+
     def _owner(self):
         if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError('history_wrong_owner')
@@ -143,7 +203,12 @@ class AccountServiceHost:
         allowed = {'account': HOST_OPERATIONS, 'project': PROJECT_OPERATIONS}.get(role)
         if role == 'account' and entry.enrolled.host_client == OWNER_CLIENT:
             allowed = OWNER_OPERATIONS
+        # E2a-5: a project-bound credential publishes its wake and nothing else; no other credential publishes one.
+        bound = entry is not None and entry.enrolled.project_bound is True
+        if bound:
+            allowed = WAKE_OPERATIONS if role == 'project' else None
         if (entry is None or entry.kind != 'account' or allowed is None or request.operation not in allowed
+                or (request.operation in WAKE_OPERATIONS) != bound
                 or account_request_digest(request) != entry.enrolled.request_digest):
             return None
         if allowed is OWNER_OPERATIONS and request.operation == 'account.observe_provider':
@@ -154,10 +219,21 @@ class AccountServiceHost:
                 return None
             if observation.run_handle is not None or observation.phase is not None:
                 return None
+        if bound:
+            # E2a-5: the verifier bound the key to the immutable id it was issued for; nothing is looked up first.
+            if entry.enrolled.bound_project != request.project_id:
+                return None
+            caller = keyed_digest(self._state.digest_key(), 'account-wake\0' + request.project_id)
+            return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
+                                        'project', WAKE_OPERATIONS, caller, wake_bound=True)
         root = entry.enrolled.subject
         try:
             if self._views._ledger.project_for_root(Path(root)) != request.project_id:
                 return None
+        except SQLReadError as error:
+            if error.reason_code == 'sql_read_busy':
+                raise  # M4b E1a-2: a busy ledger is answered as busy, never as "not authorized"
+            return None
         except Exception:
             return None
         # One context object per connection: the owner compares its identity
@@ -171,6 +247,15 @@ class AccountServiceHost:
         if request.operation == 'account.open_host_run':
             opening = self._open_context(entry.enrolled.context)
             if opening is None:
+                return None
+        elif request.operation == 'account.withdraw_open':
+            # B3 (RS-B draft 2 §8, draft 3 §4): a never-leased run has no lease custody. Its custody names the run,
+            # and must equal the payload; the authority is this root's project and the caller scope of its host
+            # class, which the ledger checks against the open's own stored receipt.
+            try:
+                if not custody_matches(entry.enrolled.context, decode_withdraw_open(request.payload)):
+                    return None
+            except Exception:
                 return None
         elif role == 'project' or request.operation == 'account.claim_launch':
             custody = self._run_custody(entry.enrolled.context, request.project_id)
@@ -213,6 +298,24 @@ class AccountServiceHost:
         except Exception:
             return None
 
+    def health_notes(self):
+        """S1-H1a: each account lane's published notes, for the collector's health reply. Reads only
+        immutable values: no lock, owner thread or lane method."""
+        lanes = {'signature': self._claims and self._claims._pool.health, 'claims': self._claims and self._claims.health,
+                 'observations': self._observations and self._observations.health,
+                 'ingress': self._ingress and self._ingress.health, 'billing': self._billing and self._billing.health,
+                 'probe_worker': self._workers and self._workers.health}
+        return {name: lane.view() for name, lane in lanes.items() if lane is not None}
+
+    def unended_children(self):
+        """O0c M8-M10: see `unended_processes`; the self-restart asks this on the owner thread."""
+        self._owner()
+        return unended_processes(self._claims and self._claims._pool, self._workers, self._observations)
+
+    def held_processes(self):
+        self._owner()
+        return held_processes(self._workers)
+
     def serve_once(self):
         self._owner()
         if self._closed:
@@ -222,6 +325,9 @@ class AccountServiceHost:
         # Contexts belong to connections the frontend still holds.
         for token in [key for key in self._contexts if self._frontend.context(key) is None]:
             del self._contexts[token]
+        # S13d-1: True while a client is connecting or attached or a request is in flight, so the caller keeps
+        # its short pass interval; False lets it wait longer between passes.
+        return self._frontend.engaged() or self._ingress.engaged()
 
     def close(self):
         """Withdraw the key first, then stop intake and every owned worker."""

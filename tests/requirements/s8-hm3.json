@@ -1,0 +1,40 @@
+{
+ "authority": "docs/requirements/s8-hm3.md",
+ "requirements": [
+  {
+   "id": "S8-HM3-1",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-1",
+   "statement": "Report account and project hold register/source disagreement without releasing or repairing rows."
+  },
+  {
+   "id": "S8-HM3-2",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-2",
+   "statement": "Report account and project holds more than one sweep late on every pass, using the saved project clock floor without advancing it."
+  },
+  {
+   "id": "S8-HM3-3",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-3",
+   "statement": "Persist a faulted writer service finding before D13 stop, including stop-signal-first shutdown; expose it in health status, preserve successor settlement and report failed stops."
+  },
+  {
+   "id": "S8-HM3-4",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-4",
+   "statement": "Report SH-7 custody/context, byte-budget and publication-material disagreement; healthy stores remain quiet."
+  },
+  {
+   "id": "S8-HM3-5",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-5",
+   "statement": "Bound indexed source reads by pages and deadlines; execute every ledger statement through the sole owner and keep project history readers read-only."
+  },
+  {
+   "id": "S8-HM3-6",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-6",
+   "statement": "Use scoped fixed plain findings; preserve builtin registration API and defer collector registration to the primary after S5."
+  },
+  {
+   "id": "S8-HM3-7",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-7",
+   "statement": "The collector registers the holds check with its health monitor; a health pass over a fixture project runs it and reports its findings, scoped to the project."
+  }
+ ]
+}

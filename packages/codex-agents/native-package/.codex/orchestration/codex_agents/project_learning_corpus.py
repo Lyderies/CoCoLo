@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import threading
 
 from .contracts import ContractError
 from .history_contracts import HistoryError, MAX_SEQUENCE, _DIGEST, _ID, matches, valid_integer
@@ -32,7 +33,7 @@ MAX_CHUNK_BYTES = 262_144
 MAX_SIGNATURE_BYTES = 16_384
 EMPTY_CHAIN_DIGEST = "0" * 64
 _RECORD_TYPES = frozenset({
-    "event", "event_summary", "outcome", "feedback", "evaluation_case", "evaluation_assignment",
+    "event", "event_summary", "retention_summary", "outcome", "feedback", "evaluation_case", "evaluation_assignment",
     "qa_evidence", "evidence_review", "evaluation_trial", "candidate", "comparison",
     "canary_report", "grader_calibration", "owner_grant", "promotion", "learning_export",
     "verification_binding", "host_run_profile", "dispatch_intent", "dispatch_result",
@@ -109,6 +110,33 @@ def _manifest(value, project_id):
     return parse_bounded_json(canonical_json(value))
 
 
+# One staged chunk is parsed, validated and canonically compared several times (the source read, the stage,
+# the membership recheck and the stored-material recheck). Parsing and validating bytes is a pure function of
+# the bytes, so the last few chunks' results are kept and reused. The callers only read the checked record.
+_CHECKED_KEEP = 256
+_checked_by_content = {}
+_checked_lock = threading.Lock()
+
+
+def _checked_content(content):
+    with _checked_lock:
+        checked = _checked_by_content.get(content)
+    if checked is not None:
+        return checked
+    record = parse_bounded_json(content)
+    if (type(record) is not dict or record.get("record_type") not in _RECORD_TYPES
+            or type(record.get("schema_version")) is not int):
+        raise HistoryError("history_invalid_input")
+    checked = validate_learning_record(record, stored=True)
+    if canonical_json(checked) != content:
+        raise HistoryError("history_invalid_input")
+    with _checked_lock:
+        if len(_checked_by_content) >= _CHECKED_KEEP:
+            del _checked_by_content[next(iter(_checked_by_content))]
+        _checked_by_content[content] = checked
+    return checked
+
+
 def _prepare_chunk(records, attestations):
     if (type(records) not in (list, tuple) or type(attestations) not in (list, tuple)
             or not 1 <= len(records) + len(attestations) <= MAX_CHUNK_ENTRIES):
@@ -129,13 +157,8 @@ def _prepare_chunk(records, attestations):
             size += len(entry["content"])
             if size > MAX_CHUNK_BYTES:
                 raise HistoryError("history_learning_capacity")
-            record = parse_bounded_json(entry["content"])
-            if (type(record) is not dict or record.get("record_type") not in _RECORD_TYPES
-                    or type(record.get("schema_version")) is not int):
-                raise HistoryError("history_invalid_input")
-            checked = validate_learning_record(record)
-            if (canonical_json(checked) != entry["content"]
-                    or ("observed_at_ms" in checked and checked["observed_at_ms"] != entry["observed_at_ms"])):
+            checked = _checked_content(entry["content"])
+            if "observed_at_ms" in checked and checked["observed_at_ms"] != entry["observed_at_ms"]:
                 raise HistoryError("history_invalid_input")
             previous = entry["source_sequence"]
             captured = dict(entry)
@@ -178,8 +201,8 @@ def next_chain_digest(previous, digest):
     return hashlib.sha256(b"learning-record-chain-v1\0" + bytes.fromhex(previous) + bytes.fromhex(digest)).hexdigest()
 
 
-def _owner(history, import_id):
-    history._require_owner()
+def _owner(history, import_id, *, read_only=False):
+    history._require_owner(read_only=read_only)
     if history._allow_schema_upgrade is not True:
         raise HistoryError("history_not_authorized")
     if not matches(import_id, _ID):
@@ -328,6 +351,10 @@ def stage_chunk(history, import_id, index, records, attestations, *, now_ms, bef
         from .project_learning_chunks import record_chunk_membership
         record_chunk_membership(history, import_id, index, records, attestations, digest)
         _authorization(before_commit)
+        if any(record['record_type'] == 'retention_summary' for _, record in records):
+            # Scheduling only: a rolled-back chunk may cause an empty rewalk,
+            # never a false not-found. Imported bytes remain the sole authority.
+            history._learning_history_cursors[import_id] = 0
         return receipt
 
 
@@ -351,7 +378,7 @@ def finish_import(history, import_id, *, now_ms, before_commit):
 
 
 def import_records(history, import_id, *, after_source_sequence=0, limit=32):
-    _owner(history, import_id)
+    _owner(history, import_id, read_only=True)
     if not valid_integer(after_source_sequence) or not valid_integer(limit, minimum=1, maximum=MAX_CHUNK_ENTRIES):
         raise HistoryError("history_invalid_input")
     _row(history, import_id)
@@ -378,7 +405,7 @@ def import_records(history, import_id, *, after_source_sequence=0, limit=32):
 
 
 def import_attestations(history, import_id, *, after_subject_record_id="", limit=32):
-    _owner(history, import_id)
+    _owner(history, import_id, read_only=True)
     if (not (after_subject_record_id == "" or matches(after_subject_record_id, _ID))
             or not valid_integer(limit, minimum=1, maximum=MAX_CHUNK_ENTRIES)):
         raise HistoryError("history_invalid_input")

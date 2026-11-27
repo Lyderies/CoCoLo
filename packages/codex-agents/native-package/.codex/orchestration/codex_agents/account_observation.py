@@ -69,8 +69,10 @@ class _Reservation:
     capture: _CapturedProbe
 
 
-def run_observation_probe(capture):
-    """Fixed worker entry. Normalized metadata only; no database or model work."""
+def run_observation_probe(capture, popen=None):
+    """Fixed worker entry. Normalized metadata only; no database or model work. O0c review M4: every
+    provider CLI it starts goes through `popen` (the worker's recording factory), so the worker can
+    prove each one gone."""
     if type(capture) is not _CapturedProbe:
         raise ObservationError('observation_invalid_request')
     from .host_paths import private_directory, remove_private_directory
@@ -84,6 +86,8 @@ def run_observation_probe(capture):
         options = dict(digest_key=capture.key, observed_at_ms=capture.observed_at_ms,
                        tmpdir=temporary, environ={'LANG': capture.language},
                        untrusted=tuple(Path(root) for root in capture.untrusted))
+        if popen is not None:
+            options['popen'] = popen
         records = (providers.observe_codex(Path(capture.root), run_id=capture.run_id, phase=capture.phase, **options)
                    if capture.provider == 'codex' else providers.observe_claude(**options))
         raw = canonical_json(records)

@@ -26,6 +26,11 @@ from .learning_contracts import (
 )
 from .learning_analysis import analyze_outcomes
 
+# How long learning reads and keeps outcomes, unpromoted cases and candidates, and operational QA: the one
+# retention window of the learning cycle (O0c P7/P8). Records older than this are outside every cycle and case
+# review and are removed by the product's own cleanup; promoted policy and anything a live record names stay.
+# The default is 90 days, the ledger's record retention; the owner has not decided it, so it is this constant only.
+LEARNING_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 MAX_OUTCOMES = 10_000
 MAX_CASES = 20_000
 MAX_INVALIDATED_RUNS = 20_000
@@ -57,7 +62,7 @@ def _snapshot(outcomes, cases, invalidated, checkpoint=_no_checkpoint):
     if any(type(item) is not str or not 1 <= len(item) <= 256 for item in invalidated):
         raise ContractError("learning cycle invalidation identifier is invalid")
     size = sum(len(item.encode("utf-8")) for item in invalidated)
-    for records, validate in ((outcomes, validate_outcome), (cases, validate_evaluation_case)):
+    for records, validate in ((outcomes, lambda value: validate_outcome(value, stored=True)), (cases, validate_evaluation_case)):
         identifiers = set()
         for record in records:
             checkpoint()

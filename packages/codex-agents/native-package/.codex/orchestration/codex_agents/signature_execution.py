@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import contextlib
 import json
 import os
 import selectors
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -21,7 +23,7 @@ import threading
 import time
 import struct
 
-from .process_tree import ProcessTree, process_record
+from .process_tree import ProcessTree, create_child, group_empty, process_record
 from .signature_input_wire import (
     SignatureWireLimits, decode_signature_inputs, encode_signature_inputs,
 )
@@ -80,6 +82,9 @@ class _Context:
         self.process = None
         self.tree = None
         self.spawn_ambiguous = False
+        # O0c review M1: the helper was started under the macOS profile that refuses every new process
+        # (`(deny process-fork)`), which sandbox-exec applies to itself before it executes anything.
+        self.no_fork_from_exec = False
         self.guarded = False
         self.reaped = False
         self.roots_reaped = 0
@@ -126,7 +131,7 @@ def _cleanup_process(context):
         return False
 
 
-def _cleanup_process_checked(context):
+def _cleanup_process_checked(context, timeout_s=None):
     if context.spawn_ambiguous:
         return False
     process = context.process
@@ -144,7 +149,7 @@ def _cleanup_process_checked(context):
                     # check. No external ps call/group signal/foreign PID input.
                     process.kill()
         try:
-            process.wait(timeout=context.cleanup_ns / 1_000_000_000)
+            process.wait(timeout=context.cleanup_ns / 1_000_000_000 if timeout_s is None else timeout_s)
         except (OSError, subprocess.TimeoutExpired):
             return False
         context.reaped = True
@@ -160,21 +165,100 @@ def _cleanup_process_checked(context):
     return True
 
 
+def unproven_children(context):
+    """O0c M8, review M1/M2: the processes this unconfirmed execution started that are not proven gone,
+    as [{'pid', 'why'}]; [] once none can still run. Never raises.
+
+    What proves a helper root gone, in order:
+    - it was never created: no spawn was in doubt (`spawn_ambiguous`, cleared when the factory provably
+      left no child: process_tree.create_child), and every root it did create was released (None);
+    - an unreaped root with a fresh matching birth and our parent id can be signalled, then reaped
+      without waiting (asked again at the next check). A missing process record authorizes no signal;
+      only a bounded wait on the retained Popen handle can establish that root's end;
+    - once reaped by this process: when it had reported ready from inside its confinement (`guarded`,
+      the normal release's rule), it could have had no descendant. Otherwise, on macOS
+      (`no_fork_from_exec`): sandbox-exec applied the `(deny process-fork)` profile to itself before it
+      executed anything, so neither it nor anything it ran could create a process (fork, posix_spawn
+      and subprocess are all refused: checked on this macOS). On Linux the helper confines itself
+      (seccomp) only after its fixed imports, which start no process; the strongest evidence left is
+      that no process is in its group or its session (it led both), read from the kernel.
+    Its scratch folder is removed when it can be (a file, not a child)."""
+    try:
+        if context.spawn_ambiguous:
+            return [{'pid': None, 'why': 'no_handle'}]
+        process = context.process
+        if process is not None:
+            if not context.reaped and process.returncode is None:
+                record = process_record(process.pid)
+                if record is not None and (record[0] != os.getpid()
+                        or (context.tree is not None and context.tree.root_birth != record[2])):
+                    return [{'pid': process.pid, 'why': 'unchecked'}]
+                if record is not None and not record[3]:
+                    with contextlib.suppress(OSError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    with contextlib.suppress(OSError):
+                        process.kill()
+                try:
+                    process.wait(timeout=0)
+                except (OSError, subprocess.TimeoutExpired):
+                    return [{'pid': process.pid, 'why': 'unchecked' if record is None else 'not_reaped'}]
+            context.reaped = True
+            pid = process.pid
+            guarded = context.guarded and context.tree is not None and context.tree.identified
+            if not guarded and not context.no_fork_from_exec:
+                if not group_empty(pid):
+                    return [{'pid': pid, 'why': 'group_not_empty'}]
+                from .launch_journal import _session_members
+                birth = context.tree.root_birth if context.tree is not None else None
+                members = _session_members({pid}, {pid: birth} if birth else None)
+                if members is None:
+                    return [{'pid': pid, 'why': 'unchecked'}]
+                if members:
+                    return [{'pid': pid, 'why': 'session_not_empty'}]
+            _close_streams(process)
+            context.roots_reaped += 1
+            context.process = context.tree = None
+            context.guarded = context.reaped = False
+    except BaseException:  # noqa: BLE001 - nothing proven
+        return [{'pid': None, 'why': 'unchecked'}]
+    try:
+        if context.scratch is not None:
+            shutil.rmtree(context.scratch)
+            context.scratch = None
+    except BaseException:  # noqa: BLE001 - a folder left behind holds no child
+        pass
+    return []
+
+
+def children_ended(context):
+    """O0c M8: True only when no process this unconfirmed execution started can still run."""
+    return unproven_children(context) == []
+
+
 def _exchange(context, mode, data=None):
     context.sample()
     arguments = ['prepare', str(context.limits.max_rows), str(context.limits.max_field_bytes)] if mode == b'P' else ['verify']
     command = [str(Path(sys.executable).resolve()), '-I', '-B', '-S', '-c', _BOOTSTRAP, str(_HELPER_ROOT), *arguments]
     if sys.platform == 'darwin':
         command = ['/usr/bin/sandbox-exec', '-p', _profile(context.scratch), *command]
+    context.no_fork_from_exec = sys.platform == 'darwin'
     context.spawn_ambiguous = True
     # Retain the actual handle before any later operation; no arbitrary PID or
     # executable/descriptor supplied by a client is accepted here.
-    context.process = subprocess.Popen(
-        command, cwd=context.scratch,
+    process, error, child_left = create_child(subprocess.Popen, command, dict(
+        cwd=context.scratch,
         env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'TMPDIR': str(context.scratch)},
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         close_fds=True, start_new_session=True, bufsize=0,
-    )
+    ))
+    if error is not None:
+        # O0c review M2: a factory error that provably left no child is not in doubt; a child it
+        # created and did not reap is kept, so the cleanup stops and reaps it.
+        if process is not None:
+            context.process = process
+        context.spawn_ambiguous = child_left and process is None
+        raise error
+    context.process = process
     context.spawn_ambiguous = False
     process = context.process
     record = process_record(process.pid)

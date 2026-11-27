@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/s13d.md",
+ "requirements": [
+  {
+   "id": "S13d-1",
+   "statement": "Measure real idle host CPU before setting a regression budget or changing waits; preserve queue and latency contracts.",
+   "source": "tests/requirements/s13d.json#S13d-1"
+  },
+  {
+   "id": "S13d-2",
+   "statement": "Cache trusted git resolution per process without caching caller repository exclusions or doing import-time I/O.",
+   "source": "tests/requirements/s13d.json#S13d-2"
+  },
+  {
+   "id": "S13d-3",
+   "statement": "Retain the project host lock through history writer drain and final settlement before acknowledging stopped.",
+   "source": "tests/requirements/s13d.json#S13d-3"
+  },
+  {
+   "id": "S13d-4",
+   "statement": "Diagnose claim and crash-loop timing flakes and tolerate an already-exited enumerated host without weakening existing guarantees.",
+   "source": "tests/requirements/s13d.json#S13d-4"
+  }
+ ]
+}

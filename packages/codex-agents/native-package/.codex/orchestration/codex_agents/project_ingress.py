@@ -23,6 +23,9 @@ MAX_CONNECTIONS = 64
 FRONTEND_SLOT_BYTES = 2 * MAX_FRAME_BYTES + 1024
 
 
+IDLE_WAIT_SECONDS = 0.05  # how long the frontend thread sleeps when no connection is attached
+
+
 @dataclass(frozen=True)
 class ProjectIngressLimits:
     connections: int
@@ -85,6 +88,7 @@ class ProjectIngress:
         self._authorizer = authorizer
         self._pid, self._owner_thread = os.getpid(), threading.current_thread()
         self._lock = threading.Lock()
+        self._wake = threading.Event()  # set when a peer is attached or a close is requested (see IDLE_WAIT_SECONDS)
         self._peers: dict[object, _Peer] = {}
         self._rotation = deque()
         self._started = self._closing = self._stopped = self._faulted = False
@@ -135,6 +139,7 @@ class ProjectIngress:
             if any(value.connection.fileno() == descriptor for value in self._peers.values()):
                 raise HistoryError("history_invalid_input")
             self._peers[token] = peer
+        self._wake.set()
         return token
 
     def detach(self, token):
@@ -145,6 +150,7 @@ class ProjectIngress:
             if peer is None:
                 raise HistoryError("history_not_authorized")
             peer.drop_requested = True
+        self._wake.set()
 
     def _active(self, token, peer):
         if self._pid != os.getpid():
@@ -269,6 +275,12 @@ class ProjectIngress:
                     if self._closing:
                         return
                     peers = list(self._peers.items())
+                if not peers:
+                    # S13d-1: with nothing attached there is nothing to poll. Wait for an attach or a close
+                    # (both set the event); the bound only covers a state change nobody signals.
+                    self._wake.wait(IDLE_WAIT_SECONDS)
+                    self._wake.clear()
+                    continue
                 for token, peer in peers:
                     if not self._active(token, peer) or time.monotonic_ns() >= peer.deadline_ns:
                         self._drop(selector, token, peer)
@@ -311,6 +323,7 @@ class ProjectIngress:
             self._closing = True
             if not self._started:
                 self._stopped = True
+        self._wake.set()
 
     def snapshot(self):
         if self._pid != os.getpid():

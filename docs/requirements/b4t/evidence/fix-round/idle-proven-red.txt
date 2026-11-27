@@ -1,0 +1,27 @@
+F
+======================================================================
+FAIL: test_idle_predecessor_with_readable_identity_also_receives_no_signal (tests.test_b4t_takeover.AmendmentA1Tests.test_idle_predecessor_with_readable_identity_also_receives_no_signal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2764, in test_idle_predecessor_with_readable_identity_also_receives_no_signal
+    ops.stop_service(plan['intent'])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_owner.py", line 193, in stop_service
+    self.pinned = pin_predecessor(old['pid'], entry=Path(old['entry']), state_root=self.state.root,
+                  ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        project_root=self.project_root)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+AssertionError: idle signal path
+
+----------------------------------------------------------------------
+Ran 1 test in 0.102s
+
+FAILED (failures=1)

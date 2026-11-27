@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+# ruff: noqa: I001 -- tests.support bootstraps the native package import path.
+
+import unittest
+
+from tests.support import *  # noqa: F401,F403
+from codex_agents.learning_contracts import canonical_json, content_digest, keyed_digest
+from codex_agents.contracts import legacy_result_status, result_axes
+from codex_agents.learning_engine import build_operational_qa_records, build_verified_qa_records
+from tests.learning_support import DIGEST_KEY
+from tests.test_learning_engine import verified_qa_inputs
+
+REVIEW_SLICE = "coding-low-low-review-known-narrow-independent_judgment"
+TESTS_NOT_RUN = "Tests were not run: this review is read-only."
+
+
+def bind(inputs: dict) -> dict:
+    inputs["host_outcome"]["evidence_digests"] = sorted({
+        keyed_digest(DIGEST_KEY, canonical_json(inputs["evaluator_assignment"])),
+        keyed_digest(DIGEST_KEY, canonical_json(inputs["evaluator_result"])),
+    })
+    inputs["verifier_assignment"]["context"] = [content_digest(inputs["host_outcome"])]
+    inputs["verifier_host_outcome"]["evidence_digests"] = sorted({
+        keyed_digest(DIGEST_KEY, canonical_json(inputs["verifier_assignment"])),
+        keyed_digest(DIGEST_KEY, canonical_json(inputs["verifier_result"])),
+    })
+    return inputs
+
+
+def qa_inputs(*, review: bool, worker_verdict="not-ready", verifier_verdict="ready-with-corrections",
+              worker_outcome="observed", verifier_outcome="observed", claims=(TESTS_NOT_RUN,),
+              worker_risks=("Defect remains",), verifier_risks=("Defect remains",)) -> dict:
+    inputs = verified_qa_inputs()
+    inputs.pop("evaluation_assignment")
+    inputs.pop("evaluation_case")
+    host = inputs["host_outcome"]
+    host["evaluation_candidate_digest"] = None
+    host["evaluation_case_digest"] = None
+    if review:
+        host["task_slice"] = REVIEW_SLICE
+    for key, verdict, outcome, risks in (
+        ("evaluator_result", worker_verdict, worker_outcome, worker_risks),
+        ("verifier_result", verifier_verdict, verifier_outcome, verifier_risks),
+    ):
+        value = inputs[key]
+        value.update(
+            execution_state="completed", semantic_verdict=verdict, admission_state="unverified",
+            retry={"attempt": 1, "retry_of_assignment_id": None},
+            remaining_risks=list(risks), unverified_claims=list(claims),
+        )
+        value["evidence"][0]["outcome"] = outcome
+    for key, verdict in (("host_outcome", worker_verdict), ("verifier_host_outcome", verifier_verdict)):
+        inputs[key].update(
+            execution_state="completed", semantic_verdict=verdict, admission_state="unverified",
+            retry_attempt=1, retry_of_assignment_id=None,
+        )
+    return bind(inputs)
+
+
+class ReviewQaTests(unittest.TestCase):
+    def test_review_is_accepted_when_verifier_confirms_findings_whatever_the_verdicts(self) -> None:
+        qa, record = build_operational_qa_records(**qa_inputs(review=True))
+        self.assertTrue(qa["accepted"])
+        self.assertFalse(qa["verifier_disagreement"])
+        self.assertTrue(record["accepted"])
+        self.assertEqual("accepted", record["status"])
+
+    def test_review_with_a_refuted_finding_is_a_disagreement(self) -> None:
+        qa, record = build_operational_qa_records(**qa_inputs(review=True, verifier_outcome="fail"))
+        self.assertTrue(qa["verifier_disagreement"])
+        self.assertFalse(qa["accepted"])
+        self.assertEqual("rejected", record["status"])
+
+    def test_review_with_an_unexpected_unverified_claim_is_not_accepted(self) -> None:
+        qa, _ = build_operational_qa_records(
+            **qa_inputs(review=True, claims=("The benchmark numbers are probably right.",))
+        )
+        self.assertFalse(qa["accepted"])
+
+    def test_review_ignores_only_the_exact_expected_statement(self) -> None:
+        for claim in ("No tests cover the security gate.",
+                      "Tests were not run. The runtime digest is unverified.",
+                      "Tests were not run and the digest is unverified."):
+            qa, _ = build_operational_qa_records(**qa_inputs(review=True, claims=(claim,)))
+            self.assertFalse(qa["accepted"], claim)
+        qa, _ = build_operational_qa_records(**qa_inputs(review=True, claims=("Tests were not run.",)))
+        self.assertTrue(qa["accepted"])
+
+    def test_wrapped_and_multiline_claims_are_judged_by_sentence(self) -> None:
+        for claim, accepted in (
+            ("Tests were not\nrun.", True),
+            ("Tests were\n  not run: this review\nis read-only.", True),
+            ("Tests were not run.\nNo tests were run.", True),
+            ("Tests were not run\nand the digest is unverified.", False),
+            ("Tests were not run.\nThe digest is unverified.", False),
+        ):
+            qa, _ = build_operational_qa_records(**qa_inputs(review=True, claims=(claim,)))
+            self.assertEqual(qa["accepted"], accepted, claim)
+
+    def test_non_review_same_agreement_is_a_strict_disagreement(self) -> None:
+        qa, record = build_operational_qa_records(**qa_inputs(review=False))
+        self.assertTrue(qa["verifier_disagreement"])
+        self.assertFalse(qa["accepted"])
+        self.assertEqual("rejected", record["status"])
+
+    def test_non_review_task_keeps_the_strict_rule(self) -> None:
+        qa, _ = build_operational_qa_records(**qa_inputs(review=False))
+        self.assertFalse(qa["accepted"])
+        qa, _ = build_operational_qa_records(
+            **qa_inputs(review=False, worker_verdict="ready", verifier_verdict="ready",
+                        claims=(TESTS_NOT_RUN,), worker_risks=(), verifier_risks=())
+        )
+        self.assertFalse(qa["accepted"])
+
+    def test_non_review_worker_pass_and_verifier_ready_agree_and_are_accepted(self) -> None:
+        # L5.3: pass and ready are the same positive class.
+        for worker, verifier in (("pass", "ready"), ("ready", "pass")):
+            qa, record = build_operational_qa_records(
+                **qa_inputs(review=False, worker_verdict=worker, verifier_verdict=verifier,
+                            claims=(), worker_risks=(), verifier_risks=())
+            )
+            self.assertFalse(qa["verifier_disagreement"], (worker, verifier))
+            self.assertTrue(qa["accepted"], (worker, verifier))
+            self.assertEqual("accepted", record["status"])
+
+    def test_non_review_positive_against_not_ready_is_still_a_disagreement(self) -> None:
+        for verifier in ("not-ready", "ready-with-corrections"):
+            qa, _ = build_operational_qa_records(
+                **qa_inputs(review=False, worker_verdict="pass", verifier_verdict=verifier,
+                            claims=(), worker_risks=(), verifier_risks=())
+            )
+            self.assertTrue(qa["verifier_disagreement"], verifier)
+            self.assertFalse(qa["accepted"], verifier)
+
+
+NEGATIVES = ("not-ready", "ready-with-corrections", "blocked")
+
+
+def site_inputs(site: str, *, review: bool = False, worker="pass", verifier="ready",
+                worker_outcome="observed", verifier_outcome="observed", claims=(),
+                verifier_claims=None, host_verdict=None, verifier_host_verdict=None) -> dict:
+    """Identical fixtures for both QA sites; only the named arguments differ."""
+    if site == "operational":
+        inputs = verified_qa_inputs()
+        inputs.pop("evaluation_assignment")
+        inputs.pop("evaluation_case")
+        inputs["host_outcome"]["evaluation_candidate_digest"] = None
+        inputs["host_outcome"]["evaluation_case_digest"] = None
+        if review:
+            inputs["host_outcome"]["task_slice"] = REVIEW_SLICE
+    else:
+        inputs = verified_qa_inputs()
+    vclaims = claims if verifier_claims is None else verifier_claims
+    for key, verdict, outcome, cl in (
+        ("evaluator_result", worker, worker_outcome, claims),
+        ("verifier_result", verifier, verifier_outcome, vclaims),
+    ):
+        value = inputs[key]
+        value.update(
+            execution_state="completed", semantic_verdict=verdict, admission_state="unverified",
+            status=legacy_result_status("completed", verdict),
+            retry={"attempt": 1, "retry_of_assignment_id": None},
+            remaining_risks=[], unverified_claims=list(cl),
+        )
+        value["evidence"][0]["outcome"] = outcome
+    for key, verdict in (("host_outcome", host_verdict or worker),
+                         ("verifier_host_outcome", verifier_host_verdict or verifier)):
+        inputs[key].update(
+            execution_state="completed", semantic_verdict=verdict, admission_state="unverified",
+            retry_attempt=1, retry_of_assignment_id=None,
+        )
+    return bind(inputs)
+
+
+def run(site: str, **kw):
+    build = build_operational_qa_records if site == "operational" else build_verified_qa_records
+    return build(**site_inputs(site, **kw))
+
+
+def terms(inputs: dict) -> tuple:
+    """The compared terms: verdicts, outcomes, claims, host verdicts."""
+    ev, vr = inputs["evaluator_result"], inputs["verifier_result"]
+    return (
+        result_axes(ev)["semantic_verdict"], result_axes(vr)["semantic_verdict"],
+        [e["outcome"] for e in ev["evidence"]], [e["outcome"] for e in vr["evidence"]],
+        bool(ev["unverified_claims"]), bool(vr["unverified_claims"]),
+        inputs["host_outcome"]["semantic_verdict"], inputs["verifier_host_outcome"]["semantic_verdict"],
+    )
+
+
+class QaVerdictClassTests(unittest.TestCase):
+    SITES = ("operational", "verified")
+
+    def test_pass_ready_matrix_agrees_at_both_sites(self) -> None:
+        for site in self.SITES:
+            for worker, verifier in (("pass", "ready"), ("ready", "pass"), ("pass", "pass"), ("ready", "ready")):
+                qa, record = run(site, worker=worker, verifier=verifier)
+                self.assertFalse(qa["verifier_disagreement"], (site, worker, verifier))
+                self.assertTrue(qa["accepted"], (site, worker, verifier))
+                self.assertEqual("accepted", record["status"])
+
+    def test_negative_matrix_disagrees_at_both_sites(self) -> None:
+        for site in self.SITES:
+            for worker in ("pass", "ready"):
+                for verifier in NEGATIVES:
+                    for pair in ((worker, verifier), (verifier, worker)):
+                        qa, _ = run(site, worker=pair[0], verifier=pair[1])
+                        self.assertTrue(qa["verifier_disagreement"], (site, pair))
+                        self.assertFalse(qa["accepted"], (site, pair))
+
+    def test_blocked_is_built_through_the_status_projection(self) -> None:
+        self.assertEqual("blocked", legacy_result_status("completed", "blocked"))
+        for site in self.SITES:
+            qa, _ = run(site, worker="pass", verifier="blocked")
+            self.assertTrue(qa["verifier_disagreement"], site)
+
+    def test_only_completeness_differs(self) -> None:
+        for site in self.SITES:
+            base = site_inputs(site)
+            odd = site_inputs(site, verifier_claims=("An unexpected unverified claim.",))
+            ev_b, ev_o = terms(base), terms(odd)
+            self.assertEqual(ev_b[:4], ev_o[:4])
+            self.assertEqual(ev_b[6:], ev_o[6:])
+            self.assertEqual((False, False), ev_b[4:6])
+            self.assertEqual((False, True), ev_o[4:6])
+            build = build_operational_qa_records if site == "operational" else build_verified_qa_records
+            self.assertFalse(build(**base)[0]["verifier_disagreement"], site)
+            qa, _ = build(**odd)
+            self.assertTrue(qa["verifier_disagreement"], site)
+            self.assertFalse(qa["accepted"], site)
+
+    def test_only_criterion_outcomes_differ(self) -> None:
+        for site in self.SITES:
+            base = site_inputs(site, worker="not-ready", verifier="not-ready")
+            odd = site_inputs(site, worker="not-ready", verifier="not-ready", verifier_outcome="fail")
+            tb, to = terms(base), terms(odd)
+            self.assertEqual((tb[0], tb[1], *tb[4:]), (to[0], to[1], *to[4:]))
+            self.assertEqual(tb[2], to[2])
+            self.assertNotEqual(tb[3], to[3])
+            build = build_operational_qa_records if site == "operational" else build_verified_qa_records
+            self.assertFalse(build(**base)[0]["verifier_disagreement"], site)
+            qa, _ = build(**odd)
+            self.assertTrue(qa["verifier_disagreement"], site)
+
+    def test_only_host_verdict_differs(self) -> None:
+        for site in self.SITES:
+            for kw in ({"host_verdict": "ready"}, {"verifier_host_verdict": "pass"}):
+                base = site_inputs(site)
+                odd = site_inputs(site, **kw)
+                tb, to = terms(base), terms(odd)
+                self.assertEqual(tb[:6], to[:6])
+                self.assertNotEqual(tb[6:], to[6:])
+                build = build_operational_qa_records if site == "operational" else build_verified_qa_records
+                self.assertFalse(build(**base)[0]["verifier_disagreement"], site)
+                qa, _ = build(**odd)
+                self.assertTrue(qa["verifier_disagreement"], (site, kw))
+
+    def test_review_skips_the_verdict_comparison(self) -> None:
+        for worker, verifier in (("pass", "not-ready"), ("ready", "ready-with-corrections"),
+                                 ("pass", "blocked"), ("pass", "ready")):
+            qa, _ = run("operational", review=True, worker=worker, verifier=verifier)
+            self.assertFalse(qa["verifier_disagreement"], (worker, verifier))
+            self.assertTrue(qa["accepted"], (worker, verifier))
+
+
+if __name__ == "__main__":
+    unittest.main()

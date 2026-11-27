@@ -1,0 +1,168 @@
+FAILED codex:tests.test_rsf_s2_regressions (exit 1) -> /private/tmp/pttgrkpedd/1.log
+    self._require_project_migration_backups(16, LEDGER_SCHEMA_VERSION)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+AssertionError: epoch-only step requested a project backup
+
+======================================================================
+FAIL: test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent (tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_regressions.py", line 44, in test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent
+    self.assertIsNone(learning_store.ledger_schema_behind(self.state))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 16 is not None
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.136s
+
+FAILED (failures=5, errors=1)
+
+BUDGET DEBT: codex:tests.test_bridge ceiling=299.500s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_container_stop ceiling=67.620s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_host_commands ceiling=119.560s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_learning_cli ceiling=95.440s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_lost_run_settlement ceiling=98.640s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_project_driver ceiling=390.320s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_trial_run_driver_bugs ceiling=70.220s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_write_merge ceiling=241.240s not_measured seconds=None
+BUDGET DEBT: root:test_install ceiling=110.140s not_measured seconds=None
+BUDGET DEBT: root:test_install_claude_upgrade ceiling=120.330s not_measured seconds=None
+BUDGET DEBT: root:test_setup_sh ceiling=177.880s not_measured seconds=None
+BUDGET DEBT: root:test_setup_straight ceiling=264.440s not_measured seconds=None
+BUDGET DEBT: root:test_setup_update ceiling=167.880s not_measured seconds=None
+BUDGET DEBT: root:test_setup_wizard_direct ceiling=265.860s not_measured seconds=None
+RUN RECORD: /var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/cocolo-test-record-07_cm977/run.json
+{
+ "elapsed_seconds": 0.3,
+ "jobs": 2,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 0.327,
+ "over_budget": [],
+ "budget_failures": [],
+ "budget_warnings": [
+  {
+   "module": "codex:tests.test_bridge",
+   "ceiling": 299.5,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_container_stop",
+   "ceiling": 67.62,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "ceiling": 119.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "ceiling": 95.44,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "ceiling": 98.64,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "ceiling": 390.32,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "ceiling": 70.22,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "ceiling": 241.24,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install",
+   "ceiling": 110.14,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "ceiling": 120.33,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_sh",
+   "ceiling": 177.88,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_straight",
+   "ceiling": 264.44,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_update",
+   "ceiling": 167.88,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "ceiling": 265.86,
+   "seconds": null,
+   "status": "not_measured"
+  }
+ ],
+ "debt_retirement_required": [],
+ "discovery_seconds": 2.295077249989845,
+ "preflight_seconds": 6.882204875117168,
+ "metadata_errors": [],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [
+  "RSF-S2-1",
+  "RSF-S2-2",
+  "RSF-S2-3",
+  "RSF-S2-4",
+  "RSF-S2-6"
+ ],
+ "units": 1,
+ "tests": {
+  "codex": 6
+ },
+ "failed_units": [
+  "codex:tests.test_rsf_s2_regressions"
+ ],
+ "slowest_units": [
+  [
+   "codex:tests.test_rsf_s2_regressions",
+   0.3
+  ]
+ ],
+ "logs": "/private/tmp/pttgrkpedd"
+}
+Unchecked requirements (83): API-1, API-10, API-11, API-12, API-13, API-14, API-15, API-16, API-17, API-18, API-19, API-2, API-20, API-21, API-22, API-23, API-24, API-25, API-26, API-27, API-3, API-4, API-5, API-6, API-7, API-8, API-9, G1, G2, G3, G4, G5, G6, G7, G8, G9, L1.1, L1.2, L10.1, L10.2, L10.3, L11.1, L11.2, L12.1, L12.2, L12.3, L12.4, L12.5, L12.6, L12.7, L13.1, L13.2, L2.1, L2.2, L3.1, L3.2, L3.3, L4.1, L4.2, L5.1, L5.2, L5.3, L6.1, L6.2, L7.1, L7.2, L7.3, L8.1, L8.2, L9.1, L9.2, L9.3, P4-REPORT, RS-B-B6-6, TERM-13, TERM-17, TERM-5, TERM-6, TERM-7, TF-23, TF-25, TF-26, TF-27

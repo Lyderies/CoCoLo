@@ -13,10 +13,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .reply_shapes import reply_fields_match
 from .contracts import ContractError, TASK_FAMILIES
 from .history_contracts import (
     HISTORY_REASON_CODES, MAX_SEQUENCE, AttemptBinding, HistoryError, TerminalDelivery,
-    _DIGEST, _ID, _PROJECT, matches, valid_integer,
+    _DIGEST, _ID, _PROJECT, _RUN, matches, valid_integer,
 )
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .host_open_contracts import OpenProvenanceInput, decode_host_open_submission
@@ -24,7 +25,7 @@ from .learning_contracts import SOURCES, canonical_json, parse_bounded_json, val
 from .operational_qa_contracts import checked_operational_qa, checked_qa_summary
 from .open_scope_contracts import checked_open_scope, decode_open_scope_request
 from .result_contracts import MAX_RESULT_BODY_BYTES
-from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
+from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, SERVICE_REFUSALS, ServiceTransportError, exchange_frame
 
 HISTORY_PROTOCOL_VERSION = 1
 MAX_HISTORY_REPLY_BYTES = 16_384
@@ -34,13 +35,21 @@ _RECORD_OPERATIONS = {
     "history.commit_terminal": "dispatch_result",
 }
 HISTORY_OPERATIONS = frozenset({
+    'service.stop_for_update',
+    'history.takeover_report',
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
     "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
     "history.issue_qa_checks",
     "history.commit_qa", "history.qa_details", "history.open_scope", "history.worker_input",
     "history.learning_cycle", "history.learning_report", "history.routing_evidence",
     "history.learning_feedback", "history.learning_review_case", "history.orchestration_report",
-    "history.capacity_report",
+    "history.capacity_report", "history.holds_report",
+    # T7 S2 (L14.1): this project's orchestrations by state, for learning-status (the store holds them, not the ledger).
+    "history.orchestration_counts",
+    # S44a: the last days' child runs per provider, whether they reported usage, for learning-status.
+    "history.run_usage",
+    # D1: a published attempt's terminal reference, found in the store from its run handle, attempt and inputs.
+    "history.result_reference",
 })
 # Replies that may carry more than the ordinary metadata reply.
 LARGE_REPLY_OPERATIONS = frozenset({"history.read_record", "history.qa_details", "history.worker_input",
@@ -67,11 +76,20 @@ class HistoryRequest:
         encode_history_request(self)
 
 
+def _warm_up_shape(value):
+    """LRS-7: the project service's start-up report: fixed words and one fixed failure code, nothing else."""
+    return (type(value) is dict and set(value) == {'state', 'since_ms', 'failed_phase', 'last_failure_code'}
+            and value['state'] in {'warming', 'ready', 'failing'} and valid_integer(value['since_ms'], maximum=1 << 40)
+            and value['failed_phase'] in {None, 'listing', 'sweep'}
+            and (value['last_failure_code'] is None
+                 or (type(value['last_failure_code']) is str and re.fullmatch(r'[a-z0-9_]{1,64}', value['last_failure_code']) is not None)))
+
+
 def _closed(value: object, fields: set[str]) -> bool:
     return type(value) is dict and value.keys() == fields
 
 
-def _checked_history_record(value: object, *, expected_type: str | None = None) -> dict:
+def _checked_history_record(value: object, *, expected_type: str | None = None, stored: bool = False) -> dict:
     # Protocol-v1 history values describe the new typed store, not legacy import.
     # The existing shared legacy reader and its canonical bytes remain unchanged.
     if (
@@ -80,7 +98,7 @@ def _checked_history_record(value: object, *, expected_type: str | None = None) 
         or (expected_type is not None and value["record_type"] != expected_type)
     ):
         raise HistoryError("history_invalid_input")
-    return validate_learning_record(value)
+    return validate_learning_record(value, stored=stored)
 
 
 def _validate_request(request: HistoryRequest) -> None:
@@ -121,8 +139,24 @@ def _validate_request(request: HistoryRequest) -> None:
         if (not _closed(payload, {'host_outcome_digest'}) or not matches(payload['host_outcome_digest'], _DIGEST)
                 or request.request_id != payload['host_outcome_digest']):
             raise HistoryError('history_invalid_request')
+    elif operation == 'service.stop_for_update':
+        if not _closed(payload, set()) or request.request_id != 'update-stop':
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.takeover_report':
+        if (not (_closed(payload, set()) or (_closed(payload, {'run_handle'})
+                    and matches(payload['run_handle'], _RUN))) or request.request_id != 'takeover'):
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.holds_report':
+        if not _closed(payload, set()) or request.request_id != 'holds':
+            raise HistoryError('history_invalid_request')
     elif operation == 'history.capacity_report':
         if not _closed(payload, set()) or request.request_id != 'capacity':
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.orchestration_counts':
+        if not _closed(payload, set()) or request.request_id != 'orchestrations':
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.run_usage':
+        if not _closed(payload, set()) or request.request_id != 'run-usage':
             raise HistoryError('history_invalid_request')
     elif operation == 'history.orchestration_report':
         if (not _closed(payload, {'orchestration_id'}) or type(payload['orchestration_id']) is not str
@@ -185,8 +219,10 @@ def _validate_request(request: HistoryRequest) -> None:
             raise HistoryError('history_invalid_request')
     elif operation == "history.admit_host_result":
         reference = decode_host_result_reference(payload)
-        if (reference.binding.project_id != request.project_id or reference.binding.runtime_digest != request.runtime_digest
-                or request.request_id != reference.binding.claim_id):
+        # The envelope names the current enrolled service. The immutable
+        # reference can name predecessor custody; the writer's B2 predicate
+        # requires its takeover authority before recording it.
+        if (reference.binding.project_id != request.project_id or request.request_id != reference.binding.claim_id):
             raise HistoryError("history_invalid_request")
     elif operation == "history.acknowledge_terminal":
         if (
@@ -194,6 +230,11 @@ def _validate_request(request: HistoryRequest) -> None:
             or request.request_id != payload["claim_id"] or not matches(payload["claim_id"], _ID)
             or not all(matches(payload[key], _DIGEST) for key in ("record_content_digest", "receipt_digest"))
         ):
+            raise HistoryError("history_invalid_request")
+    elif operation == "history.result_reference":
+        if (not _closed(payload, {"run_handle", "attempt", "inputs_digest"}) or not matches(payload["run_handle"], _RUN)
+                or not valid_integer(payload["attempt"], minimum=1) or not matches(payload["inputs_digest"], _DIGEST)
+                or request.request_id != payload["run_handle"]):
             raise HistoryError("history_invalid_request")
     elif operation == "history.pending_terminals":
         if (
@@ -302,6 +343,8 @@ def _validate_host_reference(result, binding, digest, *, verification):
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
+    if not reply_fields_match(operation, result):
+        raise HistoryError("history_invalid_response")
     if operation == 'history.learning_cycle':
         from .project_learning_live import LEARNING_REASONS
         if (not _closed(result, {'state', 'reason_code', 'summary', 'report_bytes'})
@@ -320,13 +363,43 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
     elif operation == 'history.routing_evidence':
         if not _closed(result, {'trusted'}) or type(result['trusted']) is not bool:
             raise HistoryError('history_invalid_response')
+    elif operation == 'service.stop_for_update':
+        if result != {'stopping': True}:
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.takeover_report':
+        if (type(result['records']) is not list or any(not valid_integer(result[name]) for name in
+                ('lost', 'lost_held', 'finished_kept', 'refused_unverifiable'))
+                or any(not _closed(row, {'predecessor_version', 'successor_version', 'state', 'runs_listed', 'runs_unlisted'})
+                       or not valid_integer(row['runs_listed'], maximum=64) or not valid_integer(row['runs_unlisted'])
+                       or row['state'] not in {'adopting', 'adopted', 'complete'}
+                       or any(type(row[key]) is not str or re.fullmatch(r'\d+\.\d+\.\d+', row[key]) is None
+                              for key in ('predecessor_version', 'successor_version')) for row in result['records'])):
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.holds_report':
+        from .holds_report_contracts import checked_holds_report
+        checked_holds_report(result)
+    elif operation == 'history.run_usage':
+        from .project_usage_report import checked_run_usage
+        checked_run_usage(result)
+    elif operation == 'history.orchestration_counts':
+        if not _closed(result, {'active', 'paused', 'closed'}) or any(
+                not valid_integer(result[name], maximum=1 << 32) for name in ('active', 'paused', 'closed')):
+            raise HistoryError('history_invalid_response')
     elif operation == 'history.capacity_report':
         from .project_capacity_report import CAPACITY_NAMES
-        if (type(result) is not dict or set(result) != set(CAPACITY_NAMES)
+        # O0c M1, M3: a host's service also names the run slots it can no longer free.
+        slots = result.get('run_slots') if type(result) is dict else None
+        if (type(result) is not dict or set(result) - {'run_slots'} != set(CAPACITY_NAMES)
                 or any(type(value) is not dict or set(value) != {'live', 'limit'}
                        or not valid_integer(value['live'], maximum=1 << 32)
                        or (value['limit'] is not None and not valid_integer(value['limit'], minimum=1, maximum=1 << 32))
-                       for value in result.values())):
+                       for name, value in result.items() if name != 'run_slots')
+                or ('run_slots' in result and (type(slots) is not dict or set(slots) - {'warm_up', 'cleanup_pending', 'cleanup_unlocated'} != {'stuck', 'limit'}
+                                               or not valid_integer(slots['stuck'], maximum=64)
+                                               or not valid_integer(slots['limit'], minimum=1, maximum=64)
+                                               or ('cleanup_pending' in slots and not valid_integer(slots['cleanup_pending'], maximum=64))
+                                               or ('cleanup_unlocated' in slots and not valid_integer(slots['cleanup_unlocated'], maximum=64))
+                                               or ('warm_up' in slots and not _warm_up_shape(slots['warm_up']))))):
             raise HistoryError('history_invalid_response')
     elif operation == 'history.orchestration_report':
         if (type(result) is not dict or result.get('orchestration_id') != request.payload['orchestration_id']
@@ -394,6 +467,17 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
         for name, key in (('worker', 'host_outcome_digest'), ('verifier', 'verifier_host_outcome_digest')):
             _validate_host_reference(result[name], request.payload[name + '_binding'], request.payload[key],
                                      verification=name == 'verifier')
+    elif operation == 'history.result_reference':
+        if (not _closed(result, {'binding', 'delivery'}) or type(result['binding']) is not dict
+                or not _closed(result['delivery'], {'record_id', 'record_content_digest', 'result_digest'})
+                or not matches(result['delivery']['record_id'], _ID)
+                or not all(matches(result['delivery'][n], _DIGEST) for n in ('record_content_digest', 'result_digest'))):
+            raise HistoryError('history_invalid_response')
+        binding = AttemptBinding(**result['binding'])
+        if (binding.project_id != request.project_id or binding.runtime_digest != request.runtime_digest
+                or binding.run_handle != request.payload['run_handle'] or binding.attempt != request.payload['attempt']
+                or binding.as_data() != result['binding']):
+            raise HistoryError('history_invalid_response')
     elif operation == 'history.worker_reference':
         _validate_host_reference(result, request.payload['binding'], request.payload['host_outcome_digest'], verification=False)
         if result['provider'] not in {'codex', 'claude'}:
@@ -471,7 +555,7 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
         if not _closed(result, {"record", "metadata"}) or type(result["record"]) is not dict:
             raise HistoryError("history_invalid_response")
         _validate_metadata(result["metadata"])
-        record, metadata = _checked_history_record(result["record"]), result["metadata"]
+        record, metadata = _checked_history_record(result["record"], stored=True), result["metadata"]
         if (
             record["record_id"] != request.payload["record_id"] or metadata["record_id"] != record["record_id"]
             or metadata["observed_at_ms"] != record["observed_at_ms"]
@@ -535,15 +619,15 @@ class HistoryClient:
         request = HistoryRequest(HISTORY_PROTOCOL_VERSION, operation, identity, self._project, self._runtime, payload)
         encoded = encode_history_request(request)
         request = decode_history_request(encoded)
-        failure = False
+        failure = None
         try:
             raw = exchange_frame(self._endpoint, encoded, timeout=self._timeout,
                                  response_limit=MAX_FRAME_BYTES if operation in LARGE_REPLY_OPERATIONS
                                  else MAX_HISTORY_REPLY_BYTES)
-        except ServiceTransportError:
-            failure = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failure = error.reason_code if error.reason_code in SERVICE_REFUSALS else "history_service_unavailable"
         if failure:
-            raise HistoryError("history_service_unavailable")
+            raise HistoryError(failure)
         return decode_history_response(raw, request)
 
     def _record_call(self, operation: str, record: dict) -> dict:
@@ -587,9 +671,24 @@ class HistoryClient:
         """One slice of a finished cycle's full report."""
         return self._call('history.learning_report', cycle_id, {'offset': offset})
 
+    def holds_report(self) -> dict:
+        """This project's holds, custody and plain retirement repairs (B7a)."""
+        return self._call('history.holds_report', 'holds', {})
+
+    def takeover_report(self, run_handle=None) -> dict:
+        return self._call('history.takeover_report', 'takeover', {} if run_handle is None else {'run_handle': run_handle})
+
     def capacity_report(self) -> dict:
         """Each limit of this project's store with its live count (0.3.4 R9)."""
         return self._call('history.capacity_report', 'capacity', {})
+
+    def orchestration_counts(self) -> dict:
+        """This project's orchestrations by state: active, paused and closed (T7 S2, L14.1)."""
+        return self._call('history.orchestration_counts', 'orchestrations', {})
+
+    def run_usage(self) -> dict:
+        """The last days' child runs of this project per provider: did they report usage (S44a)."""
+        return self._call('history.run_usage', 'run-usage', {})
 
     def orchestration_report(self, orchestration_id: str) -> dict:
         """Content-free statistics for one orchestration this project's service ran."""
@@ -611,6 +710,12 @@ class HistoryClient:
         """Whether this recorded outcome is accepted reconnaissance for the named task."""
         return self._call('history.routing_evidence', host_outcome_digest, {
             'host_outcome_digest': host_outcome_digest, 'task_id': task_id, 'family': family})['trusted']
+
+    def result_reference(self, run_handle: str, attempt: int, inputs_digest: str) -> dict:
+        """D1: a published attempt this host class ran, from the project store: its binding and terminal reference,
+        whether or not the service that ran it still holds it."""
+        return self._call('history.result_reference', run_handle,
+                          {'run_handle': run_handle, 'attempt': attempt, 'inputs_digest': inputs_digest})
 
     def worker_input(self, host_outcome_digest: str) -> dict:
         """A run this host recorded: its exact originals and where its terminal and result are."""

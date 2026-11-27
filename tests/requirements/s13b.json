@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/s13b/STATUS.md",
+ "requirements": [
+  {
+   "id": "S13B-NEXT",
+   "statement": "Each production expiry writer request runs one unarmed lease start pass at limit 64; a full pass queues one next request on the next driver step without waiting EXPIRY_SECONDS.",
+   "source": "tests/requirements/s13b.json#S13B-NEXT"
+  },
+  {
+   "id": "S13B-BOUND",
+   "statement": "The production drain selects at most 64 due unarmed lease rows per call, including full blocked prefixes, and drains eligible rows on later driver steps without an in-call selection loop.",
+   "source": "tests/requirements/s13b.json#S13B-BOUND"
+  },
+  {
+   "id": "S13B-IDLE",
+   "statement": "A non-full production lease pass with no backed-off rows keeps the ten-second expiry cadence; queued and failed requests never cause immediate duplicate or failed-request retries. A full selection whose inspection/backoff fails without progress also waits for the normal cadence.",
+   "source": "tests/requirements/s13b.json#S13B-IDLE"
+  },
+  {
+   "id": "S13B-BACKOFF",
+   "statement": "A production lease pass that backs rows off continues on the next driver step even if non-full or releasing zero; the following empty pass stops continuation, so all-blocked rows are not retried before durable backoff and eligible rows behind blocked rows progress.",
+   "source": "tests/requirements/s13b.json#S13B-BACKOFF"
+  }
+ ]
+}

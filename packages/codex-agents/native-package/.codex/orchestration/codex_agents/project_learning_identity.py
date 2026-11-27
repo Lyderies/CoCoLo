@@ -34,7 +34,7 @@ _CANDIDATE_FIELDS = frozenset({
 
 
 def _key(history):
-    history._require_owner()
+    history._require_owner(read_only=True)
     if history._connection.in_transaction:
         raise HistoryError("history_result_unavailable")
     key = history._result_key

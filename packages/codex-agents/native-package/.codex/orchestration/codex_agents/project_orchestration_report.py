@@ -11,12 +11,12 @@ from __future__ import annotations
 import re
 
 from .history_contracts import HistoryError, matches
-from .learning_adapters import empty_usage
-from .learning_contracts import MAX_RECORD_BYTES, parse_bounded_json
+from .learning_adapters import TOKEN_USAGE_FIELDS, empty_usage
+from .learning_contracts import MAX_RECORD_BYTES, external_id, parse_bounded_json
 
 MAX_REPORTED_CHECKPOINTS = 64
 MAX_RUNS = 512  # Runs of one orchestration.
-MAX_ORCHESTRATIONS = 1_024
+_PAGE = 1_024  # handles read per page while finding one orchestration
 _ORCHESTRATION_ID = re.compile(r"orc:[0-9a-f]{64}")
 
 
@@ -25,27 +25,53 @@ def _json(history, blob, maximum=MAX_RECORD_BYTES):
 
 
 def _orchestration(history, orchestration_id):
-    """The named orchestration's handle and its latest snapshots; one checkpoint read per orchestration."""
+    """The named orchestration's handle and its latest snapshots. O0c P10: the handle is found by its keyed id
+    (external_id of the handle), paging through handles with no count of the project's orchestrations; no
+    checkpoint is parsed until the match."""
     latest = "SELECT content FROM project_orchestration_checkpoints WHERE project_id=? " \
              "AND orchestration_handle=? ORDER BY sequence DESC LIMIT ?"
-    handles = history._connection.execute(
-        "SELECT orchestration_handle FROM project_orchestrations WHERE project_id=? LIMIT ?",
-        (history.project_id, MAX_ORCHESTRATIONS + 1)).fetchall()
-    if len(handles) > MAX_ORCHESTRATIONS:
-        raise HistoryError("history_learning_capacity")
-    for (handle,) in handles:
-        row = history._connection.execute(latest, (history.project_id, handle, 1)).fetchone()
-        if row is not None and _json(history, row[0])["snapshot"].get("orchestration_id") == orchestration_id:
+    key, after = history._result_key, ""
+    while True:
+        handles = history._connection.execute(
+            "SELECT orchestration_handle FROM project_orchestrations WHERE project_id=? AND orchestration_handle>? "
+            "ORDER BY orchestration_handle LIMIT ?", (history.project_id, after, _PAGE)).fetchall()
+        for (handle,) in handles:
+            if key is not None:
+                if external_id(key, "orc", handle) != orchestration_id:
+                    continue
+            else:  # no key (never for a running service): the checkpoint says
+                row = history._connection.execute(latest, (history.project_id, handle, 1)).fetchone()
+                if row is None or _json(history, row[0])["snapshot"].get("orchestration_id") != orchestration_id:
+                    continue
             rows = history._connection.execute(
                 latest, (history.project_id, handle, MAX_REPORTED_CHECKPOINTS)).fetchall()
+            if not rows or _json(history, rows[0][0])["snapshot"].get("orchestration_id") != orchestration_id:
+                continue
             count = history._connection.execute(
                 "SELECT COUNT(*) FROM project_orchestration_checkpoints WHERE project_id=? "
                 "AND orchestration_handle=?", (history.project_id, handle)).fetchone()[0]
             return handle, [_json(history, item[0])["snapshot"] for item in reversed(rows)], count
-    raise HistoryError("history_not_found")
+        if len(handles) < _PAGE:
+            raise HistoryError("history_not_found")
+        after = handles[-1][0]
 
 
-def orchestration_report(history, orchestration_id):
+def orchestration_counts(history):
+    """This project's orchestrations by state (T7 S2, L14.1): what learning-status shows, read as the open limit is."""
+    from .orchestration_store import OrchestrationOwner
+    history._require_owner()
+    return OrchestrationOwner(history).open_counts()
+
+
+def _settled(history, state, lease_row):
+    """Whether this attempt's lease is ended by a verified account settlement (the close's own reader)."""
+    if state is None or state == "expired":
+        return False
+    row = history._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (lease_row,)).fetchone()
+    return row is not None and history._attempt_settled(history._lease(row))
+
+
+def orchestration_report(history, orchestration_id, runtime_digest=None):
     """Counts for one orchestration. The work in this process is bounded by the
     orchestration's own runs (at most `MAX_RUNS`): rows are selected by SQLite and
     only this orchestration's are parsed here; a larger one is refused."""
@@ -58,14 +84,36 @@ def orchestration_report(history, orchestration_id):
         # With each run's result lease state: an expired lease with no result is a run that closed
         # without one (denied at its claim, fenced, or closed by the next service; 0.3.3, C7).
         opens = history._connection.execute(
-            "SELECT json_extract(CAST(o.binding AS TEXT),'$.run_id'),o.ingested_at_ms,o.source_sequence,l.state "
-            "FROM project_host_opens o LEFT JOIN result_leases l ON l.project_id=o.project_id "
+            "SELECT json_extract(CAST(o.binding AS TEXT),'$.run_id'),o.ingested_at_ms,o.source_sequence,l.state,"
+            "l.rowid FROM project_host_opens o LEFT JOIN result_leases l ON l.project_id=o.project_id "
             "AND l.run_handle=o.run_handle AND l.attempt=o.attempt WHERE o.project_id=? "
             "AND json_extract(CAST(o.binding AS TEXT),'$.orchestration_handle')=? ORDER BY o.source_sequence LIMIT ?",
             (history.project_id, handle, MAX_RUNS + 1)).fetchall()
         if len(opens) > MAX_RUNS:
             raise HistoryError("history_learning_capacity")
+        # T7 S2 finding 2 (L14.1): an attempt the account settled lost (B4s) has ended, as the close reads it
+        # (OrchestrationOwner._unfinished, ProjectHistory._attempt_settled): counted with the expired ones.
+        opens = [(run_id, opened_at, sequence, "expired" if _settled(history, state, lease_row) else state)
+                 for run_id, opened_at, sequence, state, lease_row in opens]
         runs = {run_id: opened_at for run_id, opened_at, _, _ in opens if type(run_id) is str}
+        # S1-R6: runs the driver registered; one with no host open either failed before it (its fixed
+        # reason) or is still unresolved. A run with a host open is counted by its open only.
+        registered = history._connection.execute(
+            "SELECT run_id,attempt,failed_reason FROM project_registered_runs INDEXED BY "
+            "project_registered_runs_orchestration WHERE project_id=? AND orchestration_handle=? LIMIT ?",
+            (history.project_id, handle, MAX_RUNS + 1)).fetchall()
+        if len(registered) > MAX_RUNS:
+            raise HistoryError("history_learning_capacity")
+        # R6-11: a run's attempts combine the same in any row order: any unresolved attempt keeps it
+        # pending (None); else it failed with its highest attempt's reason.
+        attempts = {}
+        for run_id, attempt, reason in registered:
+            if type(run_id) is str and run_id not in runs:
+                attempts.setdefault(run_id, []).append((attempt, reason))
+        before_open = {run_id: (None if any(reason is None for _, reason in found) else max(found)[1])
+                       for run_id, found in attempts.items()}
+        if len(runs) + len(before_open) > MAX_RUNS:  # R6-12: opens and registrations together
+            raise HistoryError("history_learning_capacity")
         # Every attempt's lease expired: one still open could yet record a result.
         expired = {run_id for run_id, _, _, _ in opens if type(run_id) is str} - {
             run_id for run_id, _, _, state in opens if state != 'expired'}
@@ -94,6 +142,14 @@ def orchestration_report(history, orchestration_id):
                 reviewed[run_id] = _json(history, qa).get("accepted") is True
     except (KeyError, TypeError, ValueError, AttributeError, IndexError):
         raise HistoryError("history_incompatible") from None
+    # B2-10: who recorded each outcome, what waits, what cannot be recorded (plain words in `lines`).
+    try:
+        from .service_record import ServiceRecordAuthority, recording_status
+        # The writer's own runtime decides what this service could record; a store read alone has none.
+        authority = ServiceRecordAuthority(runtime_digest=runtime_digest, service=runtime_digest is not None)
+        recording = recording_status(history, authority, handle)
+    except HistoryError:
+        recording = None  # too many held results to list: the counts above still stand
     usage_fields = tuple(empty_usage())
     totals = {field: 0 for field in usage_fields}
     unknown = {field: 0 for field in usage_fields}
@@ -138,14 +194,24 @@ def orchestration_report(history, orchestration_id):
     ended = current["ended_at_ms"]
     recorded = len(outcomes)
     abandoned = len(expired - set(outcomes))
+    failed_reasons = {}
+    for reason in before_open.values():
+        if reason is not None:
+            failed_reasons[reason] = failed_reasons.get(reason, 0) + 1
+    failed_before_open = sum(failed_reasons.values())
+    unresolved = len(before_open) - failed_before_open
     goal_known = current["goal_tokens_used"] is not None or current["goal_time_used_seconds"] is not None
     return {
+        "recording": recording,
         "orchestration_id": orchestration_id, "status": str(current["status"]),
         "started_at_ms": int(current["started_at_ms"]), "ended_at_ms": ended,
         "duration_ms": None if ended is None else int(ended) - int(current["started_at_ms"]),
-        "runs": {"opened": len(runs), "terminal": recorded, "pending": len(runs) - recorded - abandoned,
-                 "abandoned": abandoned,
-                 "current_active": len(runs) - recorded - abandoned if current["status"] == "active" else 0,
+        "runs": {"opened": len(runs), "admitted": len(runs) + len(before_open), "terminal": recorded,
+                 "pending": len(runs) - recorded - abandoned + unresolved,
+                 "abandoned": abandoned + failed_before_open, "failed_before_open": failed_before_open,
+                 "failed_before_open_reasons": dict(sorted(failed_reasons.items())),
+                 "current_active": (len(runs) - recorded - abandoned + unresolved
+                                    if current["status"] == "active" else 0),
                  "agent_bound": len(runs), "deadlines_observed": 0},
         "checkpoint_count": checkpoint_count,
         "checkpoints": [{"sequence": int(item["sequence"]), "status": str(item["status"]),
@@ -165,6 +231,6 @@ def orchestration_report(history, orchestration_id):
                   "goal_total_tokens": current["goal_tokens_used"],
                   "goal_time_used_seconds": current["goal_time_used_seconds"],
                   "goal_usage_source": "host_reported" if goal_known else "unavailable",
-                  "child_attribution": "complete" if runs and all(count == 0 for count in unknown.values())
+                  "child_attribution": "complete" if runs and all(unknown[field] == 0 for field in TOKEN_USAGE_FIELDS)
                   else "unknown"},
     }

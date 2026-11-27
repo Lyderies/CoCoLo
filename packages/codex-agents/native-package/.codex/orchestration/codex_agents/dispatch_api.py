@@ -11,9 +11,10 @@ import re
 import time
 
 from .control_api import ControlScope, scope_data
-from .contracts import RESULT_VALIDATION_REASON_CODES
+from .contracts import RESULT_DIAGNOSTIC_REASON_CODES
 from .history_contracts import AttemptBinding, TerminalDelivery, _DIGEST, _RUN, matches, valid_integer
 from .learning_contracts import (
+    CLIENT_TOOL_NAMES,
     SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
 )
 from .result_contracts import MAX_RESULT_BODY_BYTES
@@ -34,7 +35,9 @@ _OUTCOMES = frozenset({'result', 'launch_failed', 'process_tracking_unavailable'
     'codex_tool_not_allowed:collab_tool_call', 'codex_tool_not_allowed:unknown'})
 _CLAUDE_OUTCOMES = frozenset({'claude_activity_invalid', 'claude_tool_not_allowed', 'missing_init_frame',
     'paid_usage_observed', 'provider_rejected', 'rate_limit_event_invalid', 'init_api_key_source',
-    'init_model_mismatch', 'init_plugin_loaded', 'init_mcp_server_loaded', 'init_tool_not_allowed'})
+    'init_model_mismatch', 'init_plugin_not_allowed', 'init_mcp_server_loaded', 'init_tool_not_allowed',
+    'init_client_unsupported', 'init_permission_mode_mismatch', 'init_additional_directories_present',
+    'init_plugin_not_disabled'})  # O10 VF-6
 _USAGE = {'codex': {'input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens'},
           'claude': {'input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'}}
 _RATE_LIMIT_FIELDS = {'rate_limit_events', 'rate_limit_records_kept', 'rate_limit_record_failed'}
@@ -160,13 +163,18 @@ def decode_dispatch_response(raw, request):
                     raise ValueError()
                 if claude and report.get('client_diagnostics') is not None:
                     validate_client_diagnostics(report['client_diagnostics'])
-                if (set(report) - (_RATE_LIMIT_FIELDS | {'client_diagnostics'} if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
+                denials = report.get('permission_denials')
+                if denials is not None and (not claude or type(denials) is not dict or set(denials) != {'count', 'tools'}
+                        or not valid_integer(denials['count']) or type(denials['tools']) is not list
+                        or len(denials['tools']) > 16 or any(t not in CLIENT_TOOL_NAMES for t in denials['tools'])):
+                    raise ValueError()
+                if (set(report) - (_RATE_LIMIT_FIELDS | {'client_diagnostics', 'permission_denials'} if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
                         'read_containment', 'rerouted', 'outcome', 'usage', 'result_validation_reason_code',
                         'bridge_run_id', 'reviewed', 'terminal_state', 'capacity_state', 'export_file_count',
                         'export_commit', 'export_manifest_digest'}
                         or type(report.get('reviewed')) is not bool or report.get('capacity_state') != 'retained'
                         or report.get('terminal_state') not in {None, 'timed_out', 'cancelled', 'failed', 'interrupted'}
-                        or report.get('result_validation_reason_code') not in {None, *RESULT_VALIDATION_REASON_CODES}):
+                        or report.get('result_validation_reason_code') not in {None, *RESULT_DIAGNOSTIC_REASON_CODES}):
                     raise ValueError()
                 if (report.get('requested_model') not in SUPPORTED_MODELS
                         or report.get('observed_model') not in {None, *SUPPORTED_MODELS}
@@ -205,9 +213,23 @@ class DispatchClient:
         try:
             raw = exchange_frame(self._endpoint, encode_dispatch_request(request), timeout=self._timeout if timeout is None else timeout,
                                  request_limit=MAX_DISPATCH_FRAME_BYTES, response_limit=MAX_DISPATCH_FRAME_BYTES)
-        except ServiceTransportError:
-            raise DispatchError('dispatch_unavailable') from None
+        except ServiceTransportError as transport:
+            error = DispatchError('dispatch_unavailable')
+            # O10 DR-1: a service that did not answer in time is slow, not gone; only that is retried.
+            error.timed_out = transport.reason_code == 'deadline_exceeded'
+            raise error from None
         return decode_dispatch_response(raw, request)
+
+    def _status(self, view, run_handle, attempt, inputs_digest, expected_export_commit, timeout):
+        """One status check. O10 DR-1: a check the service was too slow to answer keeps the last view, so
+        the wait goes on to its own deadline; a service that is gone, or any refusal, ends it."""
+        try:
+            return self.call('dispatch.status', run_handle, attempt, inputs_digest,
+                             expected_export_commit=expected_export_commit, timeout=timeout)
+        except DispatchError as error:
+            if getattr(error, 'timed_out', False):
+                return view
+            raise
 
     def dispatch(self, run_handle, attempt, inputs_digest, *, wait_seconds, expected_export_commit=None):
         if type(wait_seconds) not in {int, float} or not math.isfinite(wait_seconds) or not 0 < wait_seconds <= 86_460:
@@ -223,15 +245,31 @@ class DispatchClient:
             remaining = min(self._timeout, deadline-time.monotonic())
             if remaining <= 0:
                 raise DispatchError('dispatch_unavailable')
-            view = self.call('dispatch.status', run_handle, attempt, inputs_digest,
-                             expected_export_commit=expected_export_commit, timeout=remaining)
+            view = self._status(view, run_handle, attempt, inputs_digest, expected_export_commit, remaining)
         binding = AttemptBinding(**view['binding'])
-        remaining = min(self._timeout, deadline-time.monotonic())
-        if remaining <= 0:
-            raise DispatchError('dispatch_unavailable')
-        try:
-            body = ResultReadClient(self._result_endpoint, timeout=remaining).read_result(binding, view['delivery']['result_digest'])
-            result = parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
-        except Exception:
-            raise DispatchError('dispatch_unavailable') from None
-        return {'result': result, 'bridge_report': view['report']}
+        while True:
+            remaining = min(self._timeout, deadline-time.monotonic())
+            if remaining <= 0:
+                raise DispatchError('dispatch_unavailable')
+            try:
+                body = ResultReadClient(self._result_endpoint, timeout=remaining).read_result(
+                    binding, view['delivery']['result_digest'])
+            except Exception:
+                # O10 DR-2: read again only after a fresh answer that it is still published; a re-check
+                # that times out is retried on its own, never taken as permission (review 040-vf-dr-code).
+                fresh = None
+                while fresh is None:
+                    time.sleep(min(.05, max(0, deadline-time.monotonic())))
+                    remaining = min(self._timeout, deadline-time.monotonic())
+                    if remaining <= 0:
+                        raise DispatchError('dispatch_unavailable') from None
+                    fresh = self._status(None, run_handle, attempt, inputs_digest, expected_export_commit, remaining)
+                view = fresh
+                if view['state'] != 'published':
+                    raise DispatchError('dispatch_unavailable') from None
+                continue
+            try:
+                result = parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
+            except Exception:
+                raise DispatchError('dispatch_unavailable') from None
+            return {'result': result, 'bridge_report': view['report']}

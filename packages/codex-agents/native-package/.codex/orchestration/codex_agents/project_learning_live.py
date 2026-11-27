@@ -31,13 +31,14 @@ from .learning_contracts import (
     MAX_RECORD_BYTES, canonical_json, content_digest, parse_bounded_json, validate_learning_record,
 )
 from .learning_cycle_core import (
-    MAX_CASES, MAX_OUTCOMES, MAX_SNAPSHOT_BYTES, LearningCycleBoundsError, plan_learning_cycle,
+    LEARNING_RETENTION_MS, MAX_CASES, MAX_OUTCOMES, MAX_SNAPSHOT_BYTES, LearningCycleBoundsError,
+    plan_learning_cycle,
     select_mining_outcomes,
 )
 from .learning_eligibility import EligibilityError, check_candidate_eligibility, outcome_lineage
 from .project_learning_activation import activation
 from .project_learning_identity import key_domain_digest, prepare_candidate, prepare_cases
-from .project_learning_owner import rejected_run_ids
+from .project_learning_owner import PROMOTED_SQL, rejected_run_ids
 
 MAX_JOBS = 8
 CYCLE_SECONDS = 120.0
@@ -46,7 +47,7 @@ MINING_BATCHES_PER_STEP = 32  # So one request never holds the owner thread for 
 REPORT_CHUNK_BYTES = 49_152
 MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1000
 MAX_QA_ROWS = 20_000
-RETENTION_MS = 90 * 24 * 60 * 60 * 1000  # The legacy ledger's default record retention.
+RETENTION_MS = LEARNING_RETENTION_MS  # The one retention window of learning.
 LEARNING_REASONS = frozenset({
     "learning_busy", "learning_capacity", "learning_deadline", "learning_invalid", "learning_unavailable",
 })
@@ -90,7 +91,9 @@ def read_cycle_rows(history, now_ms=0):
     The corpus is this project's live records and, once its legacy learning has
     been brought over and switched on, that import's records before them. An
     outcome's sequence is (0, n) when imported and (1, n) when live. Outcomes
-    and feedback past retention are left out, as the legacy ledger expired them.
+    and feedback past retention are left out, as the legacy ledger expired them; so are unpromoted
+    cases and candidates, which the project service's cleanup removes (O0c P7). Promoted ones are read
+    however old, being policy.
     Rows are read one at a time and the read stops at the first bound exceeded,
     so no more than the snapshot limit is ever held.
     """
@@ -146,8 +149,9 @@ def read_cycle_rows(history, now_ms=0):
             outcome(row, 0)
         for row in take(
                 "SELECT record_type,content FROM project_learning_records WHERE project_id=? AND import_id=? "
-                "AND record_type IN (?,?,?) AND " + current + " ORDER BY source_sequence LIMIT ?",
-                (project, imported, *_OTHER_TYPES, now_ms), "other", MAX_CASES + MAX_OUTCOMES):
+                "AND record_type IN (?,?,?) AND " + current + " AND (record_type='feedback' OR ingested_at_ms>? OR "
+                + PROMOTED_SQL + ") ORDER BY source_sequence LIMIT ?",
+                (project, imported, *_OTHER_TYPES, now_ms, horizon), "other", MAX_CASES + MAX_OUTCOMES):
             other(row)
         # Accepted QA of the old ledger: its operational QA rows, and the
         # owner-attested formal QA records it had admitted.
@@ -174,7 +178,7 @@ def read_cycle_rows(history, now_ms=0):
         outcome(row, 1)
     for row in take(
             "SELECT record_type,content FROM records WHERE project_id=? AND record_type IN (?,?,?) "
-            "AND (record_type!='feedback' OR ingested_at_ms>?) ORDER BY source_sequence LIMIT ?",
+            "AND (ingested_at_ms>? OR " + PROMOTED_SQL + ") ORDER BY source_sequence LIMIT ?",
             (project, *_OTHER_TYPES, horizon), "other", MAX_CASES + MAX_OUTCOMES):
         other(row)
     for row in take("SELECT qa_digest,qa FROM project_operational_qa WHERE project_id=? LIMIT ?",

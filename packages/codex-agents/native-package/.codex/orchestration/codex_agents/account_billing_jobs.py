@@ -6,22 +6,45 @@ Native enrollment and closed-descendant containment remain adapter gates.
 """
 from collections import deque
 from dataclasses import dataclass
+import itertools
+import sqlite3
 import time
 
+from . import lane_health
 from .account_billing_admission import AccountBillingAdmission, ProbeAdmission, ProbeAdmissionError
 from .account_billing_execution import AccountBillingExecutions
 from .account_observation import ObservationContext
 from .account_observation_jobs import AccountObservationJobs
 from .admission_inputs import AdmissionCaptureError, public_capture_reason
+from .billing_probe_contracts import PROBE_STEP_REASONS
 from .billing_probe_worker import BillingProbeWorkers, ProbeWorkerError
+from .owned_execution import ExecutionCustodyError
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
 from .provider_observation_contracts import OBSERVATION_REASONS, ObservationInput
+from .sql_read_budget import SQLReadError
 from .signature_job_intake import SignatureJobError
 
 
 # An identity observation refused for one of these is tried once more before the probe fails:
 # the account's services, or the client, may not have been ready yet (just after a restart).
 RETRIED_OBSERVATION_REASONS = frozenset({'observation_unavailable', 'account_unavailable'})
+# Decision 47 (H1): a ready yes whose inputs changed before it was taken is judged again; if they keep changing,
+# after this many new judgments it is refused by name (probe_replay_stale) and the client asks again.
+MAX_REJUDGMENTS = 2
+MAX_RECORD_FAILURES = 3
+
+
+def _transient_record_failure(error):
+    if isinstance(error, SQLReadError):
+        return error.reason_code in {'sql_read_busy', 'sql_read_deadline', 'sql_read_unavailable'}
+    if not isinstance(error, sqlite3.OperationalError):
+        return False
+    code = getattr(error, 'sqlite_errorcode', None)
+    if type(code) is int:
+        return code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+    # Constructed/forwarded OperationalErrors may lack SQLite's numeric code.
+    return str(error) in {'database is locked', 'database table is locked', 'database schema is locked'}
+
 
 @dataclass(frozen=True)
 class BillingJobLimits:
@@ -57,6 +80,17 @@ class _Job:
     cleanup_requested: bool = False  # Its preparation was asked to clean up.
     cancelled: bool = False
     observed_again: bool = False
+    token: int = 0  # S1-H1a: counts this job once in the lane's health notes
+    noted: bool = False  # S1-H1a: its failure reason has been noted
+    closed: bool = False  # O0b RS-A round 2 G9: its reservation was closed by the sweep; ends with the stored answer
+    timed_out: bool = False  # O0b RS-A round 3: cancelled by its own deadline, not by a caller or the close
+    ended: bool = False  # O0c M10: unknown, and its admitted row settled (or none was admitted) once its child ended
+    settle_after_ns: int = 0  # O0c review H1: a failed settlement is tried again from then
+    record_failures: int = 0  # N3: non-transient failures; busy SQL does not spend this budget
+    judgment: object = None  # decision 47 (H1, M1): what the owner's judgment (or the commit) answered, checked at delivery
+    rejudged: int = 0  # decision 47 (H1): new judgments started because a ready yes's inputs had changed
+    ident: str = ''  # the request id of this generation's identity observation
+    own: bool = False  # it made the commit it answers (not a repeat of an earlier request): its re-judgments say known=False
 
 
 @dataclass(frozen=True, repr=False)
@@ -66,9 +100,46 @@ class BillingJobReply:
     reason: str | None
     before_publish: object
     context: ObservationContext
+    history: dict | None = None  # a repeat's unchanged committed row (decision 44), checked at publication
+    judgment: object = None  # decision 47 (M1): the committed row and reply digest of this answer's generation
+
+
+# S1-H1a: the reasons that are failures (a refusal such as a cooldown is not one).
+_FAILURE_REASONS = frozenset({'probe_preparation_unknown', 'probe_preparation_failed', 'probe_worker_failed',
+                              'probe_step_failed', 'probe_unavailable'})
 
 
 class AccountBillingJobs:
+    def _publish_health(self):
+        """S1-H1a: this owner's note from the job table (unknown jobs kept, the rest busy), and each
+        job's failure reason once. Reporting only; never raises."""
+        try:
+            jobs = list(self._jobs.values())
+            for job in jobs:
+                if job.reason in _FAILURE_REASONS and not job.noted:
+                    job.noted = True
+                    lane_health.safely(lambda: self.health.note_failure(self._note, job.reason, None))
+            # O0c M9: an unknown job faults the lane (so the self-restart fires); a job whose signature
+            # work is held unconfirmed is kept too, since it waits on the stuck lane and runs nothing.
+            held = self._claims._pool.unknown_handles()
+            kept = frozenset(job.token for job in jobs if job.state == 'unknown' or job.signature in held)
+            lane_health.safely(lambda: self._note.publish(faulted=any(job.state == 'unknown' for job in jobs),
+                                                          kept=kept, busy=sum(job.token not in kept for job in jobs)))
+            # S1-H1a C6: a probe worker a kept job still holds is held in the probe lane (its own
+            # slot there, written only by this owner).
+            handles = {self._executions.worker_of(job.preparation) for job in jobs
+                       if job.state == 'unknown' and job.preparation is not None} - {None}
+            tokens = frozenset(self._workers._jobs[handle].token for handle in handles if handle in self._workers._jobs)
+            for _ in tokens - self._parent_held:
+                self._workers.health.enter_held()
+            for _ in self._parent_held - tokens:
+                self._workers.health.leave_held()
+            self._parent_held = tokens
+            # O0c M10: a probe worker an unknown job holds faults the probe lane too.
+            lane_health.safely(lambda: self._parent_note.publish(kept=tokens, faulted=bool(tokens)))
+        except Exception:
+            pass
+
     def __init__(self, claims, observations, workers, limits):
         from .account_claim_jobs import AccountClaimJobs
         if (type(claims) is not AccountClaimJobs or type(observations) is not AccountObservationJobs
@@ -87,10 +158,20 @@ class AccountBillingJobs:
         self._executions = AccountBillingExecutions(self._owner, workers, workers._registry)
         self._limits = BillingJobLimits(limits.max_projects, limits.jobs_per_project, limits.owner_steps)
         self._jobs, self._requests, self._counts, self._signatures = {}, {}, {}, {}
+        self._generations = itertools.count()  # makes each identity observation's request id its own (decision 47)
+        self.health = lane_health.Lane('billing')  # S1-H1a: published notes, reporting only
+        self._note = self.health.slot('owner')
+        self._parent_note = workers.health.slot('billing-parent')
+        self._parent_held = frozenset()
         self._rotation = deque()
         self._queues = {}
         self._ingress_owner, self._closing, self._faulted = None, False, False
         claims._billing = observations._billing_owner = self
+        self._owner._billing_jobs = self  # O0b RS-A round 2 G9: the owner leaves live jobs' originals to them
+
+    def held_reservations(self):
+        """O0b RS-A round 2 G9: the originals live jobs hold (the owner never forgets these behind a job)."""
+        return frozenset(job.reservation for job in self._jobs.values() if job.reservation is not None)
 
     def _guard(self):
         self._owner._guard()
@@ -124,12 +205,18 @@ class AccountBillingJobs:
             if job.context is not context or job.snapshot != snapshot or job.cancelled:
                 raise ProbeAdmissionError('probe_conflict')
             self._owner._authorize(context, snapshot, before_publish)
-            return ticket
+            if job.state != 'unknown' or job.result is not None or not self._owner.committed(project, runtime, caller,
+                                                                                         identity, context):
+                return ticket
+            # A fault after the commit left this job as local custody only. A repeat is a new judgment of the
+            # committed row (decision 44): the custody job stays where it is, the request key moves to the new job.
+            del self._requests[key]
         if (self._counts.get(project, 0) >= self._limits.jobs_per_project
                 or project not in self._counts and len(self._counts) >= self._limits.max_projects):
             raise ProbeAdmissionError('probe_full')
-        ticket, job = object(), _Job(key, context, snapshot, before_publish)
+        ticket, job = object(), _Job(key, context, snapshot, before_publish, token=lane_health.new_token())
         self._jobs[ticket], self._requests[key] = job, ticket
+        self._publish_health()
         self._counts[project] = self._counts.get(project, 0)+1
         if project not in self._queues:
             self._queues[project] = deque()
@@ -140,11 +227,10 @@ class AccountBillingJobs:
                                            before_commit=lambda: self._authorize(ticket, job))
             if type(original) is dict:
                 job.result, job.state = original, 'ready'
+                self._bind(job)
             else:
-                job.reservation, job.state = original, 'identity'
-                job.observation = self._observations.submit(project, runtime, caller,
-                    'billing-ident-'+original.key, ObservationInput('claude'), context, before_publish,
-                    _ingress=self._ingress_owner, _billing_parent=(self, ticket))
+                job.own = original.history is None
+                self._begin_judgment(ticket, job, original)
             return ticket
         except BaseException:
             if job.reservation is not None and job.observation is None:
@@ -152,9 +238,61 @@ class AccountBillingJobs:
             self._drop(ticket)
             raise
 
+    def _begin_judgment(self, ticket, job, original):
+        """Every judgment, a repeat's too (decision 47, M-identity), starts with an identity observation of its
+        own: the local client's login and version, no model call, nothing spent. A repeat's request id carries its
+        generation, so a stored observation of an earlier one is never replayed in its place."""
+        job.reservation, job.state = original, 'identity'
+        job.ident = 'billing-ident-'+original.key + (
+            '' if original.history is None else f'-g{original.created}-{next(self._generations)}')
+        job.observation = self._observations.submit(job.key[0], job.key[1], job.key[2],
+            job.ident, ObservationInput('claude'), job.context, job.before_publish,
+            _ingress=self._ingress_owner, _billing_parent=(self, ticket))
+
+    def _bind(self, job):
+        """M1: an answer no judgment made is bound to the committed row and reply it has now. Never raises."""
+        if job.result is None or job.judgment is not None:
+            return
+        try:
+            # A run this job completed brings the judgment it was admitted on (the owner's commit made it).
+            job.judgment = (None if job.reservation is None else self._owner.judgment_of(job.reservation)
+                            ) or self._owner.bind(*job.key, job.result)
+        except Exception:
+            job.judgment = None
+
+    def _rejudge(self, ticket, job):
+        """H1: a ready yes whose judged inputs are not as they were is judged again, as a repeat of its own committed
+        row: a new reservation, identity observation and signature work; no provider call. Returns None while that
+        runs, a reply when it ends in a refusal, False when the request now answers from its stored refusal."""
+        if job.rejudged >= MAX_REJUDGMENTS:
+            self._drop(ticket)
+            return BillingJobReply(job.key, None, 'probe_replay_stale', job.before_publish, job.context)
+        job.rejudged += 1
+        original = None
+        try:
+            original = self._owner.reserve(*job.key, job.context, before_commit=lambda: self._authorize(ticket, job),
+                                           known=not job.own)
+            if type(original) is dict:
+                job.result, job.judgment = original, None
+                self._bind(job)
+                return False
+            job.result, job.reason, job.judgment = None, None, None
+            self._begin_judgment(ticket, job, original)
+            return None
+        except Exception as error:
+            if original is not None and type(original) is not dict and job.observation is None:
+                self._owner.abort_reserved(original)
+            reason = error.reason_code if isinstance(error, ProbeAdmissionError) else 'probe_unavailable'
+            if not isinstance(error, ProbeAdmissionError):
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_rejudge_failed', error))
+            self._drop(ticket)
+            return BillingJobReply(job.key, None, reason, job.before_publish, job.context)
+
     def _drop(self, ticket):
         job = self._jobs.pop(ticket)
-        self._requests.pop(job.key)
+        self._publish_health()
+        if self._requests.get(job.key) == ticket:
+            self._requests.pop(job.key)
         project = job.key[0]
         self._queues[project].remove(ticket)
         if not self._queues[project]:
@@ -166,10 +304,27 @@ class AccountBillingJobs:
 
     def _ready(self, ticket, job, *, result=None, reason=None):
         job.result, job.reason, job.state = result, reason, 'ready'
+        self._bind(job)
         if self._closing:
             self._drop(ticket)
 
-    def _discard(self, job, reason='probe_unavailable'):
+    def _name_failure(self, job, cause, error=None):
+        """A failure that answers a bare probe_unavailable names its cause in this lane's last_failure,
+        once per job (the recurring-issue rule: no unnamed probe_unavailable); a cause already named for this
+        job stays the one shown. Never raises."""
+        if job.noted:
+            return
+        job.noted = True
+        lane_health.safely(lambda: self.health.note_failure(self._note, cause, error))
+
+    def _stop_cause(self, job):
+        """Why a job is stopped without a failure of its own: its deadline, the close, or a caller's cancel."""
+        return ('probe_deadline_expired' if job.timed_out else 'probe_closing' if self._closing
+                else 'probe_cancelled')
+
+    def _discard(self, job, reason='probe_unavailable', *, cause=None, error=None):
+        if cause is not None:
+            self._name_failure(job, cause, error)
         job.reason, job.state = reason, 'discarding'
         self._request_cleanup(job)
 
@@ -181,7 +336,9 @@ class AccountBillingJobs:
         try:
             self._executions.discard(job.preparation)
             job.cleanup_requested = True
-        except Exception:
+        except Exception as error:
+            job.noted = True  # S1-H1a C7: this failure is the one shown, not a later synthetic one
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_cleanup_failed', error))
             self._discard_fault(job)
 
     def _discard_fault(self, job):
@@ -192,19 +349,24 @@ class AccountBillingJobs:
     def owns_signature(self, handle):
         return handle in self._signatures
 
+    def owns_owner_signature(self, handle):
+        return self._owner.owns_signature(handle)
+
     def finish_signature(self, handle):
         self._guard()
         ticket = self._signatures[handle]
         job = self._jobs[ticket]
+        cause = 'probe_admit_failed'
         try:
             if job.cancelled or self._closing or not self._subscribed(ticket):
+                cause = self._stop_cause(job)  # a stop is named as one, never as an admission failure
                 raise ProbeAdmissionError()
             result = self._owner.admit(job.reservation)
             if type(result) is ProbeAdmission:
                 job.permit, job.state = result, 'offered'
                 job.supervisor = self._executions.launch(job.preparation, result)
             else:
-                job.result = result
+                job.result, job.judgment = result, self._owner.judgment_of(job.reservation)
                 self._discard(job, reason=None)
         except Exception as error:
             row = self._owner._row(job.key[0], job.reservation.key)
@@ -214,7 +376,8 @@ class AccountBillingJobs:
                 # keep both until a restart (0.3.3, C9). Once a ticket exists the run is kept.
                 self._settle_failed_step(job, unsure='probe_unavailable')
             else:
-                self._discard(job, getattr(error, 'reason_code', 'probe_unavailable'))
+                self._discard(job, getattr(error, 'reason_code', 'probe_unavailable'),
+                              cause=cause, error=error)
         finally:
             if handle in self._claims._pool._returned:
                 self._claims._pool.discard(handle)
@@ -222,13 +385,61 @@ class AccountBillingJobs:
             self._signatures.pop(handle)
             job.signature = None
 
-    def _step(self, ticket, job):
-        if job.state in {'ready', 'unknown'}:
+    def _settle_ended(self, job):
+        """O0c M10: an unknown job's admitted row is settled once no model it launched can still run, so
+        it stops holding probe capacity and the self-restart. Review M5: a probe that ran and returned
+        valid records has them committed, as its normal completion would; otherwise the row becomes a
+        denial naming the failed step. Busy SQL is retried a second later without consuming the
+        three-attempt record failure budget. Once that budget is spent, only denial is retried;
+        the job is done only once its row is settled or no longer admitted."""
+        if job.ended or job.settled or job.reservation is None or time.monotonic_ns() < job.settle_after_ns:
             return
-        if (job.reservation is not None and job.state != 'offered'
-                and (self._closing or job.cancelled or time.monotonic_ns() >= job.reservation.deadline_ns
-                     or not self._subscribed(ticket))):
-            self.cancel(ticket, _ingress=self._ingress_owner)
+        try:
+            if not self._executions.child_ended(job.reservation):
+                return
+            row = self._owner._row(job.key[0], job.reservation.key)
+            if row is None or row['state'] != 'admitted':
+                job.ended = True  # nothing admitted to settle
+                return
+            if (job.record_failures < MAX_RECORD_FAILURES and job.preparation is not None
+                    and self._executions.returned(job.preparation)):
+                try:
+                    self._executions.complete_ended(job.preparation)
+                    job.ended = True
+                    return
+                except (ProbeAdmissionError, ExecutionCustodyError):
+                    # Its packet does not validate, or its execution has no cleanup to retain (it never
+                    # started a child): settled as a denial below. A busy ledger is retried instead.
+                    pass
+                except Exception as error:
+                    if _transient_record_failure(error):
+                        raise  # Transient reads never exhaust the record budget.
+                    job.record_failures += 1
+                    if job.record_failures < MAX_RECORD_FAILURES:
+                        raise
+                    lane_health.safely(lambda error=error: self.health.note_failure(
+                        self._note, 'probe_records_unkept', error))
+            reason = job.reason if job.reason in PROBE_STEP_REASONS else 'probe_worker_failed'
+            self._owner.settle_ended(job.reservation, reason)
+            job.ended = True
+        except Exception as error:
+            # Not settled yet: the row keeps holding, and this is tried again.
+            job.settle_after_ns = time.monotonic_ns() + 1_000_000_000
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_settle_failed', error))
+
+    def _step(self, ticket, job):
+        if job.state == 'unknown':
+            self._settle_ended(job)
+            return
+        if job.state == 'ready':
+            return
+        if job.reservation is not None and job.state != 'offered':
+            explicit = self._closing or job.cancelled or not self._subscribed(ticket)
+            if explicit or time.monotonic_ns() >= job.reservation.deadline_ns:
+                # O0b RS-A round 3: a cancel by its own deadline is told apart, so a close the sweep commits
+                # meanwhile still answers with its stored denial.
+                job.timed_out = job.timed_out or not explicit
+                self.cancel(ticket, _ingress=self._ingress_owner)
         if job.state == 'identity':
             reply = self._observations.take(job.observation, _ingress=self._ingress_owner)
             if reply is None:
@@ -240,14 +451,22 @@ class AccountBillingJobs:
                 job.observed_again = True
                 project, runtime, caller = job.key[0], job.key[1], job.key[2]
                 job.observation = self._observations.submit(project, runtime, caller,
-                    'billing-ident-'+job.reservation.key+'-again', ObservationInput('claude'), job.context,
+                    job.ident+'-again', ObservationInput('claude'), job.context,
                     job.before_publish, _ingress=self._ingress_owner, _billing_parent=(self, ticket))
             elif reply.reason is not None:
                 # Say why: the observation's own fixed reason.
-                self._discard(job, reply.reason if reply.reason in OBSERVATION_REASONS else 'probe_unavailable')
+                recognised = reply.reason in OBSERVATION_REASONS  # only an unrecognised reason is a bare one
+                self._discard(job, reply.reason if recognised else 'probe_unavailable',
+                              cause=None if recognised else 'probe_observation_reason_unrecognised')
             else:
                 job.identity = next(r for r in reply.result['records'] if r['record_type'] == 'provider_identity')
                 job.state = 'prepare'
+        if job.state == 'prepare' and job.reservation.history is not None:
+            # A repeat (decision 44) never launches: no probe worker is prepared for it; once its identity is
+            # observed it goes to the signature work its fresh judgment needs.
+            job.identity = None
+            if not self._start_signature(ticket, job):
+                return
         if job.state == 'prepare':
             try:
                 job.preparation = self._executions.prepare(job.reservation, job.identity)
@@ -263,22 +482,13 @@ class AccountBillingJobs:
             job.identity, job.state = None, 'preparing'
         if job.state == 'preparing':
             state = self._executions.snapshot(job.preparation)['worker_state']
+            if state == 'prepared' and self._claims._pool.stuck():
+                # O0c M8: no signature worker can free before the account restarts itself: say so now,
+                # rather than wait as work that would hold that restart.
+                self._discard(job, 'probe_unavailable', cause='probe_signature_pool_stuck')
+                return
             if state == 'prepared':
-                try:
-                    job.signature = self._owner.prepare(job.reservation)
-                except AdmissionCaptureError as error:
-                    # Nothing was admitted; the history admission needs did not fit or
-                    # could not be read, and the probe says which.
-                    self._discard(job, public_capture_reason(error))
-                    return
-                except SignatureJobError as error:
-                    if error.reason_code in {'signature_job_project_full', 'signature_job_project_limit'}:
-                        # Intake refused before returning any original handle.
-                        # Keep this unoffered preparation on the same deadline;
-                        # normal cancellation/expiry still retires it locally.
-                        return
-                    raise
-                self._signatures[job.signature], job.state = ticket, 'signature'
+                self._start_signature(ticket, job)
             elif state == 'failed':
                 self._discard(job, 'probe_preparation_failed')
             elif state == 'unknown':
@@ -318,9 +528,44 @@ class AccountBillingJobs:
                 row = self._owner._row(job.key[0], job.reservation.key)
                 if row is not None and row['state'] == 'committed':
                     self._owner.release_committed(job.reservation)
+                    if (job.closed or job.timed_out or not job.cancelled) and self._owner.closed_unlaunched(row):
+                        # O0b RS-A round 2 G9: the sweep closed it; the job's answer is the stored denial,
+                        # as a replay reads it, whichever step noticed first (round 3: also when its own
+                        # deadline cancelled it first; only a caller's cancel or a close keeps its own answer).
+                        job.result, job.reason = self._owner._reply(row, known=True), None
                 else:
                     self._owner.abort_reserved(job.reservation)
             self._ready(ticket, job, result=job.result, reason=job.reason)
+
+    def _start_signature(self, ticket, job):
+        """Start the signature work of a job's judgment. False when the job was discarded or must wait."""
+        try:
+            job.signature = self._owner.prepare(job.reservation)
+        except AdmissionCaptureError as error:
+            # Nothing was admitted; the history admission needs did not fit or
+            # could not be read, and the probe says which.
+            self._discard(job, public_capture_reason(error))
+            return False
+        except SignatureJobError as error:
+            if error.reason_code in {'signature_job_project_full', 'signature_job_project_limit'}:
+                # Intake refused before returning any original handle.
+                # Keep this unoffered preparation on the same deadline;
+                # normal cancellation/expiry still retires it locally.
+                return False
+            raise
+        self._signatures[job.signature], job.state = ticket, 'signature'
+        return True
+
+    def _end_closed(self, ticket, job):
+        """O0b RS-A round 2 G9: the sweep closed this job's never-admitted reservation. Its observation,
+        signature work and preparation stop as a cancel stops them (a released signature handle leaves both
+        mappings now; a running one stays mapped until its return is discarded), and once discarded the job
+        answers with the stored denial. Not a failure, so nothing is noted."""
+        if job.state in {'ready', 'unknown', 'discarding', 'offered'} or job.result is not None:
+            return
+        job.closed, job.noted = True, True
+        self.cancel(ticket, _ingress=self._ingress_owner)
+        job.reason = None
 
     def _settle_failed_step(self, job, *, unsure='probe_step_failed'):
         """A step failed. A probe that has not started frees its worker and names the step; one that
@@ -329,6 +574,10 @@ class AccountBillingJobs:
             # Discarding is resumed on the next step; a persistent error keeps the job (0.3.3, C9d).
             self._discard_fault(job)
             if job.state == 'unknown':
+                # A discarding job reaches this through a fault in a discarding step, which `drive` names
+                # (`probe_step_failed`, setting noted) before calling here; the one caller that passes
+                # unsure='probe_unavailable' (`finish_signature`) never has a discarding job with an admitted
+                # row. So the bare reason left here is never an unnamed one.
                 job.reason = job.reason or unsure
             return
         try:
@@ -342,11 +591,33 @@ class AccountBillingJobs:
                     self._owner.settle_unlaunched(job.reservation, 'probe_step_failed')
                     job.settled = True
             self._discard(job, 'probe_step_failed')
-        except Exception:
+        except Exception as error:
             job.state, job.reason = 'unknown', unsure
+            if unsure == 'probe_unavailable':
+                self._name_failure(job, 'probe_settle_unconfirmed', error)
 
     def drive(self):
         self._guard()
+        # O0b RS-A round 2 G3: each owner step, with or without a request, forgets probes a sweep has closed.
+        # G9: a failure is noted in this lane's health, never faults the claims lane, and the notice stays set,
+        # so the next step tries again; live jobs whose originals were closed end with the stored answer.
+        try:
+            self._owner.forget_expired()
+        except Exception as error:
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_forget_failed', error))
+        closed, self._owner._closed_live = self._owner._closed_live, set()
+        if closed:
+            for ticket, job in list(self._jobs.items()):
+                if job.reservation in closed:
+                    try:
+                        self._end_closed(ticket, job)
+                    except Exception as error:
+                        # O0b RS-A round 3: ending it failed (its observation or signature work could not be
+                        # stopped): noted in this lane, never escaping into the claims lane, and kept so the
+                        # next step tries again.
+                        self._owner._closed_live.add(job.reservation)
+                        lane_health.safely(lambda error=error: self.health.note_failure(
+                            self._note, 'probe_forget_failed', error))
         for _ in range(min(self._limits.owner_steps, len(self._rotation))):
             project = self._rotation.popleft()
             self._rotation.append(project)
@@ -355,8 +626,11 @@ class AccountBillingJobs:
             job = self._jobs[ticket]
             try:
                 self._step(ticket, job)
-            except Exception:
+            except Exception as error:
+                job.noted = True  # S1-H1a: noted here, with the exception's type
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_step_failed', error))
                 self._settle_failed_step(job)
+        self._publish_health()
         if self._closing and not self._jobs:
             self._workers.close()
 
@@ -367,19 +641,34 @@ class AccountBillingJobs:
         if job.state not in {'ready', 'unknown'}:
             return None
         result, reason = job.result, job.reason
+        if job.state == 'ready' and result is not None and self._owner._rejudges(result) and not self._current(job):
+            # H1: a yes is never delivered from storage once the inputs it judged have moved: judge again.
+            again = self._rejudge(ticket, job)
+            if again is not False:
+                return again
+            result, reason = job.result, job.reason
+        history = None if job.reservation is None else job.reservation.history
         if result is not None:
             try:
-                actual = self._owner.reserve(*job.key, job.context, before_commit=job.before_publish)
-                if actual != {**result, 'known': True}:
-                    raise ProbeAdmissionError('probe_conflict')
+                # BR-8, M1: integrity of the exact row and reply of this job's judgment generation. Decision 50: the
+                # yes itself is gated at publication (the one final gate); this check builds none.
+                self._owner.verify_committed(*job.key, job.context, before_commit=job.before_publish,
+                                             reply=result, history=history, judgment=job.judgment, gate=False)
             except ProbeAdmissionError as error:
                 result, reason = None, error.reason_code
-            except Exception:
+            except Exception as error:
                 result, reason = None, 'probe_unavailable'
-        reply = BillingJobReply(job.key, result, reason, job.before_publish, job.context)
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_reply_read_failed', error))
+        reply = BillingJobReply(job.key, result, reason, job.before_publish, job.context, history, job.judgment)
         if job.state == 'ready':
             self._drop(ticket)
         return reply
+
+    def _current(self, job):
+        try:
+            return job.judgment is not None and self._owner.gate_current(job.judgment)
+        except Exception:
+            return False
 
     def cancel(self, ticket, *, _ingress=None):
         self._guard()
@@ -398,7 +687,7 @@ class AccountBillingJobs:
                 self._signatures.pop(job.signature)
                 self._owner._signatures.pop(job.reservation)
                 job.signature = None
-        self._discard(job)
+        self._discard(job, cause=self._stop_cause(job))
         return 'cleanup_pending'
 
     def request_close(self):

@@ -3,7 +3,7 @@
 The collector and project host are the product processes, started by the CLI
 itself; the test supplies only a registered disposable state and owner key.
 """
-from tests.support import assert_dropped
+from tests.support import assert_refused
 import base64
 import json
 import os
@@ -57,6 +57,41 @@ class AccountHostTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, text=True, check=False)
         return sorted(int(value) for value in listed.stdout.split())
 
+    def late_stop(self):
+        """O10 SD: after a missed stop deadline, give the collector up to 30 s more, then report its
+        exit record's step timings (stop_ms) so the slow step is named. Diagnostic only.
+        O10 SD3-4: only a record this collector wrote is reported. The state root keeps the record
+        of the collector before it (a test that stops one collector on purpose, then starts another),
+        and SD1/SD2 were misled by that one. A record is this collector's when it started no earlier
+        than the oldest collector process still running here."""
+        from codex_agents import collector_exit
+        started = [self.started_ms(pid) for pid in self.processes('collector_host.py')]
+        oldest = None if not started or None in started else min(started)
+        end = time.monotonic() + 30
+        while self.processes('collector_host.py') and time.monotonic() < end:
+            time.sleep(.1)
+        record = collector_exit.read_exit(self.state.root)
+        report = {'stopped_after_s': round(30 - max(0.0, end - time.monotonic()), 1)}
+        if record is not None and (oldest is None or type(record.get('started_at_ms')) is not int
+                                   or record['started_at_ms'] < oldest):
+            return {**report, 'cause': 'no exit record from this collector',
+                    'other_collector_record': record.get('cause')}
+        return {**report, 'cause': record and record.get('cause'), 'stop_ms': record and record.get('stop_ms'),
+                'stalled_in': record and record.get('stalled_in')}
+
+    @staticmethod
+    def started_ms(pid):
+        """When process `pid` started, rounded down to the second (wall ms), from ps's elapsed time."""
+        text = subprocess.run(['ps', '-o', 'etime=', '-p', str(pid)], stdout=subprocess.PIPE, text=True,
+                              check=False).stdout.strip()
+        try:
+            days, _, clock = text.rpartition('-')
+            parts = [int(part) for part in clock.split(':')]
+            seconds = int(days or 0) * 86400 + sum(value * 60 ** index for index, value in enumerate(reversed(parts)))
+        except ValueError:
+            return None
+        return time.time_ns() // 1_000_000 - (seconds + 1) * 1000
+
     def stop_services(self):
         for pid in self.processes('project_host.py'):
             os.kill(pid, signal.SIGTERM)
@@ -64,7 +99,13 @@ class AccountHostTests(unittest.TestCase):
             os.kill(pid, signal.SIGTERM)
         end = time.monotonic() + 20
         while self.processes('project_host.py') or self.processes('collector_host.py'):
-            self.assertLess(time.monotonic(), end, 'service processes did not stop on SIGTERM')
+            if time.monotonic() >= end:
+                # O10: which process outlived the signal, and how long it had run, for the next report.
+                left = {entry: self.processes(entry) for entry in ('project_host.py', 'collector_host.py')}
+                ages = subprocess.run(['ps', '-o', 'pid=,etime=,stat=', '-p',
+                                       ','.join(str(pid) for pids in left.values() for pid in pids) or '0'],
+                                      stdout=subprocess.PIPE, text=True, check=False).stdout.split('\n')
+                self.fail(f'service processes did not stop on SIGTERM: {left} {ages} {self.late_stop()}')
             time.sleep(.05)
 
     def cli(self, command, *args, project=None, expected=0, terminal=False):
@@ -117,7 +158,7 @@ class AccountHostTests(unittest.TestCase):
         status = self.cli('learning-status')
         self.assertTrue(status['ready'], status)
         self.assertEqual('ok', status['owner_key']['state'])
-        self.assertTrue(status['owner_key']['fingerprint'].startswith('SHA256:'))
+        self.assertNotIn('fingerprint', status['owner_key'])  # D36: status carries no key fingerprint
         self.assertTrue(CollectorClient(self.paths.socket, timeout=2).health(root)['ingestion'])
 
         endpoint = self.account_endpoint(root)
@@ -144,7 +185,9 @@ class AccountHostTests(unittest.TestCase):
         self.assertEqual('ok', decode_account_response(reply, request)['state'])
         # The terminal label cannot open, claim or probe: those stay with an enrolled primary.
         self.assertEqual({'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
-                          'account.observe_provider'}, set(account_host.OWNER_OPERATIONS))
+                          'account.observe_provider', 'account.provider_state_snapshot',
+                          'account.takeover_report'},  # B4t D2.8/D2.9: the new account read
+                         set(account_host.OWNER_OPERATIONS))
         for operation in ('account.billing_probe', 'account.owner_public_key'):
             with self.subTest(operation=operation):
                 self.assertEqual('account_not_authorized', self.refusal(
@@ -201,7 +244,10 @@ class AccountHostTests(unittest.TestCase):
         self.cli(*base, '--signature', str(signature), project=root, terminal=True)
         after = self.cli('learning-status', project=root, terminal=True)
         self.assertEqual('ok', after['owner_key']['state'], after)
-        self.assertIsNotNone(after['owner_key']['fingerprint'])
+        self.assertNotIn('fingerprint', after['owner_key'])
+        self.assertEqual({'state', 'replacements', 'last_replaced_at_ms'}, set(after['owner_key']))  # whitelist, D36
+        self.assertEqual(0, after['owner_key']['replacements'])  # a first key: never replaced
+        self.assertIsNone(after['owner_key']['last_replaced_at_ms'])
 
     def test_a_key_reader_without_write_access_and_a_stopped_collector_get_nothing(self):
         root, project_id = self.projects[0]
@@ -216,13 +262,13 @@ class AccountHostTests(unittest.TestCase):
             client.settimeout(5)
             client.connect(endpoint)
             client.sendall(line + b'\n' + frame + b'\n')
-            assert_dropped(self, client)
+            assert_refused(self, client, 'service_refused_enrollment')  # R7b: refused with its fixed reason
 
         for pid in self.processes('collector_host.py'):
             os.kill(pid, signal.SIGTERM)
         end = time.monotonic() + 20
         while self.processes('collector_host.py'):
-            self.assertLess(time.monotonic(), end)
+            self.assertLess(time.monotonic(), end, self.late_stop() if time.monotonic() >= end else '')
             time.sleep(.05)
         self.assertFalse(Path(endpoint).exists())
         self.assertFalse((self.paths.root / 'client-runtimes' / 'account.cap').exists())

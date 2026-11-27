@@ -18,6 +18,8 @@ from codex_agents.learning_contracts import canonical_json, content_digest, vali
 from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST, LearningLedger
 from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
 from codex_agents.service_transport import ServiceTransportError
+from codex_agents import sql_read_budget
+from codex_agents.sql_read_budget import SQLReadConnection, SQLReadError, SQLReadLimits
 
 
 class ClaimDenialRecoveryTests(unittest.TestCase):
@@ -118,13 +120,70 @@ class ClaimDenialRecoveryTests(unittest.TestCase):
     def test_actual_legacy_scan_budget_exhaustion_rolls_back_and_can_retry_after_scope_restoration(self):
         for number in range(100):
             self.legacy_intent(run_id='run:' + f'{number:064x}')
-        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (1, 1000, 16_384)):
+        budget = (1, 1000, 16_384)
+        # U3: the legacy read seeks this run's identity, so unrelated history
+        # never fills even one 256-step callback. To exhaust the actual read,
+        # only that read counts a callback per VM step; its limits are unchanged.
+        original, refused = SQLReadConnection.transaction_read_call, []
+        def per_step(connection, limits, operation):
+            if limits != SQLReadLimits(*budget):
+                return original(connection, limits, operation)
+            with mock.patch.object(sql_read_budget, 'SQL_READ_PROGRESS_INTERVAL', 1):
+                try:
+                    return original(connection, limits, operation)
+                except SQLReadError as error:
+                    refused.append(error.reason_code)
+                    raise
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', budget), \
+                mock.patch.object(SQLReadConnection, 'transaction_read_call', per_step):
             with self.assertRaisesRegex(AccountError, 'claim_busy'):
                 self.call()
+        self.assertEqual(['sql_read_work_limit'], refused)
         self.pending()
         self.assertFalse(self.ledger._connection.in_transaction)
         self.assertEqual(0, self.ledger._connection.execute('PRAGMA query_only').fetchone()[0])
+        # The retry fits the same smallest budget at the normal granularity,
+        # whatever the unrelated history (U3).
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', budget):
+            self.assertFalse(self.call()['known'])
+
+    def earlier_dispatch_results(self, count, content_bytes):
+        """`count` earlier dispatch results of this project, written as 0.2.x wrote them (0.3.3 C2)."""
+        import hashlib
+        stamp = self.fixture.base.stamp
+        sequence = self.ledger._connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0] or 0
+        rows = []
+        for index in range(count):
+            content = json.dumps({'record_type': 'dispatch_result',
+                                  'run_id': 'run:' + hashlib.sha256(f'earlier-{index}'.encode()).hexdigest(),
+                                  'summary': 'x' * content_bytes}, separators=(',', ':')).encode()
+            digest = hashlib.sha256(content).hexdigest()
+            observed = stamp - 40 * 86_400_000 + index
+            rows.append((self.fixture.project, 'dispatch_result:' + digest, 'dispatch_result', 'lifecycle',
+                         sequence + 1 + index, observed, observed, observed + 90 * 86_400_000, content, digest))
+        with self.ledger._lock:
+            self.ledger._connection.executemany(
+                "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
+                "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)", rows)
+            self.ledger._connection.commit()
+
+    def assert_closed(self):
         self.assertFalse(self.call()['known'])
+        self.assertEqual(('abandoned', 'claim_denied'), tuple(self.state()))
+
+    def test_C2_a_refused_claim_closes_whatever_the_number_of_earlier_records(self):
+        """0.3.3 C2: 150,000 small earlier records; the old budget refused the closure for good."""
+        self.earlier_dispatch_results(150_000, 64)
+        # U3: the read seeks the run's identity, so it closes even under the old budget.
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (2000, 50, 2 * 1_048_576)):
+            self.assert_closed()
+
+    def test_C2_a_refused_claim_closes_whatever_the_size_of_an_earlier_record(self):
+        """0.3.3 C2: one earlier record over the old 16 KiB value limit."""
+        self.earlier_dispatch_results(1, 20_000)
+        # U3: the read never fetches an earlier record's content, so it closes even under the old value limit.
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (2000, 50, 16_384)):
+            self.assert_closed()
 
     def test_fence_commits_before_body_charge_retires_and_same_identity_never_rearms(self):
         self.fixture.store._result_capacity = ResultCapacity(8, MAX_RESULT_BODY_BYTES, 1_800_000, 120_000)

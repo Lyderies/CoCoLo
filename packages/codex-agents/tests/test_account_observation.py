@@ -2,12 +2,11 @@
 from dataclasses import replace
 import threading
 import unittest
-from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
 from tests import test_account_api as fixtures
-from tests.learning_support import fake_provider_tools, trusted_tools
+from tests.learning_support import fake_provider_tools, replace_fake_client, trusted_tools
 
 from codex_agents import account_observation, providers
 from codex_agents.account_observation import (
@@ -245,9 +244,10 @@ class AccountObservationTests(unittest.TestCase):
 
     def test_034_R6_the_collector_runs_the_account_retention_sweep(self):
         from codex_agents import learning_store
-        source = Path(learning_store.__file__).read_text()
-        loop = source[source.index('next_sweep = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS'):]
-        self.assertIn('self.ledger.sweep_account_retention()', loop[:loop.index('listener.accept()')])
+        import inspect
+        # S1-H1a-6b: the sweeps moved from the request loop to the collector's sweep cycle.
+        cycle = inspect.getsource(learning_store.CollectorServer._sweep_cycle)
+        self.assertIn('self.ledger.sweep_account_retention', cycle)
 
     def test_durable_quota_survives_abort_and_known_reply_still_works_at_capacity(self):
         with mock.patch.object(account_observation, 'MAX_OBSERVATION_REQUESTS', 1):
@@ -263,3 +263,28 @@ class AccountObservationTests(unittest.TestCase):
                 self.owner.reserve(self.fixture.projects[1], fixtures.RUNTIME, 'b' * 64, 'after-abort',
                     self.request, ObservationContext(str(self.fixture.roots[1])), lambda: True)
         self.assertEqual(2, self.ledger._connection.execute('SELECT COUNT(*) FROM account_observation_origins').fetchone()[0])
+
+
+class FakeProviderToolsRepeatTests(unittest.TestCase):
+    def test_replacing_a_fake_client_leaves_the_shared_launcher_unchanged(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            fake_provider_tools(Path(first))
+            fake_provider_tools(Path(second))
+            shared = Path(first, "codex").read_bytes()
+            replace_fake_client(Path(first) / "codex", b"#!/bin/sh\necho own\n")
+            self.assertEqual(b"#!/bin/sh\necho own\n", Path(first, "codex").read_bytes())
+            self.assertEqual(shared, Path(second, "codex").read_bytes())
+            self.assertEqual(0o555, os.stat(Path(second) / "codex").st_mode & 0o777)
+            self.assertEqual(shared, Path(first, "claude").read_bytes())
+
+    def test_fake_provider_tools_is_repeatable_for_one_folder(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            fake_provider_tools(Path(directory))
+            fake_provider_tools(Path(directory))
+            self.assertTrue((Path(directory) / "codex").exists())
+            self.assertTrue((Path(directory) / "claude").exists())

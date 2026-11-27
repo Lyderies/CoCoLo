@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests import test_learning_cli as cli_fixture
+from tests import learning_cli_support as cli_fixture
 from tests import test_learning_source_image_legacy as legacy
 from tests.learning_support import routing_fields, verification_outcome
 from tests.test_project_learning_live import fixture_record, full_report, run_cycle, stored
@@ -43,7 +43,7 @@ class LearningMigrationTests(unittest.TestCase):
 
     def partition(self):
         body = learning_store._snapshot_project_partition(
-            self.source._connection, self.project, ledger_schema_version=13)
+            self.source._connection, self.project, ledger_schema_version=16)
         body["tables"].pop("stored_files")  # The migration's own sealed backup is registered here.
         body["counts"].pop("stored_files")
         return body
@@ -350,10 +350,10 @@ class MigrationCliTests(unittest.TestCase):
             ledger.close()
 
 
-for _name in dir(cli_fixture.LearningCliTests):
+for _name in dir(cli_fixture.LearningCliBase):
     if not _name.startswith("test") and not _name.startswith("__") and _name not in {"run", "id"} and (
-            _name in {"setUp", "tearDown"} or _name.startswith("_")) and _name in vars(cli_fixture.LearningCliTests):
-        setattr(MigrationCliTests, _name, vars(cli_fixture.LearningCliTests)[_name])
+            _name in {"setUp", "tearDown"} or _name.startswith("_")) and _name in vars(cli_fixture.LearningCliBase):
+        setattr(MigrationCliTests, _name, vars(cli_fixture.LearningCliBase)[_name])
 
 
 class EmptyRetirementTests(unittest.TestCase):
@@ -412,7 +412,7 @@ class ActivationSchemaTests(unittest.TestCase):
             ProjectHistory(directory, project)
         store = ProjectHistory(directory, project, allow_schema_upgrade=True)
         try:
-            self.assertEqual(16, store._connection.execute("PRAGMA user_version").fetchone()[0])
+            self.assertEqual(23, store._connection.execute("PRAGMA user_version").fetchone()[0])  # B4t additive local authority
             self.assertEqual([], store._connection.execute("SELECT * FROM project_learning_activation").fetchall())
             self.assertEqual((7, 3), tuple(store._connection.execute(
                 "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone()))

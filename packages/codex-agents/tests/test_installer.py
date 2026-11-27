@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+import errno
 import hashlib
+import io
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -408,16 +412,23 @@ class InstallerTests(unittest.TestCase):
                 self.assertTrue(report["collector_quiesced"])
                 with self.assertRaises(CollectorError):
                     CollectorClient(LearningState(state_root, create=False).socket).health()
-                payload = json.loads(Path(report["path"]).read_bytes())
-                self.assertEqual(2, payload["body"]["schema_version"])
-                self.assertEqual(
-                    str(target.resolve()),
-                    payload["body"]["project"]["canonical_root"],
-                )
-                self.assertIn(
-                    "handle_digest",
-                    payload["body"]["columns"]["host_run_bindings"],
-                )
+                # PLAN F3: the streamed format-3 file (was format 2's JSON document).
+                self.assertEqual(3, report["format"])
+                self.assertEqual("preupdate_test.sqlite3", report["backup_name"])
+                self.assertNotIn("path", report)
+                backup_path = next(Path(state_root).rglob(report["backup_name"]))
+                backup = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
+                try:
+                    self.assertEqual(
+                        str(target.resolve()),
+                        backup.execute("SELECT canonical_root FROM projects").fetchone()[0],
+                    )
+                    manifest = json.loads(backup.execute(
+                        "SELECT manifest FROM cocolo_backup_manifest").fetchone()[0])
+                finally:
+                    backup.close()
+                self.assertIn("handle_digest", manifest["columns"]["host_run_bindings"])
+                self.assertEqual(report["counts"], manifest["counts"])
                 restarted = subprocess.run(
                     [
                         sys.executable,
@@ -866,6 +877,70 @@ class RenderedHookTests(unittest.TestCase):
         with self.assertRaisesRegex(installer.InstallError, "cannot install the learning hooks.*quote"):
             installer.install(target, apply=True, **inputs)
         self.assertFalse((target / installer.MANIFEST_PATH).exists())
+
+
+
+class WriteReportTests(unittest.TestCase):
+    """The Codex package reports its own writes (owner fix 1, finding r4-1 "observation is not write authority").
+
+    R1: the reply of an applied install, update or remove names every path the package wrote, created or
+    removed, with the sha256 it wrote, and every folder it created with its identity; the umbrella installer
+    builds its undo journal from that reply, a failure's reply included.
+    """
+
+    def setUp(self) -> None:
+        trust_hook_python(self)
+        self.directory = tempfile.mkdtemp(dir=TEMP_ROOT)
+        self.addCleanup(subprocess.run, ["rm", "-rf", self.directory], check=False)
+        self.target = InstallerTests.target(self, self.directory)
+        self.inputs = InstallerTests.project_inputs(self, self.directory)
+
+    def main(self) -> tuple[int, dict]:
+        argv = ["install.py", "install", "--target", str(self.target), "--apply",
+                "--project-agent-routing", str(self.inputs["project_agent_routing"]),
+                "--operational-checks", str(self.inputs["operational_checks"])]
+        out = io.StringIO()
+        with patch("sys.argv", argv), contextlib.redirect_stdout(out):
+            code = installer.main()
+        return code, json.loads(out.getvalue())
+
+    def test_an_applied_install_reports_every_path_it_wrote_with_the_digest_on_disk(self) -> None:
+        """R1. Fails on 1d359e3b: the reply has no 'writes' (the caller inferred them by reading files back)."""
+        _, reply = self.main()
+        writes = {entry["path"]: entry for entry in reply["writes"]}
+        expected = {*reply["files"], *reply["local_files"], installer.MANIFEST_PATH.as_posix(),
+                    *(path for path, action in reply["project_configuration"].items() if action == "create")}
+        self.assertEqual(expected, set(writes))
+        for path, entry in writes.items():
+            self.assertIsNone(entry["before"], path)
+            self.assertEqual(hashlib.sha256((self.target / path).read_bytes()).hexdigest(), entry["after"], path)
+        folders = {entry["path"]: entry for entry in reply["folders_created"]}
+        self.assertIn(".codex/orchestration", folders)
+        self.assertNotIn(".codex/agents", folders)  # the project's own folder existed already
+        for path, entry in folders.items():
+            info = os.stat(self.target / path)
+            self.assertEqual((info.st_dev, info.st_ino), (entry["device"], entry["inode"]), path)
+
+    def test_a_real_failure_partway_reports_the_writes_made_before_it(self) -> None:
+        """R1 with a real mid-step failure (owner fix 6): the fifth file write fails inside the package after four
+        were written; its error reply names exactly those four, with the digests on disk. Fails on 1d359e3b: the
+        error reply has no 'writes'."""
+        real = installer._atomic_write_managed
+        written = []
+
+        def fails_fifth(target, relative, content, **kwargs):
+            if len(written) == 4:
+                raise OSError(errno.EIO, "injected write failure")
+            real(target, relative, content, **kwargs)
+            written.append(relative)
+
+        with patch.object(installer, "_atomic_write_managed", side_effect=fails_fifth):
+            code, reply = self.main()
+        self.assertEqual(2, code)
+        self.assertIn("error", reply)
+        self.assertEqual(sorted(written), sorted(entry["path"] for entry in reply["writes"]))
+        for entry in reply["writes"]:
+            self.assertEqual(hashlib.sha256((self.target / entry["path"]).read_bytes()).hexdigest(), entry["after"])
 
 
 if __name__ == "__main__":

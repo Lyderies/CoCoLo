@@ -1,0 +1,25 @@
+FAILED codex:tests.test_rsf_s2_fence (exit 1) -> /private/tmp/pt5p79bt9z/1.log
+.FF.......
+======================================================================
+FAIL: test_current_format_missing_epoch_refuses_without_recreating_it (tests.test_rsf_s2_fence.FenceTests.test_current_format_missing_epoch_refuses_without_recreating_it) (kind='ledger')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 167, in test_current_format_missing_epoch_refuses_without_recreating_it
+    with self.subTest(kind=kind), self.assertRaises((LedgerError, HistoryError)):
+                                  ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_current_format_missing_epoch_refuses_without_recreating_it (tests.test_rsf_s2_fence.FenceTests.test_current_format_missing_epoch_refuses_without_recreating_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 173, in test_current_format_missing_epoch_refuses_without_recreating_it
+    self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM runtime_takeover').fetchone()[0])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+----------------------------------------------------------------------
+Ran 9 tests in 1.874s
+
+FAILED (failures=2)
+

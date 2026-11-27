@@ -6,7 +6,7 @@ Native authentication and current permission remain independent adapter gates.
 """
 from .contracts import validate_assignment, validate_task
 from .history_contracts import HistoryError
-from .learning_contracts import canonical_json, content_digest, keyed_digest, provider_for_model, validate_execution_configuration
+from .learning_contracts import canonical_json, content_digest, route_identity, keyed_digest, provider_for_model, validate_execution_configuration
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest, seal_open_scope
 from .project_worker_result import current_input_reference
 from .result_contracts import checked_result_body
@@ -74,7 +74,7 @@ def current_open_scope(history, context):
         'inputs_digest': open_inputs_digest(assignment, task, route, captured['parent_grant']),
         'assignment_id': assignment['assignment_id'], 'attempt': assignment['attempt'],
         **{n + '_digest': keyed_digest(key, canonical_json(v)) for n, v in
-           (('assignment', assignment), ('task', task), ('route', route), ('parent_grant', captured['parent_grant']))},
+           (('assignment', assignment), ('task', task), ('route', route_identity(route)), ('parent_grant', captured['parent_grant']))},
         'configuration_digest': content_digest(configuration), 'provider': route.get('provider', 'codex'), 'task_family': task['family'],
         'worker': worker, 'worker_context_digest': None if context.worker is None else keyed_digest(key,
             b'project-open-worker-input-v1\0'+canonical_json(captured['worker']))})

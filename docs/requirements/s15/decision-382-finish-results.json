@@ -1,0 +1,239 @@
+{
+ "elapsed_seconds": 30.5,
+ "jobs": 1,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 30.456,
+ "over_budget": [],
+ "budget_failures": [],
+ "debt_retirement_required": [],
+ "discovery_seconds": 2.349351624958217,
+ "preflight_seconds": 7.631294165970758,
+ "metadata_errors": [],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [],
+ "units": 11,
+ "tests": {
+  "codex": 98
+ },
+ "failed_units": [],
+ "slowest_units": [
+  [
+   "codex:tests.test_s15_failure_matrix",
+   13.2
+  ],
+  [
+   "codex:tests.test_s15_owner_caps",
+   10.2
+  ],
+  [
+   "codex:tests.test_s15_release_paths",
+   1.7
+  ],
+  [
+   "codex:tests.test_s15_probe_caps",
+   1.0
+  ],
+  [
+   "codex:tests.test_s15_contract_caps",
+   0.8
+  ],
+  [
+   "codex:tests.test_s15_settlement_matrix",
+   0.8
+  ],
+  [
+   "codex:tests.test_lifetime_cap_guard",
+   0.7
+  ],
+  [
+   "codex:tests.test_s15_memory_matrix",
+   0.7
+  ]
+ ],
+ "schema": 1,
+ "head": "4bc4dbbd",
+ "command": "\"$PY\" -B scripts/parallel_tests.py --module codex:tests.test_lifetime_cap_guard --module codex:tests.test_s15_contract_caps --module codex:tests.test_s15_failure_matrix --module codex:tests.test_s15_lease_churn --module codex:tests.test_s15_memory_matrix --module codex:tests.test_s15_owner_caps --module codex:tests.test_s15_probe_caps --module codex:tests.test_s15_release_paths --module codex:tests.test_s15_reservation_recovery --module codex:tests.test_s15_session_caps --module codex:tests.test_s15_settlement_matrix --jobs 1 --keep",
+ "exit_code": 0,
+ "modules": {
+  "tests.test_s15_memory_matrix": {
+   "tests": 2,
+   "outcomes": {
+    "tests.test_s15_memory_matrix.MemoryMatrixTests.test_both_memory_kinds_cross_crashes_and_lost_registration_reply": "passed",
+    "tests.test_s15_memory_matrix.MemoryMatrixTests.test_each_memory_recovery_release_disabled_once_fails_its_row": "passed"
+   }
+  },
+  "tests.test_s15_failure_matrix": {
+   "tests": 13,
+   "outcomes": {
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_account_holds_cross_transaction_cuts_and_lost_release_reply": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_account_release_trigger_disabled_fails_the_ordinary_release_oracle": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_actual_failure_before_launch_frees_worker_result_execution_and_monitor": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_each_local_host_deletion_disabled_fails_the_same_failure_oracle": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_each_monitor_exit_with_forgetting_disabled_fails_the_same_oracle": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_each_preparation_retirement_disabled_fails_the_same_cleanup_oracle": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_each_project_final_release_disabled_fails_the_same_row": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_host_and_probe_preparation_cancellation_and_failure_remove_actual_workspaces": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_lost_and_duplicate_dispatch_replies_keep_one_original_without_new_custody": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_lost_claim_reply_restarts_owner_without_another_claim_or_slot": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_monitor_exit_matrix_requires_terminal_and_cleanup_before_forgetting": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_project_withdrawal_completion_and_closed_custody_replay_keep_first_release": "passed",
+    "tests.test_s15_failure_matrix.FailureMatrixTests.test_refused_open_claim_and_dispatch_do_not_acquire_downstream_holds": "passed"
+   }
+  },
+  "tests.test_s15_probe_caps": {
+   "tests": 3,
+   "outcomes": {
+    "tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generation_that_cleanup_must_keep_is_refused_not_returned": "passed",
+    "tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_free_the_count_cap_for_the_same_request": "passed",
+    "tests.test_s15_probe_caps.RepeatProbeCapTests.test_expired_repeat_generations_release_quota_when_a_different_request_retries": "passed"
+   }
+  },
+  "tests.test_s15_lease_churn": {
+   "tests": 1,
+   "outcomes": {
+    "tests.test_s15_lease_churn.LeaseChurnTests.test_failed_before_launch_past_lease_verification_limit_keeps_live_counts_readable": "passed"
+   }
+  },
+  "tests.test_s15_contract_caps": {
+   "tests": 26,
+   "outcomes": {
+    "tests.test_s15_contract_caps.ContractCapTests.test_admission_identity_billing_and_restriction_ages_cross_each_horizon": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_captured_receipt_bytes_cross_each_independent_limit": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_clean_depth_crosses_limit_and_later_shallow_values_still_work": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_client_result_body_and_worker_export_cross_byte_limits_before_io": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_collector_binding_population_and_request_bytes_cross_real_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_driver_intake_and_dispatch_token_populations_cross_their_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_enrollment_consumer_verifier_and_frontend_cross_byte_limits_without_sockets": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_enrollment_subject_context_and_preamble_cross_reduced_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_escalation_ladder_crosses_reduced_limit_before_any_selection": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_exit_locations_cross_reduced_limit_without_losing_valid_records": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_gate_command_patch_nesting_and_pattern_cross_independent_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_json_value_and_service_encoder_cross_exact_reduced_byte_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_launch_journal_file_marker_and_rotation_cross_byte_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_managed_project_and_legacy_signer_files_cross_byte_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_manifest_and_directory_populations_cross_reduced_count_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_original_wire_peeks_and_proxy_head_cross_actual_byte_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_pipe_response_proc_reader_and_signature_payload_cross_byte_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_probe_event_counter_and_earlier_fence_refusals_reach_their_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_probe_record_and_result_values_cross_independent_byte_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_proof_pruning_bounds_each_pass_and_drains_past_the_limit": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_provider_model_and_helper_arrays_cross_reduced_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_real_settings_and_exit_files_cross_exact_byte_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_request_codecs_accept_exact_frame_and_refuse_one_byte_past": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_runtime_library_identity_and_snapshot_cross_actual_byte_budgets": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_scalar_text_and_client_version_cross_reduced_limits": "passed",
+    "tests.test_s15_contract_caps.ContractCapTests.test_signature_writer_refuses_actual_bytes_past_each_independent_budget": "passed"
+   }
+  },
+  "tests.test_lifetime_cap_guard": {
+   "tests": 6,
+   "outcomes": {
+    "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_function_gaining_a_limit_is_caught": "passed",
+    "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_test_must_exist": "passed",
+    "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught": "passed",
+    "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end": "passed",
+    "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site": "passed",
+    "tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_kinds_require_bounds_only_for_count_bytes_and_time": "passed"
+   }
+  },
+  "tests.test_s15_settlement_matrix": {
+   "tests": 2,
+   "outcomes": {
+    "tests.test_s15_settlement_matrix.SettlementMatrixTests.test_each_settlement_release_disabled_once_fails_its_own_row": "passed",
+    "tests.test_s15_settlement_matrix.SettlementMatrixTests.test_lease_and_reservation_cross_cuts_before_and_after_release_and_lost_reply": "passed"
+   }
+  },
+  "tests.test_s15_release_paths": {
+   "tests": 2,
+   "outcomes": {
+    "tests.test_s15_release_paths.ReleasePathTests.test_each_additional_release_disabled_once_fails_the_same_row": "passed",
+    "tests.test_s15_release_paths.ReleasePathTests.test_release_paths_replay_without_changing_the_first_release": "passed"
+   }
+  },
+  "tests.test_s15_reservation_recovery": {
+   "tests": 1,
+   "outcomes": {
+    "tests.test_s15_reservation_recovery.ReservationRecoveryTests.test_successor_settlement_releases_once_frees_capacity_and_writes_no_terminal": "passed"
+   }
+  },
+  "tests.test_s15_owner_caps": {
+   "tests": 36,
+   "outcomes": {
+    "tests.test_s15_owner_caps.OwnerCapTests.test_account_binding_sweep_and_project_qa_purge_drain_past_batch_one": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_account_output_upgrade_gate_and_repair_receipt_quota_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_actual_cleanup_and_execution_grant_encoders_and_verifiers_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_actual_denial_and_bound_lease_evidence_cross_reader_byte_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_actual_open_provenance_and_assignment_capture_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_actual_run_provenance_and_retained_record_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_actual_storage_evidence_encoder_and_both_readers_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_backup_plan_worker_artifact_and_account_check_receipts_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_container_journal_stop_detail_crosses_bytes_without_claiming_engine_evidence": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_control_dispatch_orchestration_and_read_response_decoders_cross_frames": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_derived_learning_record_feedback_and_membership_cross_byte_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_dispatch_metadata_lifetime_refuses_overflow_and_new_service_has_fresh_slots": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_execution_and_bridge_slots_cross_limits_then_release_for_fresh_work": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_git_patch_merge_path_count_and_committed_executable_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_history_record_binding_and_result_file_cross_byte_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_ingress_owner_group_defence_refuses_one_ticket_past_its_actual_population_limit": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_legacy_and_scalar_claim_contexts_cross_observation_age_independently": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_merge_library_file_and_aggregate_validation_cross_actual_byte_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_native_worker_result_writer_and_retained_reader_cross_byte_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_observation_worker_retained_reply_and_purge_cross_independent_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_open_scope_proof_and_account_reply_cross_independent_byte_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_orchestration_positions_reports_and_recovery_cross_reduced_counts": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_original_contexts_cross_their_own_snapshot_byte_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_original_open_delivery_quota_refuses_excess_and_cancel_take_frees_it": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_original_open_receipt_writer_crosses_its_own_byte_limit_with_atomic_rollback": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_owner_file_generation_attestation_and_intake_bytes_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_persistence_capture_defences_refuse_actual_bytes_past_each_limit": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_preparation_payload_and_real_build_refuse_past_input_budget": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_probe_reply_build_crosses_byte_limit_with_genuine_retained_record_references": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_project_host_socket_path_cap_refuses_before_runtime_or_listener_creation": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_project_request_execution_bounds_real_response_and_frees_the_failed_slot": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_qa_count_cap_refuses_a_genuine_pair_at_zero_then_restoration_commits_it": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_qa_following_chunk_replay_and_record_contract_cross_byte_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_release_ack_and_claim_preflight_refuse_oversized_bytes_before_authority_work": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_staged_import_pages_and_source_chunk_bytes_cross_limits": "passed",
+    "tests.test_s15_owner_caps.OwnerCapTests.test_worker_decode_report_and_output_cross_independent_byte_limits": "passed"
+   }
+  },
+  "tests.test_s15_session_caps": {
+   "tests": 6,
+   "outcomes": {
+    "tests.test_s15_session_caps.SessionCapTests.test_day_scan_stops_at_two_of_three_real_days_and_can_scan_again": "passed",
+    "tests.test_s15_session_caps.SessionCapTests.test_first_record_exact_boundary_at_reduced_limit": "passed",
+    "tests.test_s15_session_caps.SessionCapTests.test_first_record_rejects_one_byte_past_its_real_byte_limit": "passed",
+    "tests.test_s15_session_caps.SessionCapTests.test_folder_entry_scan_stops_with_more_real_entries_than_the_limit": "passed",
+    "tests.test_s15_session_caps.SessionCapTests.test_recent_session_scan_reads_only_two_of_three_real_rollouts": "passed",
+    "tests.test_s15_session_caps.SessionCapTests.test_setup_project_scan_stops_at_two_of_three_real_bindings": "passed"
+   }
+  }
+ },
+ "existing_unmeasured_budget_debt": [
+  "codex:tests.test_b2_service_outcome_paths",
+  "codex:tests.test_billing_gate",
+  "codex:tests.test_bridge",
+  "codex:tests.test_container_stop",
+  "codex:tests.test_host_commands",
+  "codex:tests.test_learning_cli",
+  "codex:tests.test_lost_run_settlement",
+  "codex:tests.test_project_driver",
+  "codex:tests.test_project_start",
+  "codex:tests.test_result_lifetime",
+  "codex:tests.test_session_guard",
+  "codex:tests.test_trial_run_driver_bugs",
+  "codex:tests.test_write_merge",
+  "root:test_install",
+  "root:test_install_claude_upgrade",
+  "root:test_setup_sh",
+  "root:test_setup_straight",
+  "root:test_setup_update",
+  "root:test_setup_wizard_direct"
+ ],
+ "interpretation": "All 98 selected tests pass; strict guard green without exemption. This named-module run does not execute the full-service source references or native container S27a-d carry-ins."
+}

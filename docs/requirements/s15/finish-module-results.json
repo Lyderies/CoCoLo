@@ -1,0 +1,297 @@
+{
+ "schema": 1,
+ "elapsed_seconds": 2.9579691250110045,
+ "job_seconds": 5.841332874959335,
+ "jobs": 2,
+ "metadata_errors": [],
+ "budget_failures": [],
+ "budget_warnings": [
+  {
+   "ceiling": 69.16,
+   "module": "codex:tests.test_b2_service_outcome_paths",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 78.58,
+   "module": "codex:tests.test_billing_gate",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 368.25,
+   "module": "codex:tests.test_bridge",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 72.23,
+   "module": "codex:tests.test_container_stop",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 119.56,
+   "module": "codex:tests.test_host_commands",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 112.56,
+   "module": "codex:tests.test_learning_cli",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 119.75,
+   "module": "codex:tests.test_lost_run_settlement",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 520.37,
+   "module": "codex:tests.test_project_driver",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 183.4,
+   "module": "codex:tests.test_project_start",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 73.05,
+   "module": "codex:tests.test_result_lifetime",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 7.23,
+   "module": "codex:tests.test_session_guard",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 103.34,
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 247.71,
+   "module": "codex:tests.test_write_merge",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 113.54,
+   "module": "root:test_install",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 135.45,
+   "module": "root:test_install_claude_upgrade",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 203.64,
+   "module": "root:test_setup_sh",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 293.12,
+   "module": "root:test_setup_straight",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 275,
+   "module": "root:test_setup_update",
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "ceiling": 282.08,
+   "module": "root:test_setup_wizard_direct",
+   "seconds": null,
+   "status": "not_measured"
+  }
+ ],
+ "discovery_seconds": 2.3301088330335915,
+ "preflight_seconds": 7.81446170900017,
+ "command": "/private/tmp/cocolo-testfw-venv/bin/python -B scripts/parallel_tests.py --module codex:tests.test_s15_settlement_matrix --module codex:tests.test_s15_session_caps --module codex:tests.test_s15_memory_matrix --module codex:tests.test_s15_release_paths --module codex:tests.test_s15_lease_churn --module codex:tests.test_lifetime_cap_guard --module codex:tests.test_sql_read_budget --module codex:tests.test_s15_reservation_recovery --module codex:tests.test_service_queue --jobs 2 --keep",
+ "workers": [
+  {
+   "unit": "tests.test_s15_settlement_matrix",
+   "seconds": 0.8066048750188202,
+   "returncode": 0,
+   "tests": 2,
+   "summary": "",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_s15_settlement_matrix.SettlementMatrixTests.test_each_settlement_release_disabled_once_fails_its_own_row": "passed",
+    "codex:tests.test_s15_settlement_matrix.SettlementMatrixTests.test_lease_and_reservation_cross_cuts_before_and_after_release_and_lost_reply": "passed"
+   },
+   "log_tail": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.251s\n\nOK"
+  },
+  {
+   "unit": "tests.test_s15_session_caps",
+   "seconds": 0.1629433750640601,
+   "returncode": 0,
+   "tests": 4,
+   "summary": "",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_s15_session_caps.SessionCapTests.test_day_scan_stops_at_two_of_three_real_days_and_can_scan_again": "passed",
+    "codex:tests.test_s15_session_caps.SessionCapTests.test_folder_entry_scan_stops_with_more_real_entries_than_the_limit": "passed",
+    "codex:tests.test_s15_session_caps.SessionCapTests.test_recent_session_scan_reads_only_two_of_three_real_rollouts": "passed",
+    "codex:tests.test_s15_session_caps.SessionCapTests.test_setup_project_scan_stops_at_two_of_three_real_bindings": "passed"
+   },
+   "log_tail": "....\n----------------------------------------------------------------------\nRan 4 tests in 0.010s\n\nOK"
+  },
+  {
+   "unit": "tests.test_s15_memory_matrix",
+   "seconds": 0.7678405420156196,
+   "returncode": 0,
+   "tests": 2,
+   "summary": "",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_s15_memory_matrix.MemoryMatrixTests.test_both_memory_kinds_cross_crashes_and_lost_registration_reply": "passed",
+    "codex:tests.test_s15_memory_matrix.MemoryMatrixTests.test_each_memory_recovery_release_disabled_once_fails_its_row": "passed"
+   },
+   "log_tail": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.161s\n\nOK"
+  },
+  {
+   "unit": "tests.test_s15_release_paths",
+   "seconds": 1.865674207918346,
+   "returncode": 0,
+   "tests": 2,
+   "summary": "",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_s15_release_paths.ReleasePathTests.test_each_additional_release_disabled_once_fails_the_same_row": "passed",
+    "codex:tests.test_s15_release_paths.ReleasePathTests.test_release_paths_replay_without_changing_the_first_release": "passed"
+   },
+   "log_tail": "..\n----------------------------------------------------------------------\nRan 2 tests in 1.247s\n\nOK"
+  },
+  {
+   "unit": "tests.test_s15_lease_churn",
+   "seconds": 0.562426874996163,
+   "returncode": 0,
+   "tests": 1,
+   "summary": "",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_s15_lease_churn.LeaseChurnTests.test_failed_before_launch_past_lease_verification_limit_keeps_live_counts_readable": "passed"
+   },
+   "log_tail": ".\n----------------------------------------------------------------------\nRan 1 test in 0.017s\n\nOK"
+  },
+  {
+   "unit": "tests.test_lifetime_cap_guard",
+   "seconds": 0.8192117079161108,
+   "returncode": 1,
+   "tests": 5,
+   "summary": "failures=1",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_function_gaining_a_limit_is_caught": "passed",
+    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_test_must_exist": "passed",
+    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught": "passed",
+    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end": "failed",
+    "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_registry_entry_requires_nonempty_end_and_test_even_if_not_a_current_site": "passed"
+   },
+   "log_tail": "...F.\n======================================================================\nFAIL: test_every_count_based_limit_in_the_runtime_is_listed_with_its_end (tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"~/Code/temp/cocolo-s15/packages/codex-agents/tests/test_lifetime_cap_guard.py\", line 79, in test_every_count_based_limit_in_the_runtime_is_listed_with_its_end\n    self.assertEqual([], problems(runtime_sites(), registry, test_names()))\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Lists differ: [] != [\"account_api.py::__init__: missing non-em[20462 chars]st'\"]\n\nSecond list contains 311 additional elements.\nFirst extra element 0:\n\"account_api.py::__init__: missing non-empty 'test'\"\n\nDiff is 21519 characters long. Set self.maxDiff to None to see it.\n\n----------------------------------------------------------------------\nRan 5 tests in 0.676s\n\nFAILED (failures=1)"
+  },
+  {
+   "unit": "tests.test_sql_read_budget",
+   "seconds": 0.15984774997923523,
+   "returncode": 0,
+   "tests": 35,
+   "summary": "",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_a_failure_in_each_actual_restore_step_closes_the_connection": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_backend_errors_and_oversized_values_are_sanitized": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_budget_refuses_cursor_creation_and_cursor_statement_execution": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_callback_clock_failure_regression_and_deadline_abort_actual_scans": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_callbacks_accumulate_across_statements_and_latch_refusal": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_clock_failure_and_regression_are_fixed_and_settings_restore": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_cursor_capacity_is_bounded_and_scope_owned_cursors_close": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_existing_query_only_mode_remains_enabled": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_existing_value_limit_is_never_widened": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_fetch_views_check_scope_and_owner_before_backend_access": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_fixed_error_inside_owner_sql_handler_has_no_raw_context": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_fixed_read_cannot_leave_a_transaction_open": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_foreign_progress_callback_is_not_replaced_or_lost": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_interrupt_at_callback_counter_increment_propagates_after_restore": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_keyboard_interrupt_propagates_after_restoration": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_large_scan_aborts_then_another_scope_succeeds": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_latched_failure_prevents_a_subsequent_short_statement": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_limits_are_explicit_exact_finite_integers": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_locked_database_refuses_without_the_original_five_second_busy_wait": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_monotonic_deadline_without_a_progress_callback_is_checked_at_exit": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_native_cursor_tracker_closes_the_first_cursor_past_its_limit": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_ordinary_legacy_cursor_statements_remain_available_outside_a_budget": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_outer_transaction_and_nested_scope_refuse_without_resetting_outer_state": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_partial_setup_failure_restores_settings_before_any_operation": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_restoration_failure_closes_the_exact_connection_and_refuses_reuse": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_restoration_failure_overrides_existing_fixed_refusal": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_returned_cursor_cannot_execute_after_a_caught_scan_abort": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_scope_cannot_replace_the_owned_handler_or_run_script_or_batch": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_small_read_restores_exact_previous_settings_and_closes_cursors": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_transaction_read_cannot_end_or_reconfigure_the_outer_transaction": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_transaction_read_fault_does_not_commit_or_rollback_outer_writes": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_transaction_read_preserves_outer_writes_settings_and_caller_rollback": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_transaction_read_requires_outer_transaction_and_cannot_write": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_write_refusal_has_no_data_change_and_restores_owner_write_access": "passed",
+    "codex:tests.test_sql_read_budget.SQLReadBudgetTests.test_wrong_process_and_thread_refuse_before_sqlite_access": "passed"
+   },
+   "log_tail": "...................................\n----------------------------------------------------------------------\nRan 35 tests in 0.014s\n\nOK"
+  },
+  {
+   "unit": "tests.test_s15_reservation_recovery",
+   "seconds": 0.5939799170009792,
+   "returncode": 0,
+   "tests": 1,
+   "summary": "",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_s15_reservation_recovery.ReservationRecoveryTests.test_successor_settlement_releases_once_frees_capacity_and_writes_no_terminal": "passed"
+   },
+   "log_tail": ".\n----------------------------------------------------------------------\nRan 1 test in 0.034s\n\nOK"
+  },
+  {
+   "unit": "tests.test_service_queue",
+   "seconds": 0.10280362505000085,
+   "returncode": 0,
+   "tests": 8,
+   "summary": "",
+   "timed_out": false,
+   "violations": [],
+   "outcomes": {
+    "codex:tests.test_service_queue.ProjectFairQueueTests.test_both_population_caps_refuse_excess_and_drain_restores_admission": "passed",
+    "codex:tests.test_service_queue.ProjectFairQueueTests.test_concurrent_consumers_deliver_each_pending_item_once": "passed",
+    "codex:tests.test_service_queue.ProjectFairQueueTests.test_invalid_items_are_rejected_without_retaining_rejected_values": "passed",
+    "codex:tests.test_service_queue.ProjectFairQueueTests.test_invalid_limits_and_aggregate_memory_bounds": "passed",
+    "codex:tests.test_service_queue.ProjectFairQueueTests.test_project_backlog_cannot_take_another_projects_quota_or_turn": "passed",
+    "codex:tests.test_service_queue.ProjectFairQueueTests.test_project_slot_reclaimed_only_when_its_queue_is_empty": "passed",
+    "codex:tests.test_service_queue.ProjectFairQueueTests.test_separate_reserved_lane_remains_usable_when_routine_lane_is_full": "passed",
+    "codex:tests.test_service_queue.ProjectFairQueueTests.test_simultaneous_offers_preserve_quota_and_deliver_every_accepted_item_once": "passed"
+   },
+   "log_tail": "........\n----------------------------------------------------------------------\nRan 8 tests in 0.002s\n\nOK"
+  }
+ ]
+}

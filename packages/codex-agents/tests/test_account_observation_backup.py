@@ -2,14 +2,12 @@
 from copy import deepcopy
 import json
 import runpy
-import sqlite3
 import time
 import unittest
 
 from tests import test_account_observation as fixtures
 from tests.support import REPOSITORY_ROOT
 from tests.learning_support import backup_body
-from codex_agents.learning_contracts import content_digest, validate_learning_record
 from codex_agents.learning_store import LedgerError, _verify_project_backup_body
 
 
@@ -28,14 +26,9 @@ class AccountObservationBackupTests(unittest.TestCase):
         self.body = backup_body(path, self.project)
         self.tool = runpy.run_path(str(REPOSITORY_ROOT / 'scripts/backup_installed_project.py'))
 
-    def standalone(self, body):
-        self.tool['_verify_relational_restore'](self.ledger._connection, body,
-            validate_learning_record=validate_learning_record, content_digest=content_digest)
-
     def test_both_verifiers_preserve_committed_and_unknown_original_requests(self):
         self.assertTrue(self.ledger.verify_sanitized_backup(self.project, file_id='observations')['verified'])
-        self.standalone(self.body)
-        self.assertEqual(14, self.body['ledger_schema_version'])
+        self.assertEqual(18, self.body['ledger_schema_version'])  # B4t: local authority excluded; originals unchanged
         self.assertEqual(2, self.body['counts']['account_observation_origins'])
         requests = self.body['tables']['account_observation_requests']
         self.assertEqual({'pending', 'committed'}, {row['state'] for row in requests})
@@ -53,11 +46,7 @@ class AccountObservationBackupTests(unittest.TestCase):
             broken['counts'][table] -= 1
             with self.subTest(table=table), self.assertRaises(LedgerError):
                 _verify_project_backup_body(broken)
-            with self.subTest(table=table), self.assertRaises((RuntimeError, sqlite3.IntegrityError)):
-                self.standalone(broken)
         broken = deepcopy(self.body)
         broken['tables']['account_observation_origins'][0]['parameters_digest'] = 'f' * 64
         with self.assertRaises(LedgerError):
             _verify_project_backup_body(broken)
-        with self.assertRaisesRegex(RuntimeError, 'observation coverage'):
-            self.standalone(broken)

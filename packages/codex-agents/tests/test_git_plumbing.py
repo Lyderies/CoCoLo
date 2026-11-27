@@ -349,15 +349,29 @@ class RepositoryLayoutTests(unittest.TestCase):
         self.assertEqual("0", git_plumbing.GIT_ENVIRONMENT["GIT_TERMINAL_PROMPT"])
         self.assertEqual("", git_plumbing.GIT_ENVIRONMENT["GIT_ALLOW_PROTOCOL"])
         self.assertEqual("1", git_plumbing.GIT_ENVIRONMENT["GIT_NO_LAZY_FETCH"])
-        source = "".join(
-            path.read_text() for path in sorted(
-                (BUNDLE_ROOT / ".codex" / "orchestration" / "codex_agents").glob("*.py")
-            )
-        )
-        # Every git call in the runtime is plumbing that reads refs and objects.
-        calls = re.findall(r"(?:run_git\(|_git\(|\brun\(\[)[^)]*?\"([a-z-]+)\"", source)
+        modules = sorted((BUNDLE_ROOT / ".codex" / "orchestration" / "codex_agents").glob("*.py"))
+        pattern = r"(?:run_git\(|_git\(|\brun\(\[)[^)]*?\"([a-z-]+)\""
+        # Every git call in the runtime is plumbing that reads refs and objects, except
+        # hardened_git (M3-16, M3-17), whose writing plumbing its own allow-list confines to
+        # COCOLO's private object store (tests.test_hardened_git proves it), and write_merge
+        # (M3-21), whose calls all go through hardened_git and only read: a raw tree comparison,
+        # attributes from a tree, and the index's skip-worktree flags (tests.test_write_merge).
+        special = ("hardened_git.py", "write_merge.py")
+        source = "".join(path.read_text() for path in modules if path.name not in special)
+        calls = re.findall(pattern, source)
         self.assertTrue(calls)
         self.assertLessEqual(set(calls), {"rev-parse", "ls-tree", "cat-file", "config"})
+        merge = (modules[0].parent / "write_merge.py").read_text()
+        self.assertNotIn("run_git(", merge)
+        self.assertNotIn("subprocess.run(", merge)
+        merge_calls = re.findall(pattern, merge)
+        self.assertTrue(merge_calls)
+        self.assertLessEqual(set(merge_calls), {"rev-parse", "config", "cat-file", "diff-tree", "check-attr", "ls-files"})
+        hardened = re.findall(pattern, (modules[0].parent / "hardened_git.py").read_text())
+        self.assertTrue(hardened)
+        self.assertLessEqual(set(hardened), {
+            "version", "rev-parse", "ls-tree", "cat-file", "config", "read-tree", "apply", "write-tree",
+        })
         self.assertNotIn('"git", "-C"', source)
 
 
@@ -376,6 +390,13 @@ class GitExecutableTests(unittest.TestCase):
         roots.start()
         self.addCleanup(roots.stop)
 
+    def resolve_git(self, **options):
+        # These cases change installation trust/candidates within one process.
+        # Each represents a fresh process; the production pin is intentionally stable.
+        git_plumbing._trusted_git_candidates.cache_clear()
+        self.addCleanup(git_plumbing._trusted_git_candidates.cache_clear)
+        return git_plumbing.git_executable(**options)
+
     def fake_git(self, name: str) -> str:
         path = self.base / name / "git"
         path.parent.mkdir()
@@ -384,7 +405,7 @@ class GitExecutableTests(unittest.TestCase):
         return str(path)
 
     def test_the_resolved_git_is_real_and_trusted(self) -> None:
-        executable = git_plumbing.git_executable()
+        executable = self.resolve_git()
         if executable is None:
             self.skipTest("no trusted git binary on this machine")
         self.assertEqual(os.path.realpath(executable), executable)
@@ -401,33 +422,33 @@ class GitExecutableTests(unittest.TestCase):
     def test_candidates_in_temporary_or_shim_locations_are_refused(self) -> None:
         temporary = self.fake_git("temporary")
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (temporary,)):
-            self.assertIsNone(git_plumbing.git_executable())
+            self.assertIsNone(self.resolve_git())
         trusted = self.fake_git("trusted")
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (temporary, trusted)), \
                 mock.patch.object(
                     git_plumbing, "temp_roots", lambda: {Path(temporary).parent}
                 ):
-            self.assertEqual(trusted, git_plumbing.git_executable())
+            self.assertEqual(trusted, self.resolve_git())
         # A symlink to a trusted binary is pinned as the binary itself.
         link = self.base / "link-git"
         link.symlink_to(trusted)
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (str(link),)), \
                 mock.patch.object(git_plumbing, "temp_roots", lambda: set()):
-            self.assertEqual(trusted, git_plumbing.git_executable())
+            self.assertEqual(trusted, self.resolve_git())
         if sys.platform == "darwin":
             with mock.patch.object(git_plumbing, "git_candidates", lambda: ("/usr/bin/git",)):
-                self.assertIsNone(git_plumbing.git_executable())
+                self.assertIsNone(self.resolve_git())
         # Outside every trusted installation folder (a sibling of a workspace), never.
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (trusted,)), \
                 mock.patch.object(git_plumbing, "temp_roots", lambda: set()), \
                 mock.patch.object(host_paths, "TRUSTED_INSTALL_ROOTS", ("/usr/bin",)):
-            self.assertIsNone(git_plumbing.git_executable())
+            self.assertIsNone(self.resolve_git())
         # A git inside the repository it would inspect is never run.
         with mock.patch.object(git_plumbing, "git_candidates", lambda: (trusted,)), \
                 mock.patch.object(git_plumbing, "temp_roots", lambda: set()):
-            self.assertEqual(trusted, git_plumbing.git_executable())
+            self.assertEqual(trusted, self.resolve_git())
             self.assertIsNone(
-                git_plumbing.git_executable(untrusted=[Path(trusted).parent.parent])
+                self.resolve_git(untrusted=[Path(trusted).parent.parent])
             )
 
     def test_the_developer_directory_comes_from_the_root_owned_link(self) -> None:

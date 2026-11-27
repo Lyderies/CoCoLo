@@ -629,6 +629,17 @@ assert "codex_agents.learning_store" not in sys.modules
         with self.assertRaises(project_service.HistoryError):
             project_service.service_bundle_root(copy / ".codex" / "orchestration", self.project.parent)
 
+    def test_SB_a_service_started_from_a_clone_prepares_children_from_the_project(self) -> None:
+        # O10 SB (2026-11-20): setup starts the project's service with the clone's own CLI, so the
+        # service runs from the clone; its children's agent files are the project's, as for the copy
+        # (the control project: preparation_failed_at_role_prompt).
+        from codex_agents import project_service
+        self.install()
+        clone_orchestration = ORCHESTRATION_ROOT  # this checkout: neither the project nor a copy
+        self.assertNotIn(self.project.resolve(), Path(clone_orchestration).resolve().parents)
+        self.assertEqual(self.project.resolve(), project_service.service_bundle_root(
+            clone_orchestration, self.project))
+
     def test_status_is_stale_unless_rule_copy_and_project_all_match(self) -> None:
         self.install()
         copy = expected_copy(self.codex_home, self.project)

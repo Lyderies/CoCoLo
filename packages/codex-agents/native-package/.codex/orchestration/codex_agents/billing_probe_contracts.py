@@ -1,19 +1,41 @@
 """Closed fixed billing-probe values; no native or execution authority."""
+import re
+
 from .admission_metadata import _headroom_state
 from .contracts import ContractError
 from .history_contracts import valid_integer
 from .learning_contracts import ADMISSION_REASON_CODES, canonical_json, content_digest, validate_learning_record
 
 MAX_BILLING_REPLY_BYTES = 12_288
+PROBE_NO_LAUNCH_EVIDENCE_STATE = 'probe_admitted_no_launch_evidence'
+PROBE_NO_LAUNCH_EVIDENCE_REASON = (
+    'No launch evidence is available; this billing check holds capacity until its deadline plus grace.')
 BILLING_PROBE_REASONS = frozenset({'probe_invalid_request', 'probe_invalid_response', 'probe_not_authorized',
     'probe_unavailable', 'probe_conflict', 'probe_full', 'probe_busy', 'probe_not_ready',
     # Which step stopped a probe before it launched (0.3.2): preparing it, its worker, another step.
     'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed', 'probe_step_failed',
     # No probe worker can free without a restart (0.3.3, C9c).
-    'probe_worker_unavailable'})
+    'probe_worker_unavailable',
+    # The reply failed its own contract (the probe ran or was reused; its answer could not be sent).
+    'probe_reply_invalid',
+    # BR-13 / BR-10 (decision 44): a repeat that would need a new provider call; a provider API key.
+    'probe_replay_stale', 'provider_api_key_present'})
 PROBE_STEP_REASONS = frozenset({'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed',
-    'probe_step_failed', 'probe_worker_unavailable'})
-PROBE_COMPLETION_REASONS = frozenset({'probe_incomplete', 'probe_invalid_events', 'probe_no_events'})
+    'probe_step_failed', 'probe_worker_unavailable',
+    'probe_unlaunched_expired',
+    'probe_admitted_expired'})  # O0c P6: an admitted probe of an earlier collector, closed past deadline + grace  # O0b RS-A-2: a reserved probe past its deadline, closed by the supervisor
+# CI-3: why the init-frame check stopped a probe (the bridge's `init_*` outcomes); kept as the reply's reason
+# instead of probe_incomplete.
+PROBE_INIT_REASONS = frozenset({'init_api_key_source', 'init_model_mismatch', 'init_plugin_not_allowed',
+    'init_plugin_not_disabled', 'init_mcp_server_loaded', 'init_tool_not_allowed', 'init_permission_mode_mismatch',
+    'init_additional_directories_present'})
+PROBE_COMPLETION_REASONS = frozenset({'probe_incomplete', 'probe_invalid_events', 'probe_no_events'}) | PROBE_INIT_REASONS
+_CLIENT_VERSION = re.compile(r'\d+\.\d+\.\d+')
+
+
+def valid_client_version(value):
+    """CI-4: the client version an init frame reported with the probe, or None when none could be read."""
+    return value is None or (type(value) is str and _CLIENT_VERSION.fullmatch(value) is not None)
 
 
 class BillingProbeError(RuntimeError):
@@ -32,15 +54,29 @@ def decode_billing_probe_input(value):
     return {}
 
 
+def valid_probe_retry(value):
+    from datetime import datetime, timezone
+    if type(value) is not str or not value.endswith('Z'):
+        return False
+    try:
+        return datetime.fromisoformat(value).utcoffset() == timezone.utc.utcoffset(None)
+    except ValueError:
+        return False
+
+
 def checked_billing_probe_reply(value):
     try:
         fields = {'probe', 'reason_code', 'records', 'known', 'observed_at_ms'}
-        if (type(value) is not dict or value.keys() not in (fields, fields | {'billing_waivers'})
+        if (type(value) is not dict or value.keys() - {'billing_waivers', 'client_version', 'retry_at'} != fields
+                or not valid_client_version(value.get('client_version'))
                 or type(value['probe']) is not str or value['probe'] not in {'reused', 'denied', 'completed'}
                 or type(value['known']) is not bool or not valid_integer(value['observed_at_ms'])
                 or type(value['records']) is not list or len(value['records']) > 3):
             raise ValueError()
         state, reason, records = value['probe'], value['reason_code'], value['records']
+        if 'retry_at' in value and (state != 'denied' or reason != 'probe_cooldown'
+                or not valid_probe_retry(value['retry_at'])):
+            raise ValueError()
         if state == 'denied':
             # A probe settled before its launch is denied with the failed step (0.3.3, C9).
             if (records or type(reason) is not str

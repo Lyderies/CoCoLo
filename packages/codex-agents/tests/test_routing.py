@@ -60,11 +60,11 @@ class RoutingTests(unittest.TestCase):
             self.task(complexity="low", risk="low", deterministic_validation=True),
             self.policy,
         )
-        self.assertEqual(("gpt-6.1-sol", "medium"), (route["model"], route["effort"]))
+        self.assertEqual(("gpt-6-sol", "medium"), (route["model"], route["effort"]))
         self.assertEqual("bounded_executable_work", route["reason"])
         self.assertEqual("execution", route["stage"])
         self.assertEqual(
-            {"model": "gpt-6.1-sol", "effort": "medium"},
+            {"model": "gpt-6-sol", "effort": "medium"},
             route["selection"]["selected"],
         )
         self.assertEqual(
@@ -94,7 +94,7 @@ class RoutingTests(unittest.TestCase):
             ),
             self.policy,
         )
-        self.assertEqual(("gpt-6.1-sol", "medium"), (route["model"], route["effort"]))
+        self.assertEqual(("gpt-6-sol", "medium"), (route["model"], route["effort"]))
 
     def test_exploratory_code_routes_to_gpt6_sol(self) -> None:
         route = route_task(
@@ -155,7 +155,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_high_complexity_alone_keeps_bounded_sol_route(self) -> None:
         route = route_task(self.task(complexity="high"), self.policy)
-        self.assertEqual(("gpt-6.1-sol", "medium"), (route["model"], route["effort"]))
+        self.assertEqual(("gpt-6-sol", "medium"), (route["model"], route["effort"]))
 
     def test_missing_route_facts_select_bounded_reconnaissance(self) -> None:
         route = route_task(
@@ -212,7 +212,7 @@ class RoutingTests(unittest.TestCase):
             ),
             self.policy,
         )
-        self.assertEqual(("gpt-6.1-sol", "medium"), (route["model"], route["effort"]))
+        self.assertEqual(("gpt-6-sol", "medium"), (route["model"], route["effort"]))
 
     def test_one_semantic_failure_does_not_escalate(self) -> None:
         route = route_task(
@@ -228,7 +228,7 @@ class RoutingTests(unittest.TestCase):
             ),
             self.policy,
         )
-        self.assertEqual(("gpt-6.1-sol", "medium"), (route["model"], route["effort"]))
+        self.assertEqual(("gpt-6-sol", "medium"), (route["model"], route["effort"]))
 
     def test_claimed_reasoning_failures_do_not_escalate(self) -> None:
         route = route_task(
@@ -249,9 +249,9 @@ class RoutingTests(unittest.TestCase):
             ),
             self.policy,
         )
-        self.assertEqual(("gpt-6.1-sol", "medium"), (route["model"], route["effort"]))
+        self.assertEqual(("gpt-6-sol", "medium"), (route["model"], route["effort"]))
 
-    def test_critical_risk_does_not_raise_model_or_authority(self) -> None:
+    def test_critical_risk_keeps_original_model_and_authority(self) -> None:
         common = {
             "owned_paths": ["src/"],
             "independent_parts": 3,
@@ -265,9 +265,11 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(("gpt-6.1-sol", "medium"), (route["model"], route["effort"]))
         self.assertEqual("parallel", route["topology"])
         self.assertEqual(3, route["max_parallel"])
+        self.assertEqual(("gpt-6-sol", "medium"),
+                         (low_route["model"], low_route["effort"]))
         self.assertEqual(
-            (low_route["model"], low_route["effort"], low_route["topology"]),
-            (route["model"], route["effort"], route["topology"]),
+            (low_route["effort"], low_route["topology"], low_route["max_parallel"]),
+            (route["effort"], route["topology"], route["max_parallel"]),
         )
         self.assertTrue(route["verification_required"])
         self.assertNotIn("owned_paths", route)
@@ -867,7 +869,7 @@ class ProviderRoutingTests(unittest.TestCase):
                 self.assertTrue(route["role"].startswith("codex_agents_"))
                 self.assertEqual("codex", route["verifier"]["provider"])
                 self.assertEqual(
-                    ("gpt-6.1-sol", "high"),
+                    ("gpt-6.1-sol", "medium"),
                     (route["verifier"]["model"], route["verifier"]["effort"]),
                 )
         exploratory = route_task(self.exploratory(), self.policy)
@@ -881,28 +883,27 @@ class ProviderRoutingTests(unittest.TestCase):
             self.exploratory(), policy, primary_provider="claude"
         )
         self.assertEqual(
-            ("claude", "bridge", "claude-opus-5-5", "medium"),
+            ("codex", "bridge", "gpt-6.1-sol", "high"),
             (
                 exploratory["provider"], exploratory["dispatch"],
                 exploratory["model"], exploratory["effort"],
             ),
         )
-        self.assertEqual("claude_agents_implementation_worker", exploratory["role"])
-        self.assertEqual(
-            "claude_agents_implementation_worker", exploratory["agent_type"]
-        )
-        self.assertEqual(
-            ".claude/agents/claude_agents_implementation_worker.md",
-            exploratory["agent_path"],
-        )
+        self.assertEqual("codex_agents_implementation_worker", exploratory["role"])
+        self.assertNotIn("agent_type", exploratory)
+        self.assertNotIn("agent_path", exploratory)
+        self.assertEqual("claude_agents_verification_worker", exploratory["verifier"]["agent_type"])
         self.assertEqual("read-only", exploratory["sandbox_mode"])
         self.assertEqual(
             policy["provider_config_digest"], exploratory["provider_config_digest"]
         )
 
+        self.assertEqual(("claude", "bridge"), (
+            exploratory["verifier"]["provider"], exploratory["verifier"]["dispatch"]))
+
         bounded = route_task(self.task(), policy, primary_provider="claude")
         self.assertEqual(
-            ("codex", "bridge", "gpt-6.1-sol", "medium"),
+            ("codex", "bridge", "gpt-6-sol", "medium"),
             (bounded["provider"], bounded["dispatch"], bounded["model"], bounded["effort"]),
         )
         self.assertEqual("codex_agents_implementation_worker", bounded["role"])
@@ -915,12 +916,13 @@ class ProviderRoutingTests(unittest.TestCase):
         )
         bridged = route_task(self.exploratory(), self.provider_policy(bridge=True))
         self.assertEqual(
-            ("claude", "bridge", "claude-opus-5-5", "medium"),
+            ("codex", "bridge", "gpt-6.1-sol", "high"),
             (
                 bridged["provider"], bridged["dispatch"],
                 bridged["model"], bridged["effort"],
             ),
         )
+        self.assertEqual("claude", bridged["verifier"]["provider"])
 
     def test_project_model_allowlist_skips_candidates(self) -> None:
         policy = self.provider_policy(
@@ -932,7 +934,11 @@ class ProviderRoutingTests(unittest.TestCase):
             codex={"enabled": False},
             claude={"enabled": True, "models": ["claude-haiku-5-5", "claude-opus-5-5"]},
         )
-        route = route_task(self.task(), policy, primary_provider="claude")
+        # Low/medium bounded bands have no admitted Claude model in this allowlist.
+        with self.assertRaisesRegex(ContractError, "no provider candidate"):
+            route_task(self.task(), policy, primary_provider="claude")
+        # High risk still uses the original list and skips Sonnet to reach Haiku.
+        route = route_task(self.task(risk="high"), policy, primary_provider="claude")
         self.assertEqual(
             ("claude", "claude-haiku-5-5", "high"),
             (route["provider"], route["model"], route["effort"]),
@@ -1045,18 +1051,18 @@ class ProviderRoutingTests(unittest.TestCase):
         policy = self.provider_policy()
         claude_work = route_task(self.exploratory(), policy, primary_provider="claude")
         self.assertEqual(
-            ("codex", "bridge", "gpt-6.1-sol", "high"),
+            ("claude", "bridge", "claude-sonnet-5-5", "medium"),
             tuple(
                 claude_work["verifier"][field]
                 for field in ("provider", "dispatch", "model", "effort")
             ),
         )
         self.assertEqual(
-            "codex_agents_verification_worker", claude_work["verifier"]["role"]
+            "claude_agents_verification_worker", claude_work["verifier"]["role"]
         )
         codex_work = route_task(self.task(), policy, primary_provider="claude")
         self.assertEqual(
-            ("claude", "bridge", "claude-opus-5-5", "high"),
+            ("claude", "bridge", "claude-sonnet-5-5", "medium"),
             tuple(
                 codex_work["verifier"][field]
                 for field in ("provider", "dispatch", "model", "effort")
@@ -1081,10 +1087,16 @@ class ProviderRoutingTests(unittest.TestCase):
 
     def test_legacy_fallback_stays_on_codex_and_obeys_configuration(self) -> None:
         policy = self.provider_policy()
+        # The guard: a route that is not Codex (high risk research stays on Claude) is refused.
         with self.assertRaisesRegex(ContractError, "only to Codex routes"):
             _route_task_legacy_fallback(
-                self.exploratory(), policy, primary_provider="claude"
+                self.exploratory(family="research", risk="high"), policy,
+                primary_provider="claude",
             )
+        selected = _route_task_legacy_fallback(
+            self.exploratory(), policy, primary_provider="claude")
+        self.assertEqual(("codex", "gpt-5.6-sol"), (selected["provider"], selected["model"]))
+        self.assertEqual("claude", selected["verifier"]["provider"])
         restricted = self.provider_policy(
             codex={"enabled": True, "models": ["gpt-6.1-sol"]}
         )
@@ -1269,7 +1281,7 @@ class ProviderRoutingTests(unittest.TestCase):
             policy = load_effective_policy(*arguments)
             self.assertEqual(content_digest(config), policy["provider_config_digest"])
             route = route_task(self.exploratory(), policy)
-            self.assertEqual(("claude", "bridge"), (route["provider"], route["dispatch"]))
+            self.assertEqual(("codex", "bridge"), (route["provider"], route["dispatch"]))
 
             path.unlink()
             target = root / "provider-routing.json"
@@ -1354,10 +1366,10 @@ class ProviderRoutingTests(unittest.TestCase):
                          verification["effort"], verification["dispatch"]),
                     )
                     self.assertEqual(advertised["role"], verification["role"])
-        # Both directions are covered: Claude work gets Codex, Codex work gets Claude.
+        # Both worker shapes now choose Codex and advertise the independent Claude verifier.
         claude_primary = self.provider_policy()
         self.assertEqual(
-            "codex",
+            "claude",
             route_task(self.exploratory(), claude_primary, primary_provider="claude")[
                 "verifier"
             ]["provider"],
@@ -1564,6 +1576,30 @@ class ProviderRoutingTests(unittest.TestCase):
                         ORCHESTRATION_ROOT / "config/discovery-policy.json",
                     )
 
+    def test_mapped_claude_agent_may_carry_a_model_alias_default(self) -> None:
+        for model, refused in (("sonnet", False), ("opus", False), ("gpt-6-astra", True)):
+            with self.subTest(model=model), tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
+                root = Path(directory)
+                agents = root / ".claude/agents"
+                orchestration = root / ".codex/orchestration"
+                agents.mkdir(parents=True)
+                orchestration.mkdir(parents=True)
+                (agents / "project_reader.md").write_text(
+                    "---\nname: project_reader\ndescription: Reads the project\n"
+                    f"tools: Read, Grep\nmodel: {model}\nmaxTurns: 8\n---\n\nRead.\n"
+                )
+                (orchestration / "project-agent-routing.json").write_text(
+                    json.dumps({"version": 1, "roles": {"research": "project_reader"}})
+                )
+                self.git_commit(root, "claude agent")
+                args = (root, ORCHESTRATION_ROOT / "config/routing-policy.json",
+                        ORCHESTRATION_ROOT / "config/discovery-policy.json")
+                if refused:
+                    with self.assertRaisesRegex(PolicyError, "must not override model"):
+                        load_effective_policy(*args)
+                else:
+                    load_effective_policy(*args)
+
     def test_mapped_claude_agent_with_write_tools_is_ineligible(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             root = Path(directory)
@@ -1625,13 +1661,20 @@ class ProviderRoutingTests(unittest.TestCase):
                 self.exploratory(family="research"), policy, primary_provider="claude"
             )
             self.assertEqual(
-                ("claude", "claude_agents_researcher", "project_reader"),
+                ("codex", "codex_agents_researcher", "codex_agents_researcher"),
                 (research["provider"], research["role"], research["agent_type"]),
             )
-            self.assertEqual(".claude/agents/project_reader.md", research["agent_path"])
+            self.assertNotIn("agent_path", research)
             coding = route_task(self.exploratory(), policy, primary_provider="claude")
             self.assertEqual("codex", coding["provider"])
             self.assertEqual("codex_agents_implementation_worker", coding["agent_type"])
+            high_research = route_task(
+                self.exploratory(family="research", risk="high"), policy, primary_provider="claude")
+            self.assertEqual(("claude", "claude_agents_researcher", "project_reader"), (
+                high_research["provider"], high_research["role"], high_research["agent_type"]))
+            high_coding = route_task(
+                self.exploratory(risk="high"), policy, primary_provider="claude")
+            self.assertEqual("codex", high_coding["provider"])
 
 
 if __name__ == "__main__":

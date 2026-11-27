@@ -1,0 +1,9 @@
+# Test changes and CI receive owner review through the ordinary pull request workflow.
+/tests/**                         @Lyderies
+/packages/*/tests/**              @Lyderies
+/scripts/parallel_tests.py         @Lyderies
+/scripts/test_framework.py         @Lyderies
+/scripts/test_worker.py            @Lyderies
+/scripts/assertion_diff.py         @Lyderies
+/.github/                         @Lyderies
+/scripts/test-*.json                 @Lyderies

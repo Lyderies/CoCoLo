@@ -50,7 +50,7 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
 
     def test_complete_original_image_matches_existing_owner_and_stays_read_only(self):
         before = learning_store._snapshot_project_partition(
-            self.source._connection, self.project, ledger_schema_version=13)
+            self.source._connection, self.project, ledger_schema_version=16)
         changes = self.source._connection.total_changes
         raw_backup = self.backup.read_bytes()
         key_bytes = self.fixture.state.key_path.read_bytes()
@@ -65,7 +65,7 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
                 mock.patch.object(self.fixture.state, 'digest_key', side_effect=outside_snapshot):
             image = self.capture()
             self.assertEqual(image, self.capture())
-        self.assertEqual(30, len(image['counts']))
+        self.assertEqual(31, len(image['counts']))  # O0b RS-A (requirement): schema 15, the register backed up
         self.assertEqual((23, 2, 1), tuple(dict(image['counts'])[n] for n in
                                          ('records', 'owner_attestations', 'operational_qa')))
         self.assertEqual(self.backup, image['archive'].path)
@@ -82,7 +82,7 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
         self.assertEqual(changes, self.source._connection.total_changes)
         self.assertFalse(self.source._connection.in_transaction)
         self.assertEqual(before, learning_store._snapshot_project_partition(
-            self.source._connection, self.project, ledger_schema_version=13))
+            self.source._connection, self.project, ledger_schema_version=16))
         self.assertEqual(raw_backup, self.backup.read_bytes())
         self.assertEqual(key_bytes, self.fixture.state.key_path.read_bytes())
 
@@ -91,7 +91,7 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
                                         'WHERE project_id=?', (self.project,))
         self.assertTrue(self.source.verify_sanitized_backup(self.project, file_id='source_image')['verified'])
         current = learning_store._snapshot_project_partition(
-            self.source._connection, self.project, ledger_schema_version=13)
+            self.source._connection, self.project, ledger_schema_version=16)
         for table in ('records', 'owner_attestations', 'operational_qa'):
             self.assertEqual(self.body['tables'][table], current['tables'][table])
         changes = self.source._connection.total_changes

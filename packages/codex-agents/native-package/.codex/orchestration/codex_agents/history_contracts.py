@@ -22,21 +22,34 @@ HISTORY_REASON_CODES = frozenset({
     "history_conflict", "history_not_found", "history_sequence_exhausted",
     "history_invalid_request", "history_request_too_large", "history_invalid_response",
     "history_not_authorized", "history_service_unavailable",
-    "history_result_capacity", "history_result_expired", "history_result_unavailable",
+    "history_result_capacity", "history_result_capacity_busy", "history_result_expired", "history_result_unavailable",
     "history_result_not_reserved", "history_result_not_ready",
     "history_execution_consumed", "history_execution_not_ready",
     "history_orchestration_unavailable", "history_orchestration_state",
     "history_orchestration_pending", "history_orchestration_full",
+    # R8a: opened under another session, service or version (an update changes the service's scope).
+    "history_orchestration_other_scope",
+    # R7b: a service that would not take the connection said why (service_transport.SERVICE_REFUSALS).
+    "service_refused_late", "service_refused_enrollment", "service_refused_busy", "service_refused_unavailable",
     "history_learning_capacity", "history_learning_incomplete", "history_learning_reconciliation",
+    # D1 (RS-D M1): a result kept from before format 18, whose record context only an earlier service's memory held.
+    "history_worker_context_unavailable",
+    # D2 (RS-D-5): a verifier is not opened on a worker that will not outlast it by the QA margin.
+    "history_worker_result_expiring",
+    # S10 (HM-6, decision 355): a new run refused because the workspace or state folder disk is low or unreadable.
+    "resource_low",
+    # B2 (decision 92 A): a finished run that may no longer be recorded, named for the status (`unrecordable:<reason>`).
+    "history_unrecordable_orchestration_closed", "history_unrecordable_other_runtime",
+    "history_unrecordable_host_class", "history_unrecordable_context_state", "history_unrecordable_legacy_no_context",
 })
 
 
 class HistoryError(RuntimeError):
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, message: str | None = None) -> None:
         if type(reason_code) is not str or reason_code not in HISTORY_REASON_CODES:
             reason_code = "history_invalid_input"
         self.reason_code = reason_code
-        super().__init__(reason_code)
+        super().__init__(message if message is not None else reason_code)
 
 
 def matches(value: object, pattern: re.Pattern[str]) -> bool:

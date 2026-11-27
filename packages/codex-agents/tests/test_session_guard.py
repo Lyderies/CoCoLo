@@ -98,6 +98,24 @@ class SessionFiles:
         return path
 
 
+_OUTSIDE_IDENTITY: dict = {}
+_REAL_IDENTITY = session_guard._identity
+
+
+def _identity_remembering_outside(path):
+    """The guard's identity lookup; a fixed trusted install root outside the scratch tree is read once.
+
+    On macOS /home is an autofs mount and every stat under it costs milliseconds (about 1.5 s of
+    this module); those folders never change inside a test, the scratch tree is always read live."""
+
+    if str(path).startswith(str(TEMP_ROOT)):
+        return _REAL_IDENTITY(path)
+    key = str(path)
+    if key not in _OUTSIDE_IDENTITY:
+        _OUTSIDE_IDENTITY[key] = _REAL_IDENTITY(path)
+    return _OUTSIDE_IDENTITY[key]
+
+
 class GuardTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
@@ -120,6 +138,7 @@ class GuardTestCase(unittest.TestCase):
         self.cache.mkdir()
         for patcher in (
             mock.patch.object(session_guard, "account_home", lambda: self.home),
+            mock.patch.object(session_guard, "_identity", _identity_remembering_outside),
             mock.patch.object(session_guard, "SLASH_TMP", str(self.base / "tmp")),
             mock.patch.object(session_guard, "host_scratch_base", lambda: str(self.cache)),
             mock.patch.dict(os.environ, {

@@ -1,0 +1,14 @@
+.....F..
+======================================================================
+FAIL: test_reaped_process_before_actual_worker_return_is_still_unavailable (tests.test_cleanup_custody.CleanupCustodyTests.test_reaped_process_before_actual_worker_return_is_still_unavailable)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_cleanup_custody.py", line 118, in test_reaped_process_before_actual_worker_return_is_still_unavailable
+    self.assertTrue(prepared[4].snapshot()['cleanup_confirmed'])
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 8 tests in 1.844s
+
+FAILED (failures=1)

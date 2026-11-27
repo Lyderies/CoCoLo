@@ -1,0 +1,5 @@
+FAILED codex:tests.test_lost_run_settlement#2 (exit 1) -> <tmp>
+FAILED (failures=2)
+FAILED codex:tests.test_project_start#1 (exit 1) -> <tmp>
+FAILED (failures=1)
+ "failed_units": [

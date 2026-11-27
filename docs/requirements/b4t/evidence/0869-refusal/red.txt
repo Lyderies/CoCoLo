@@ -1,0 +1,24 @@
+EF
+======================================================================
+ERROR: test_B4t_0869_idle_real_P68_service_from_its_launch_copy_is_stopped_by_its_stop_op (tests.test_b4t_native_p68.RealP68LaunchCopyTests.test_B4t_0869_idle_real_P68_service_from_its_launch_copy_is_stopped_by_its_stop_op)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<repo>/packages/codex-agents/tests/test_b4t_native_p68.py", line 109, in test_B4t_0869_idle_real_P68_service_from_its_launch_copy_is_stopped_by_its_stop_op
+    plan = read_plan(self.state, self.project)  # 0.8.69 candidate: predecessor_unproven, 0 child runs
+  File "<repo>/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_preflight.py", line 311, in read_plan
+    raise TakeoverError('predecessor_unproven', lost=children.get(row['project_id'], 0)) from None
+codex_agents.update_takeover.TakeoverError: The update stopped (predecessor_unproven): this project's old service is running 0 child runs, and it could not be confirmed to be this project's own service, so it was not stopped. Nothing was changed. When that run ends, the old service stops by itself. Then run ./setup.sh --update. See docs/troubleshooting.md, 'Update hand-over'.
+
+======================================================================
+FAIL: test_B4t_0869_idle_service_that_cannot_be_proven_names_a_working_step (tests.test_b4t_native_p68.RealP68LaunchCopyTests.test_B4t_0869_idle_service_that_cannot_be_proven_names_a_working_step)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<repo>/packages/codex-agents/tests/test_b4t_native_p68.py", line 145, in test_B4t_0869_idle_service_that_cannot_be_proven_names_a_working_step
+    self.assertNotIn('When that run ends', text)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'When that run ends' unexpectedly found in "The update stopped (predecessor_unproven): this project's old service is running 0 child runs, and it could not be confirmed to be this project's own service, so it was not stopped. Nothing was changed. When that run ends, the old service stops by itself. Then run ./setup.sh --update. See docs/troubleshooting.md, 'Update hand-over'."
+
+----------------------------------------------------------------------
+Ran 2 tests in 4.958s
+
+FAILED (failures=1, errors=1)

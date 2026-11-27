@@ -1,0 +1,493 @@
+[60s] 25/554 units done, 0 failed; running: codex:tests.test_run_retention_scale 60s, codex:tests.test_learning_cli#2 37s, codex:tests.test_learning_cli#1 33s, root:test_install_claude_upgrade#2 33s, root:test_install_claude_upgrade#0 29s, root:test_setup_sh#3 23s, codex:tests.test_project_start#4 22s, root:test_setup_straight#3 18s, root:test_setup_straight#2 16s, root:test_setup_straight#1 14s, root:test_setup_straight#0 12s, root:test_setup_update#0 11s, root:test_install#2 4s, codex:tests.test_write_merge#1 1s, codex:tests.test_providers#0 1s, root:test_setup_sh#2 1s
+[120s] 73/554 units done, 0 failed; running: codex:tests.test_write_merge#4 35s, root:test_install#1 23s, root:test_install#0 22s, codex:tests.test_project_driver#27 17s, codex:tests.test_project_driver#26 15s, codex:tests.test_project_driver#19 12s, codex:tests.test_host_commands#2 11s, codex:tests.test_host_commands#1 10s, codex:tests.test_s14b_upgrade_indexes 9s, codex:tests.test_e1a_evidence 7s, codex:tests.test_b4t_native 7s, codex:tests.test_project_host_open 6s, codex:tests.test_admission_history_growth 6s, codex:tests.test_project_start#8 3s, codex:tests.test_project_start#7 2s, codex:tests.test_container_stop 2s
+[180s] 118/554 units done, 0 failed; running: codex:tests.test_project_start#0 31s, codex:tests.test_hold_lifecycle 21s, codex:tests.test_project_start#6 21s, codex:tests.test_project_driver#4 18s, codex:tests.test_lost_run_settlement#0 13s, root:test_setup_update#4 11s, root:test_setup_update#3 10s, root:test_setup_update#2 9s, root:test_setup_update#1 9s, codex:tests.test_project_operational_qa 8s, codex:tests.test_account_claim_jobs#0 5s, codex:tests.test_account_claim_jobs#1 4s, codex:tests.test_s44a_usage_install 3s, codex:tests.test_account_settlement_recovery#1 1s, codex:tests.test_account_settlement_recovery#0 0s, codex:tests.test_cli_observation_runtime#0 0s
+FAILED codex:tests.test_project_start#0 (exit 1) -> /private/tmp/pto5fmy790/109.log
+======================================================================
+FAIL: test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone (tests.test_project_start.TimeoutSlotTests.test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone)
+Review round 2 (decision 243, HIGH 3): never more than START_SLOTS live started children, also when a
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_project_start.py", line 1490, in test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone
+    self.assertEqual(('failed', 'start_timeout'), (self.starts(name)['outcome'], self.starts(name)['reason']))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Tuples differ: ('failed', 'start_timeout') != ('starting', 'start_timeout')
+
+First differing element 0:
+'failed'
+'starting'
+
+- ('failed', 'start_timeout')
+?   ^  ^^^
+
++ ('starting', 'start_timeout')
+?   ^^ ++ ^^
+
+
+----------------------------------------------------------------------
+Ran 3 tests in 34.238s
+
+FAILED (failures=1)
+
+FAILED codex:tests.test_cli_open_client_runtime#0 (exit 1) -> /private/tmp/pto5fmy790/174.log
+    self.run_original_workflow('codex')
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_cli_open_client_runtime.py", line 238, in run_original_workflow
+    child = self.fixture.start(self.fixture.fixture.scope, self.fixture.fixture.request,
+        self.fixture.fixture.directory, 'open-rpc', with_provenance=True, client_dispatch=True, client_open=True,
+        product_runtime=True, client_result=getattr(self, 'record_results', False),
+        lose_result_reply=getattr(self, 'record_results', False), actual_preparation=True)
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_project_execution_processes.py", line 520, in start
+    child = super().start(*args, **options)
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_project_execution_processes.py", line 188, in start
+    opened = self.open_prepared_client(child, original)
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_cli_open_client_runtime.py", line 150, in open_prepared_client
+    self.assertEqual(expected[version], refused.get('reason_code'),
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                     {**refused, 'seconds': took, 'version': version})
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'history_not_authorized' != 'open_service_unreachable'
+- history_not_authorized
++ open_service_unreachable
+ : {'error': 'host open unavailable', 'next_step': "The account refused the run's open: run learning-status, then open the run again.", 'ready': False, 'reason_code': 'open_service_unreachable', 'seconds': 0.4, 'version': 2}
+
+----------------------------------------------------------------------
+Ran 2 tests in 10.133s
+
+FAILED (failures=2)
+
+FAILED codex:tests.test_cli_open_client_runtime#1 (exit 1) -> /private/tmp/pto5fmy790/173.log
+    self.run_original_workflow('claude')
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_cli_open_client_runtime.py", line 238, in run_original_workflow
+    child = self.fixture.start(self.fixture.fixture.scope, self.fixture.fixture.request,
+        self.fixture.fixture.directory, 'open-rpc', with_provenance=True, client_dispatch=True, client_open=True,
+        product_runtime=True, client_result=getattr(self, 'record_results', False),
+        lose_result_reply=getattr(self, 'record_results', False), actual_preparation=True)
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_project_execution_processes.py", line 520, in start
+    child = super().start(*args, **options)
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_project_execution_processes.py", line 188, in start
+    opened = self.open_prepared_client(child, original)
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_cli_open_client_runtime.py", line 150, in open_prepared_client
+    self.assertEqual(expected[version], refused.get('reason_code'),
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                     {**refused, 'seconds': took, 'version': version})
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'history_not_authorized' != 'open_service_unreachable'
+- history_not_authorized
++ open_service_unreachable
+ : {'error': 'host open unavailable', 'next_step': "The account refused the run's open: run learning-status, then open the run again.", 'ready': False, 'reason_code': 'open_service_unreachable', 'seconds': 0.4, 'version': 2}
+
+----------------------------------------------------------------------
+Ran 2 tests in 10.193s
+
+FAILED (failures=2)
+
+[240s] 167/554 units done, 3 failed; running: codex:tests.test_rsf_s3_resumable 26s, codex:tests.test_b7b_budgets#0 21s, root:test_e2e_process_cleanup#0 16s, codex:tests.test_container_runtime#1 15s, codex:tests.test_container_runtime#0 14s, codex:tests.test_cli_observation_runtime#1 14s, codex:tests.test_project_qa_commit#0 11s, codex:tests.test_project_qa_commit#1 10s, codex:tests.test_run_provenance 7s, codex:tests.test_claim_denial_recovery#1 7s, codex:tests.test_claim_denial_recovery#0 5s, codex:tests.test_billing_probe_worker#1 4s, root:test_e2e_process_cleanup#1 3s, codex:tests.test_container_launch_journal 0s, codex:tests.test_billing_probe_worker#0 0s, codex:tests.test_ledger_lock_limits#1 0s
+[300s] 281/554 units done, 3 failed; running: root:test_test_framework_r3 8s, root:test_test_framework_guards 7s, codex:tests.test_rsf_s4_slots 4s, codex:tests.test_rsa_step3 3s, codex:tests.test_routing_judgment 3s, codex:tests.test_route_live_root 3s, codex:tests.test_route_exhausted_open 3s, codex:tests.test_retirement_sweep 2s, codex:tests.test_recovery_line 2s, codex:tests.test_qa_security_diagnostics 2s, codex:tests.test_publication_replay_driver 2s, codex:tests.test_publication_replay 1s, codex:tests.test_open_withdrawal_successor 1s, codex:tests.test_open_withdrawal 1s
+[360s] 298/554 units done, 3 failed; running: codex:tests.test_merge_library_recovery_faults 16s
+[420s] 306/554 units done, 3 failed; running: codex:tests.test_merge_library_kills 15s
+[480s] 310/554 units done, 3 failed; running: codex:tests.test_merge_library_contract 12s
+[540s] 311/554 units done, 3 failed; running: codex:tests.test_merge_library_adversarial 46s
+FAILED codex:tests.test_candidate_evidence_lookup (exit 1) -> /private/tmp/pto5fmy790/335.log
+FAIL: test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release (tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/HOME/Code/temp/cocolo-batch12/packages/codex-agents/tests/test_candidate_evidence_lookup.py", line 379, in test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release
+    self.assertEqual(0, result.returncode, result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1 : Traceback (most recent call last):
+  File "<string>", line 11, in <module>
+    ledger = learning_store.LearningLedger(state)
+  File "/private/tmp/pto5fmy790/335/tmpo8u4y8nx/previous-source/packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py", line 2397, in __init__
+    self._connection = self._connect()
+                       ~~~~~~~~~~~~~^^
+  File "/private/tmp/pto5fmy790/335/tmpo8u4y8nx/previous-source/packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py", line 2538, in _connect
+    takeover_schema.check_floor(connection, PACKAGE_VERSION, lambda: LedgerError(FENCE_MESSAGE))
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/pto5fmy790/335/tmpo8u4y8nx/previous-source/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_schema.py", line 60, in check_floor
+    raise refusal()
+codex_agents.contracts.LedgerError: This store owner was replaced or lost its writer lock. Run: ./setup.sh --update
+
+
+----------------------------------------------------------------------
+Ran 8 tests in 2.735s
+
+FAILED (failures=1)
+AP5-2 VM steps: linked 164 -> 146; former scan 8095 -> 148095
+
+[600s] 460/554 units done, 4 failed; running: codex:tests.test_billing_rejudge 46s, codex:tests.test_billing_gate 46s, codex:tests.test_b2_service_outcome_round2 43s, codex:tests.test_b2_service_outcome_paths 43s, codex:tests.test_signature_inputs 21s, codex:tests.test_event_retention 4s, codex:tests.test_account_slot_health 1s, codex:tests.test_learning_chunk_membership 1s, claude:tests.test_previous_release_catalogue 0s, codex:tests.test_legacy_history_compatibility 0s, codex:tests.test_project_release_ack 0s, root:test_wizard_clock 0s, codex:tests.test_signature_input_wire 0s, codex:tests.test_project_cleanup 0s, codex:tests.test_dispatch_delivery_cli 0s, root:test_install_report_validation 0s
+BUDGET DEBT: codex:tests.test_b2_service_outcome_paths ceiling=69.160s measured seconds=62.005135874962434
+BUDGET DEBT: codex:tests.test_billing_gate ceiling=78.580s measured seconds=70.38665141700767
+BUDGET DEBT: codex:tests.test_bridge ceiling=368.250s measured seconds=268.1066357080126
+BUDGET DEBT: codex:tests.test_container_stop ceiling=72.230s measured seconds=58.08969870803412
+BUDGET DEBT: codex:tests.test_host_commands ceiling=119.560s measured seconds=102.1925122080138
+BUDGET DEBT: codex:tests.test_learning_cli ceiling=112.560s measured seconds=95.50753099902067
+BUDGET DEBT: codex:tests.test_lost_run_settlement ceiling=119.750s measured seconds=94.33556316711474
+BUDGET DEBT: codex:tests.test_project_driver ceiling=520.370s measured seconds=400.4375532118138
+BUDGET DEBT: codex:tests.test_project_start ceiling=183.400s measured seconds=207.3212949159788
+BUDGET DEBT: codex:tests.test_result_lifetime ceiling=73.050s measured seconds=51.70518387504853
+BUDGET DEBT: codex:tests.test_session_guard ceiling=7.230s measured seconds=4.387328417040408
+BUDGET DEBT: codex:tests.test_trial_run_driver_bugs ceiling=103.340s measured seconds=69.51434791600332
+BUDGET DEBT: codex:tests.test_write_merge ceiling=247.710s measured seconds=174.35906303999946
+BUDGET DEBT: root:test_install ceiling=113.540s measured seconds=86.26762350008357
+BUDGET DEBT: root:test_install_claude_upgrade ceiling=135.450s measured seconds=102.79213941702619
+BUDGET DEBT: root:test_setup_sh ceiling=203.640s measured seconds=157.18330566596705
+BUDGET DEBT: root:test_setup_straight ceiling=293.120s measured seconds=146.3807807089761
+BUDGET DEBT: root:test_setup_update ceiling=275.000s measured seconds=236.38714287418406
+BUDGET DEBT: root:test_setup_wizard_direct ceiling=282.080s measured seconds=221.73418575001415
+RETIRE BUDGET DEBT: codex:tests.test_container_stop is now within its layer budget
+RETIRE BUDGET DEBT: codex:tests.test_result_lifetime is now within its layer budget
+RETIRE BUDGET DEBT: codex:tests.test_session_guard is now within its layer budget
+OVER BUDGET: codex:tests.test_project_start integration/scenario 207.321s > 60.000s (11 fragments)
+OVER BUDGET: codex:tests.test_run_retention_scale integration/scenario 68.937s > 60.000s (1 fragments)
+RUN RECORD: docs/batch-0869-full-run-timings.json.run.json
+{
+ "elapsed_seconds": 625.0,
+ "jobs": 16,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 6038.103,
+ "over_budget": [
+  {
+   "module": "codex:tests.test_b2_service_outcome_paths",
+   "seconds": 62.005135874962434,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 1
+  },
+  {
+   "module": "codex:tests.test_billing_gate",
+   "seconds": 70.38665141700767,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 1
+  },
+  {
+   "module": "codex:tests.test_bridge",
+   "seconds": 268.1066357080126,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 9
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "seconds": 102.1925122080138,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 3
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "seconds": 95.50753099902067,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 3
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "seconds": 94.33556316711474,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 6
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "seconds": 400.4375532118138,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 29
+  },
+  {
+   "module": "codex:tests.test_project_start",
+   "seconds": 207.3212949159788,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 11
+  },
+  {
+   "module": "codex:tests.test_run_retention_scale",
+   "seconds": 68.93746795796324,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 1
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "seconds": 69.51434791600332,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 2
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "seconds": 174.35906303999946,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 10
+  },
+  {
+   "module": "root:test_install",
+   "seconds": 86.26762350008357,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "e2e",
+   "fragments": 3
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "seconds": 102.79213941702619,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "e2e",
+   "fragments": 3
+  },
+  {
+   "module": "root:test_setup_sh",
+   "seconds": 157.18330566596705,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "e2e",
+   "fragments": 5
+  },
+  {
+   "module": "root:test_setup_straight",
+   "seconds": 146.3807807089761,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 5
+  },
+  {
+   "module": "root:test_setup_update",
+   "seconds": 236.38714287418406,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 5
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "seconds": 221.73418575001415,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 8
+  }
+ ],
+ "budget_failures": [
+  {
+   "module": "codex:tests.test_project_start",
+   "seconds": 207.3212949159788,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 11
+  },
+  {
+   "module": "codex:tests.test_run_retention_scale",
+   "seconds": 68.93746795796324,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 1
+  }
+ ],
+ "budget_warnings": [
+  {
+   "module": "codex:tests.test_b2_service_outcome_paths",
+   "ceiling": 69.16,
+   "seconds": 62.005135874962434,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_billing_gate",
+   "ceiling": 78.58,
+   "seconds": 70.38665141700767,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_bridge",
+   "ceiling": 368.25,
+   "seconds": 268.1066357080126,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_container_stop",
+   "ceiling": 72.23,
+   "seconds": 58.08969870803412,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "ceiling": 119.56,
+   "seconds": 102.1925122080138,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "ceiling": 112.56,
+   "seconds": 95.50753099902067,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "ceiling": 119.75,
+   "seconds": 94.33556316711474,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "ceiling": 520.37,
+   "seconds": 400.4375532118138,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_project_start",
+   "ceiling": 183.4,
+   "seconds": 207.3212949159788,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_result_lifetime",
+   "ceiling": 73.05,
+   "seconds": 51.70518387504853,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_session_guard",
+   "ceiling": 7.23,
+   "seconds": 4.387328417040408,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "ceiling": 103.34,
+   "seconds": 69.51434791600332,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "ceiling": 247.71,
+   "seconds": 174.35906303999946,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_install",
+   "ceiling": 113.54,
+   "seconds": 86.26762350008357,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "ceiling": 135.45,
+   "seconds": 102.79213941702619,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_sh",
+   "ceiling": 203.64,
+   "seconds": 157.18330566596705,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_straight",
+   "ceiling": 293.12,
+   "seconds": 146.3807807089761,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_update",
+   "ceiling": 275,
+   "seconds": 236.38714287418406,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "ceiling": 282.08,
+   "seconds": 221.73418575001415,
+   "status": "measured"
+  }
+ ],
+ "debt_retirement_required": [
+  "codex:tests.test_container_stop",
+  "codex:tests.test_result_lifetime",
+  "codex:tests.test_session_guard"
+ ],
+ "discovery_seconds": 2.47475024999585,
+ "preflight_seconds": 7.532077915966511,
+ "metadata_errors": [],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [
+  "AP3",
+  "B2-OUTCOME",
+  "E2c-10",
+  "E2c-2",
+  "TESTSPEED-1",
+  "TESTSPEED-3",
+  "TESTSPEED-4"
+ ],
+ "units": 554,
+ "tests": {
+  "claude": 134,
+  "codex": 6910,
+  "root": 1194
+ },
+ "failed_units": [
+  "codex:tests.test_project_start#0",
+  "codex:tests.test_cli_open_client_runtime#0",
+  "codex:tests.test_cli_open_client_runtime#1",
+  "codex:tests.test_candidate_evidence_lookup"
+ ],
+ "slowest_units": [
+  [
+   "codex:tests.test_billing_gate",
+   70.4
+  ],
+  [
+   "codex:tests.test_run_retention_scale",
+   68.9
+  ],
+  [
+   "root:test_setup_update#3",
+   62.4
+  ],
+  [
+   "codex:tests.test_b2_service_outcome_paths",
+   62.0
+  ],
+  [
+   "codex:tests.test_host_commands#2",
+   58.3
+  ],
+  [
+   "codex:tests.test_container_stop",
+   58.1
+  ],
+  [
+   "codex:tests.test_write_merge#4",
+   54.9
+  ],
+  [
+   "codex:tests.test_merge_library_adversarial",
+   54.6
+  ]
+ ],
+ "logs": "/private/tmp/pto5fmy790"
+}
+Unchecked requirements (88): API-1, API-10, API-11, API-12, API-13, API-14, API-15, API-16, API-17, API-18, API-19, API-2, API-20, API-21, API-22, API-23, API-24, API-25, API-26, API-27, API-3, API-4, API-5, API-6, API-7, API-8, API-9, G1, G2, G3, G4, G5, G6, G7, G8, G9, L1.1, L1.2, L10.1, L10.2, L10.3, L11.1, L11.2, L12.1, L12.2, L12.3, L12.4, L12.5, L12.6a, L12.6b, L12.7, L13.1, L13.2, L16.1, L16.2, L16.3, L2.1, L2.2, L3.1, L3.2, L3.3, L4.1, L4.2, L5.1, L5.2, L5.3, L6.1, L6.2, L7.1, L7.2, L7.3, L8.1, L8.2, L9.1, L9.2, L9.3, O0C-U4-3, P4-REPORT, RS-B-B6-6, TERM-13, TERM-17, TERM-5, TERM-6, TERM-7, TF-23, TF-25, TF-26, TF-27
+Requirements proved only by skipped checks here (3): LEGACY-HOLD-LIFECYCLE-B0-2, ML-12, ML-4

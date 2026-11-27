@@ -286,7 +286,7 @@ class LearningCorpusUpgradeTests(unittest.TestCase):
             connection.close()
             store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
             try:
-                self.assertEqual(16, store._connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(23, store._connection.execute("PRAGMA user_version").fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
                 self.assertEqual((PROJECT, 18, 1), tuple(store._connection.execute("SELECT * FROM history_identity").fetchone()))
                 self.assertEqual(original, tuple(store._connection.execute("SELECT * FROM records").fetchone()))
                 self.assertEqual(canonical_json(event), store.record(event["record_id"]).content)
@@ -349,7 +349,9 @@ class SignedLegacyLearningStagingTests(unittest.TestCase):
             store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
             try:
                 self.assertEqual(records, list(store.learning_import_records('formal')))
-                self.assertEqual(signatures, list(store.learning_import_attestations('formal')))
+                # The store lists attestations by subject_record_id (its paging key), not in staging order.
+                self.assertEqual(sorted(signatures, key=lambda row: row['subject_record_id']),
+                                 list(store.learning_import_attestations('formal')))
                 self.assertEqual(0, store._connection.execute('SELECT COUNT(*) FROM project_operational_qa').fetchone()[0])
                 for qa, row in zip((positive, negative), signatures):
                     self.assertTrue(authority.verify_qa_attestation(PROJECT, qa, row['signature']))
@@ -420,3 +422,21 @@ class SignedLegacyLearningStagingTests(unittest.TestCase):
                                         if row["subject_record_id"] == feedback["record_id"])
         self.assertTrue(authority.verify_owner_record(fixture.project_a_id, feedback, copied_feedback_signature))
         self.assertIs(False, receipt["learning_ready"])
+
+
+class CheckedContentKeepTests(unittest.TestCase):
+    def test_the_checked_content_keep_holds_the_limit_and_one_past_it_evicts_the_oldest(self):
+        contents = [canonical_json(event_record(f"keep-{number:04d}", observed_at_ms=number + 1))
+                    for number in range(corpus._CHECKED_KEEP + 1)]
+        corpus._checked_by_content.clear()
+        for content in contents[:corpus._CHECKED_KEEP]:
+            corpus._checked_content(content)
+        self.assertEqual(corpus._CHECKED_KEEP, len(corpus._checked_by_content))
+        self.assertIn(contents[0], corpus._checked_by_content)
+        corpus._checked_content(contents[corpus._CHECKED_KEEP])  # one past the limit
+        self.assertEqual(corpus._CHECKED_KEEP, len(corpus._checked_by_content))
+        self.assertNotIn(contents[0], corpus._checked_by_content)
+        self.assertIn(contents[corpus._CHECKED_KEEP], corpus._checked_by_content)
+        # An evicted record is checked again, with the same result.
+        self.assertEqual(corpus._checked_content(contents[0])["record_id"], "keep-0000")
+        corpus._checked_by_content.clear()

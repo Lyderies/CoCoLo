@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_withdrawn_hint_does_not_hide_an_endpoint_that_still_answers (tests.test_b4t_takeover.AmendmentA1Tests.test_withdrawn_hint_does_not_hide_an_endpoint_that_still_answers)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2915, in test_withdrawn_hint_does_not_hide_an_endpoint_that_still_answers
+    with self.assertRaises(TakeoverError) as caught:ops.stop_service(intent)
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+AssertionError: TakeoverError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.167s
+
+FAILED (failures=1)

@@ -57,6 +57,17 @@ CLIENT_CAPABILITY_FIELDS = {
 }
 
 
+# The counts a provider's own usage frames carry. A bridged child never reports model calls, tool calls,
+# latency or cost, so "complete" means these, not all eight outcome fields (RT-8: with all eight no run was
+# ever complete).
+TOKEN_USAGE_FIELDS = ("input_tokens", "cached_tokens", "output_tokens")
+
+
+def token_usage_known(usage: dict) -> bool:
+    """Whether the run's input, cached-input and output token counts are all known."""
+    return all(usage[field] is not None for field in TOKEN_USAGE_FIELDS)
+
+
 def empty_usage() -> dict[str, None]:
     return {
         "input_tokens": None,
@@ -370,7 +381,7 @@ def normalize_app_server(
 def load_client_capabilities(path: Path) -> dict[str, dict[str, Any]]:
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("client capability matrix is invalid") from exc
     if not isinstance(data, dict) or set(data) != {"version", "clients"} or data["version"] != 1:
         raise ContractError("client capability matrix is invalid")

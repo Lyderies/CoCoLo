@@ -1,0 +1,281 @@
+{
+ "note": "S13e fix round: unchanged E2c-1 observed by scripts/measure_project_host_start.py, 5 samples each; load = root:test_install + root:test_setup_wizard_direct at --jobs 16. Seconds. Before = archive of ce81bd96.",
+ "runs": {
+  "before-quiet": {
+   "passed": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "load_returncode": null,
+   "loaded_gate_passed": false,
+   "load_active_throughout": [
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "test_seconds": [
+    3.102,
+    3.121,
+    3.118,
+    3.123,
+    3.103
+   ],
+   "begin_to_serving_seconds": [
+    [
+     0.571,
+     0.572
+    ],
+    [
+     0.582,
+     0.583
+    ],
+    [
+     0.541,
+     0.541
+    ],
+    [
+     0.547,
+     0.548
+    ],
+    [
+     0.542,
+     0.543
+    ]
+   ],
+   "ready_to_serving_seconds": [
+    [
+     0.728,
+     0.729
+    ],
+    [
+     0.738,
+     0.739
+    ],
+    [
+     0.733,
+     0.734
+    ],
+    [
+     0.724,
+     0.724
+    ],
+    [
+     0.739,
+     0.74
+    ]
+   ]
+  },
+  "after-quiet": {
+   "passed": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "load_returncode": null,
+   "loaded_gate_passed": false,
+   "load_active_throughout": [
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "test_seconds": [
+    2.803,
+    2.865,
+    2.896,
+    2.743,
+    2.826
+   ],
+   "begin_to_serving_seconds": [
+    [
+     0.565,
+     0.566
+    ],
+    [
+     0.538,
+     0.539
+    ],
+    [
+     0.525,
+     0.526
+    ],
+    [
+     0.53,
+     0.531
+    ],
+    [
+     0.492,
+     0.493
+    ]
+   ],
+   "ready_to_serving_seconds": [
+    [
+     0.723,
+     0.723
+    ],
+    [
+     0.733,
+     0.733
+    ],
+    [
+     0.712,
+     0.712
+    ],
+    [
+     0.726,
+     0.727
+    ],
+    [
+     0.684,
+     0.685
+    ]
+   ]
+  },
+  "before-loaded": {
+   "passed": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "load_returncode": 1,
+   "loaded_gate_passed": false,
+   "load_active_throughout": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "test_seconds": [
+    3.197,
+    3.07,
+    3.057,
+    3.961,
+    4.261
+   ],
+   "begin_to_serving_seconds": [
+    [
+     0.586,
+     0.587
+    ],
+    [
+     0.552,
+     0.553
+    ],
+    [
+     0.548,
+     0.549
+    ],
+    [
+     0.748,
+     0.802
+    ],
+    [
+     0.79,
+     0.791
+    ]
+   ],
+   "ready_to_serving_seconds": [
+    [
+     0.734,
+     0.735
+    ],
+    [
+     0.746,
+     0.747
+    ],
+    [
+     0.734,
+     0.735
+    ],
+    [
+     0.939,
+     0.992
+    ],
+    [
+     0.972,
+     0.973
+    ]
+   ]
+  },
+  "after-loaded": {
+   "passed": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "load_returncode": 0,
+   "loaded_gate_passed": true,
+   "load_active_throughout": [
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "test_seconds": [
+    3.032,
+    3.033,
+    2.916,
+    2.857,
+    3.755
+   ],
+   "begin_to_serving_seconds": [
+    [
+     0.595,
+     0.596
+    ],
+    [
+     0.662,
+     0.663
+    ],
+    [
+     0.527,
+     0.528
+    ],
+    [
+     0.541,
+     0.542
+    ],
+    [
+     0.764,
+     0.766
+    ]
+   ],
+   "ready_to_serving_seconds": [
+    [
+     0.767,
+     0.768
+    ],
+    [
+     0.829,
+     0.83
+    ],
+    [
+     0.727,
+     0.727
+    ],
+    [
+     0.736,
+     0.736
+    ],
+    [
+     0.917,
+     0.918
+    ]
+   ]
+  }
+ }
+}

@@ -3,9 +3,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 
@@ -27,6 +29,12 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
     stop_clients = dispatch_fixtures.DispatchClientRuntimeTests.stop_clients
     control_scope = dispatch_fixtures.DispatchClientRuntimeTests.control_scope
     launch_cli = dispatch_fixtures.DispatchClientRuntimeTests.launch_cli
+
+    @classmethod
+    def setUpClass(cls):
+        # TESTSPEED-4: the fresh CLIs share one bytecode cache outside the source tree, so only the first compiles.
+        cls.bytecode = tempfile.mkdtemp(prefix='cli-pyc-')
+        cls.addClassCleanup(shutil.rmtree, cls.bytecode, ignore_errors=True)
 
     def listen_account(self):
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -105,13 +113,22 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-claude-primary')
         if metered_backend:
             env['CLAUDE_CODE_USE_BEDROCK'] = '1'
-        process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'learning-open-host-run',
+        env['COCOLO_TEST_RUN_CHECK_READY'] = '1'  # decision 363: this fixture has no run driver; see dispatch_cli_fixture
+        env['COCOLO_TEST_ENDED_SERVICE_STARTS'] = '1'  # TESTSPEED-3: no service runs here, so its start ends at once
+        # Decision 363: the open's `run.check` needs the run driver's endpoint to exist and answer. This fixture has no
+        # driver, so the file is present only while the open runs (later dispatch behaves differently when it exists).
+        driver_endpoint = self.account_path.parent/'run.sock'
+        driver_endpoint.touch()
+        self.addCleanup(lambda: driver_endpoint.unlink(missing_ok=True))
+        process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.bytecode, '-m', 'tests.dispatch_cli_fixture',
+            'learning-open-host-run',
             '--project-root', str(self.bridge.project), '--state-root', str(self.bridge.state.root),
             '--orchestration-handle', original.prospective.orchestration_handle, *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.clients.append(process)
         self.wait_api(lambda: process.poll() is not None)
         output, errors = process.communicate(timeout=2)
+        driver_endpoint.unlink(missing_ok=True)
         self.assertEqual(b'', errors)
         return process.returncode, json.loads(output)
 
@@ -130,10 +147,15 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             if version is not None:
                 self.hint(child, original, version=version)
             changed = dict(self.base.fixture.assignment, objective='Different original objective') if version == 2 else None
+            started = time.monotonic()
             code, refused = self.invoke_open(original, assigned=changed)
+            took = round(time.monotonic() - started, 1)  # On GitHub only, this answered unavailable (0.4.0 O5).
             self.assertEqual(2, code)
             self.assertFalse(refused['ready'])
-            self.assertEqual('history_not_authorized' if version == 2 else 'open_unavailable', refused.get('reason_code'), refused)
+            # S1-U10c: no hint, the project's service is not running; a version-1 hint, an earlier version's.
+            expected = {None: 'open_service_not_running', 1: 'open_service_other_version', 2: 'history_not_authorized'}
+            self.assertEqual(expected[version], refused.get('reason_code'),
+                             {**refused, 'seconds': took, 'version': version})
             self.assertEqual(before, self.fixture.ledger._connection.execute('SELECT COUNT(*) FROM account_open_receipts').fetchone()[0])
             self.assertFalse((child['root']/'launches').exists())
         code, wrong_host = self.invoke_open(original, host='claude' if self.parent_host == 'codex' else 'codex')
@@ -179,7 +201,8 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             env['CODEX_THREAD_ID'] = 'fixture-result-primary'
         else:
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-result-primary')
-        process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'learning-record-host-result',
+        process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.bytecode, '-m', 'tests.dispatch_cli_fixture',
+            'learning-record-host-result',
             '--project-root', str(self.bridge.project), '--state-root', str(self.bridge.state.root), *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.clients.append(process)
@@ -193,9 +216,10 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         wrong_body = dict(dispatched['result'], summary='PRIVATE-CHANGED-RESULT-CANARY')
         changed_assignment = dict(self.base.fixture.assignment, objective='Different original objective')
         for options, reason in (({'route': False}, 'history_invalid_input'),
-                ({'body': wrong_body}, 'history_conflict'), ({'terminal': None}, 'history_conflict'),
+                ({'body': wrong_body}, 'recheck_result_mismatch'),  # B2-5 (119 A)
+                ({'terminal': None}, 'history_conflict'),
                 ({'host': 'claude' if self.parent_host == 'codex' else 'codex'}, 'host_client_mismatch'),
-                ({'inputs': {'assignment': changed_assignment}}, 'dispatch_conflict')):
+                ({'inputs': {'assignment': changed_assignment}}, 'recheck_inputs_mismatch')):  # B2-5 (119 A)
             code, refused = self.invoke_record(child, dispatched, **options)
             self.assertEqual(2, code, refused)
             self.assertEqual(reason, refused['reason_code'])
@@ -257,16 +281,20 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             self.assertEqual((3, True), (reconciled['attempts'], reconciled['identical']))
         self.assertEqual(0, child['process'].wait(timeout=10))
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-3', 'TESTSPEED-4', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_codex_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover(self):
         self.run_original_workflow('codex')
 
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_codex_primary_records_exact_original_terminal_through_project_api(self):
         self.record_results = True
         self.run_original_workflow('codex')
 
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_claude_primary_records_exact_original_codex_terminal_through_project_api(self):
         self.record_results = True
         self.run_original_workflow('claude')
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-3', 'TESTSPEED-4', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_claude_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover(self):
         self.run_original_workflow('claude')

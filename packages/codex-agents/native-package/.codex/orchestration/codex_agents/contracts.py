@@ -67,6 +67,11 @@ ONE_EVIDENCE_ENTRY_RULE = (
     "it in that entry's details, and set its outcome to the most severe of them ("
     + ", then ".join(EVIDENCE_OUTCOME_SEVERITY) + ")"
 )
+# O10 VF-3: the exact fields of an evidence entry (the validator's evidence_fields).
+EVIDENCE_FIELDS_RULE = (
+    "each evidence entry has exactly the fields criterion_id, type, outcome, reference and details: "
+    "put severity, impact, corrections and anything else in details"
+)
 FAILURE_REASONS = {
     "result_contract",
     "transient",
@@ -93,12 +98,30 @@ RESULT_VALIDATION_REASON_CODES = {
     "missing_required_fields",
     "unknown_criterion",
     "unknown_fields",
-    "inconsistent_axes",
+    # 0.4.0 item 0.5 (VF-INV-b): the old `inconsistent_axes` is split by branch, each a fixed,
+    # content-free code. `inconsistent_axes` itself is no longer produced; it stays a readable
+    # diagnostic of older ledgers (RESULT_DIAGNOSTIC_REASON_CODES).
+    "axes_status_verdict_mismatch",
+    "axes_verdict_without_completion",
+    "axes_admission_without_completion",
+    "axes_retry_lineage",
+    "child_set_admission",
+    "child_set_timeout",
+    # RV1: which evidence rule a result broke, each a fixed, content-free code.
+    "evidence_missing_fields",
+    "evidence_unknown_fields",
+    "evidence_unsupported_type",
+    "evidence_empty_criterion",
+    "evidence_empty_reference",
+    "evidence_unsupported_outcome",
+    "evidence_details_not_text",
+    # O10 VF-2: a Claude child's client gave no schema-valid result.
+    "structured_output_missing",
 }
 # Durable bridge diagnostics also cover validators that raise an untyped error.
 # Never add exception text or caller-selected values to this vocabulary.
 RESULT_DIAGNOSTIC_REASON_CODES = frozenset(
-    RESULT_VALIDATION_REASON_CODES | {"contract_validation_failed"}
+    RESULT_VALIDATION_REASON_CODES | {"contract_validation_failed", "inconsistent_axes"}
 )
 BOUND_FIELDS = {
     "max_attempts",
@@ -183,7 +206,7 @@ def validate_parent_grant(data: Any) -> dict[str, Any]:
     return _validate_permissions(data, "parent_grant")
 
 
-def validate_task(data: Any) -> dict[str, Any]:
+def validate_task(data: Any, *, allow_unadjudicated_failures: bool = False) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ContractError("task must be an object", field="task")
     required = {
@@ -211,6 +234,9 @@ def validate_task(data: Any) -> dict[str, Any]:
         "verification_for_family",
         "verification_for_provider",
         "verification_for_outcome",
+        "review_phase",
+        "parent_review_id",
+        "expanded_scope",
     }
     _required(data, required, "task")
     unknown = sorted(data.keys() - allowed)
@@ -220,6 +246,15 @@ def validate_task(data: Any) -> dict[str, Any]:
     _nonempty_string(data["objective"], "objective", "task.objective")
     if not isinstance(data["family"], str) or data["family"] not in TASK_FAMILIES:
         raise ContractError(f"unsupported family: {data['family']}", field="task.family")
+    if "review_phase" in data and (
+        not isinstance(data["review_phase"], str)
+        or data["review_phase"] not in {"first", "delta", "confirmation"}
+    ):
+        raise ContractError("unsupported review_phase", field="task.review_phase")
+    if "parent_review_id" in data:
+        _nonempty_string(data["parent_review_id"], "parent_review_id", "task.parent_review_id")
+    if "expanded_scope" in data and not isinstance(data["expanded_scope"], bool):
+        raise ContractError("expanded_scope must be boolean", field="task.expanded_scope")
     verification_for_family = data.get("verification_for_family")
     if verification_for_family is not None:
         if data["family"] != "verification":
@@ -389,9 +424,10 @@ def validate_task(data: Any) -> dict[str, Any]:
             )
         seen_events.add(event_key)
         if reason in {"semantic", "reasoning"}:
-            if not all(
-                VERIFIED_FAILURE_REFERENCE.fullmatch(reference)
-                for reference in evidence_refs
+            # A claim may precede adjudication. Only verification digests qualify it
+            # for escalation; retaining a safe host reference does not confirm it.
+            if not allow_unadjudicated_failures and not all(
+                VERIFIED_FAILURE_REFERENCE.fullmatch(reference) for reference in evidence_refs
             ):
                 raise ContractError(
                     "semantic and reasoning failures require verification record digests",
@@ -727,6 +763,12 @@ def validate_assignment(
     return data
 
 
+def _is_review_role(role: Any) -> bool:
+    """A role whose result is a review (a security reviewer or a verification worker)."""
+
+    return isinstance(role, str) and role.endswith(("_security_reviewer", "_verification_worker"))
+
+
 def _legacy_result_axes(status: str) -> tuple[str, str, str]:
     """Project a legacy status without pretending a negative review failed to run."""
 
@@ -841,6 +883,7 @@ def result_preflight(assignment: Any) -> dict[str, Any]:
             "accepted admission requires completed execution; verdict remains independent",
             "completed execution must cover every required criterion",
             ONE_EVIDENCE_ENTRY_RULE,
+            EVIDENCE_FIELDS_RULE,
             "negative verdicts may contain fail or not_run evidence",
         ],
     }
@@ -890,6 +933,14 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         )
     if not isinstance(data["status"], str) or data["status"] not in RESULT_STATUSES:
         raise ResultContractError("invalid_status", "result status is unsupported")
+    if (_is_review_role(assignment.get("role"))
+            and data.get("execution_state", _legacy_result_axes(data["status"])[0]) == "completed"
+            and data.get("semantic_verdict") is None):
+        # A review that completed states its verdict; a missing or null one is never filled in, whether the
+        # legacy status is "completed" (read as "pass") or "blocked" (read as "blocked").
+        raise ResultContractError(
+            "missing_required_fields", "result missing required fields: semantic_verdict"
+        )
     axes = result_axes(
         data,
         attempt=assignment.get("attempt", 1),
@@ -906,16 +957,16 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         raise ResultContractError("invalid_status", "admission_state is unsupported")
     if data["status"] != legacy_result_status(execution_state, semantic_verdict):
         raise ResultContractError(
-            "inconsistent_axes", "legacy result status disagrees with explicit axes"
+            "axes_status_verdict_mismatch", "legacy result status disagrees with explicit axes"
         )
     substantive = SEMANTIC_VERDICTS - {"not-applicable"}
     if execution_state != "completed" and semantic_verdict in substantive:
         raise ResultContractError(
-            "inconsistent_axes", "non-completed execution cannot claim a semantic verdict"
+            "axes_verdict_without_completion", "non-completed execution cannot claim a semantic verdict"
         )
     if admission_state == "accepted" and execution_state != "completed":
         raise ResultContractError(
-            "inconsistent_axes", "accepted admission requires completed execution"
+            "axes_admission_without_completion", "accepted admission requires completed execution"
         )
     retry = axes["retry"]
     if (
@@ -939,11 +990,11 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         )
     if retry["attempt"] == 1 and retry["retry_of_assignment_id"] is not None:
         raise ResultContractError(
-            "inconsistent_axes", "first attempt cannot reference a retry predecessor"
+            "axes_retry_lineage", "first attempt cannot reference a retry predecessor"
         )
     if retry["attempt"] > 1 and retry["retry_of_assignment_id"] is None:
         raise ResultContractError(
-            "inconsistent_axes", "retry attempt requires its predecessor assignment"
+            "axes_retry_lineage", "retry attempt requires its predecessor assignment"
         )
     if retry["retry_of_assignment_id"] != assignment.get("retry_of_assignment_id"):
         raise ResultContractError(
@@ -983,23 +1034,23 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         missing_evidence_fields = sorted(evidence_fields - item.keys())
         if missing_evidence_fields:
             raise ResultContractError(
-                "invalid_evidence",
+                "evidence_missing_fields",
                 f"evidence[{index}] missing required fields",
             )
         unknown_evidence = sorted(item.keys() - evidence_fields)
         if unknown_evidence:
             raise ResultContractError(
-                "invalid_evidence",
+                "evidence_unknown_fields",
                 f"evidence[{index}] has unknown fields: {', '.join(unknown_evidence)}"
             )
         if not isinstance(item["type"], str) or item["type"] not in EVIDENCE_TYPES:
             raise ResultContractError(
-                "invalid_evidence", f"evidence[{index}].type is unsupported"
+                "evidence_unsupported_type", f"evidence[{index}].type is unsupported"
             )
         try:
             _nonempty_string(item["criterion_id"], f"evidence[{index}].criterion_id")
         except ContractError as exc:
-            raise ResultContractError("invalid_evidence", str(exc)) from exc
+            raise ResultContractError("evidence_empty_criterion", str(exc)) from exc
         if item["criterion_id"] not in required_criteria:
             raise ResultContractError(
                 "unknown_criterion",
@@ -1014,17 +1065,17 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         try:
             _nonempty_string(item["reference"], f"evidence[{index}].reference")
         except ContractError as exc:
-            raise ResultContractError("invalid_evidence", str(exc)) from exc
+            raise ResultContractError("evidence_empty_reference", str(exc)) from exc
         if (
             not isinstance(item["outcome"], str)
             or item["outcome"] not in EVIDENCE_OUTCOMES
         ):
             raise ResultContractError(
-                "invalid_evidence", f"evidence[{index}].outcome is unsupported"
+                "evidence_unsupported_outcome", f"evidence[{index}].outcome is unsupported"
             )
         if not isinstance(item["details"], str):
             raise ResultContractError(
-                "invalid_evidence", f"evidence[{index}].details must be a string"
+                "evidence_details_not_text", f"evidence[{index}].details must be a string"
             )
     if (
         execution_state == "completed"
@@ -1156,6 +1207,7 @@ def effective_dispatch_bounds(route: dict[str, Any], assignment: dict[str, Any])
 
     deadline, turns = effective_dispatch_limits(route, assignment)
     claude = route.get("provider") == "claude" and route.get("dispatch") == "bridge"
+    codex = route.get("provider") == "codex" and route.get("dispatch") == "bridge"
     explicit = assignment.get("execution_limits", {})
     return {
         "execution_limit_contract": "explicit" if explicit else "legacy",
@@ -1164,6 +1216,12 @@ def effective_dispatch_bounds(route: dict[str, Any], assignment: dict[str, Any])
         "nominal_max_tool_calls": min(route["bounds"]["max_tool_calls"],
                                       assignment["bounds"]["max_tool_calls"]),
         "exact_tool_call_limit": None,
+        # 0.4.0 item 0.5 (VF-INV-e): the host counts a Codex child's command items and stops the run
+        # above the nominal limit; a Claude child is bounded by its client's turn limit instead.
+        "command_limit": min(route["bounds"]["max_tool_calls"], assignment["bounds"]["max_tool_calls"])
+        if codex else None,
+        "command_limit_enforcement": "host counts command items and stops the run above the limit"
+        if codex else "unavailable",
         "model_turn_limit": turns if claude else None,
         "model_turn_enforcement": "client --max-turns" if claude else "unavailable",
         "model_turn_limit_source": (

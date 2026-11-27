@@ -1,0 +1,53 @@
+FFFF..
+======================================================================
+FAIL: test_S14G_1_custody_classification_read_and_write_use_full_key (tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_custody_classification_read_and_write_use_full_key) (sql="SELECT evidence FROM project_holds WHERE kind='result_custody' AND identity=?")
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 64, in test_S14G_1_custody_classification_read_and_write_use_full_key
+    self.assert_full_key(sql, (None,) * sql.count('?'))
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 54, in assert_full_key
+    self.assertTrue(step.startswith('SEARCH'), steps)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : ['SCAN project_holds']
+
+======================================================================
+FAIL: test_S14G_1_custody_classification_read_and_write_use_full_key (tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_custody_classification_read_and_write_use_full_key) (sql="UPDATE project_holds SET evidence=? WHERE kind='result_custody' AND identity=?")
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 64, in test_S14G_1_custody_classification_read_and_write_use_full_key
+    self.assert_full_key(sql, (None,) * sql.count('?'))
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 54, in assert_full_key
+    self.assertTrue(step.startswith('SEARCH'), steps)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : ['SCAN project_holds']
+
+======================================================================
+FAIL: test_S14G_1_takeover_report_reservation_uses_full_key (tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_takeover_report_reservation_uses_full_key)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 70, in test_S14G_1_takeover_report_reservation_uses_full_key
+    self.assert_full_key(sql, (None,) * sql.count('?'))
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 54, in assert_full_key
+    self.assertTrue(step.startswith('SEARCH'), steps)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : ['SCAN project_holds']
+
+======================================================================
+FAIL: test_S14G_1_takeover_retention_correlations_use_full_key (tests.test_s14g_hold_queries.HoldQueryTests.test_S14G_1_takeover_retention_correlations_use_full_key)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 79, in test_S14G_1_takeover_retention_correlations_use_full_key
+    self.assert_full_key(sql, params, 'h')
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-s14g/packages/codex-agents/tests/test_s14g_hold_queries.py", line 54, in assert_full_key
+    self.assertTrue(step.startswith('SEARCH'), steps)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : ['SCAN takeover_obligations', 'CORRELATED SCALAR SUBQUERY 1', 'SCAN h']
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.763s
+
+FAILED (failures=4)

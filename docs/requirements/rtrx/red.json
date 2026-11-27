@@ -1,0 +1,100 @@
+{
+  "head": "e654b2613baeceddbe974294556f4316a963bb78",
+  "interpreter": "<scratch>",
+  "trusted_base": "b531844030fa619c1f62ddd6c092ebc2ea4fca38",
+  "status": "red",
+  "implementation": "unchanged HEAD",
+  "initial_run": {
+    "exit_code": 1,
+    "raw_log": "/tmp/rtrx-red.log",
+    "measurements": "/tmp/rtrx-red-timings.json.run.json",
+    "tests": 10,
+    "failures": 1,
+    "errors": 9,
+    "modules_seconds": {
+      "codex:tests.test_route_exhausted": 0.16232016601134092,
+      "codex:tests.test_route_exhausted_open": 1.3906876249820925
+    },
+    "budget_failures": [],
+    "metadata_error_count": 2860,
+    "new_test_metadata_errors_corrected_after_run": 4,
+    "workers": [
+      {
+        "log": "/private/tmp/pttcpr7igz/2.log",
+        "result_path": "/private/tmp/pttcpr7igz/2.results.json",
+        "outcomes": {
+          "tests.test_route_exhausted.RouteExhaustedTests.test_boundaries_unknown_and_billing_share_the_admission_classifier": "error",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_chronology_five_hours_explicit_resets_and_rollback": "failed",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_every_same_provider_pair_has_an_explicit_non_independent_marker": "error",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_merge_preserves_resetless_provenance_and_later_clearing": "error",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_policy_order_survives_all_non_exhausted_states_and_retries": "error",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct": "error"
+        }
+      },
+      {
+        "log": "/private/tmp/pttcpr7igz/1.log",
+        "result_path": "/private/tmp/pttcpr7igz/1.results.json",
+        "outcomes": {
+          "tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny": "error",
+          "tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick": "error",
+          "tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry": "error",
+          "tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence": "error"
+        }
+      }
+    ]
+  },
+  "final_run": {
+    "status": "red",
+    "exit_code": 1,
+    "raw_log": "/tmp/rtrx-red-final.log",
+    "measurements": "/tmp/rtrx-red-final-timings.json.run.json",
+    "tests": 10,
+    "outcome_counts": {
+      "error": 9,
+      "failed": 1
+    },
+    "modules_seconds": {
+      "codex:tests.test_route_exhausted": 0.1584183750092052,
+      "codex:tests.test_route_exhausted_open": 1.4322794579784386
+    },
+    "budget_failures": [],
+    "preflight_seconds": 685.7858522499446,
+    "discovery_seconds": 41.41357562504709,
+    "metadata_error_count": 2856,
+    "new_rt_rx_metadata_errors": [],
+    "unrelated_metadata_unchanged": true,
+    "workers": [
+      {
+        "log": "/private/tmp/ptb_6zqjbc/2.log",
+        "result_path": "/private/tmp/ptb_6zqjbc/2.results.json",
+        "outcomes": {
+          "tests.test_route_exhausted.RouteExhaustedTests.test_boundaries_unknown_and_billing_share_the_admission_classifier": "error",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_chronology_five_hours_explicit_resets_and_rollback": "failed",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_every_same_provider_pair_has_an_explicit_non_independent_marker": "error",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_merge_preserves_resetless_provenance_and_later_clearing": "error",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_policy_order_survives_all_non_exhausted_states_and_retries": "error",
+          "tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct": "error"
+        }
+      },
+      {
+        "log": "/private/tmp/ptb_6zqjbc/1.log",
+        "result_path": "/private/tmp/ptb_6zqjbc/1.results.json",
+        "outcomes": {
+          "tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny": "error",
+          "tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick": "error",
+          "tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry": "error",
+          "tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence": "error"
+        }
+      }
+    ],
+    "source_sha256": {
+      "packages/codex-agents/tests/test_route_exhausted.py": "6950adc9867aeea04166d784ac3a8c4097b3cf88634a4ed9227c96688972e8c4",
+      "packages/codex-agents/tests/test_route_exhausted_open.py": "820d3052867258a54172515228e04eb62e4399f814561a4190ebcff0f02c30c6"
+    }
+  },
+  "stop": "measurements/rtrx/conflicts.md",
+  "green": "not_run_required_conflict_stop",
+  "importers": "measurements/rtrx/importers.json",
+  "approved_existing_test_edits": "not applied; stopped before production implementation",
+  "requirement_map": "measurements/rtrx/requirement-map.json"
+}

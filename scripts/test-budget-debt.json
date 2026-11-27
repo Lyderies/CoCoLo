@@ -1,0 +1,20 @@
+{
+  "baseline": "a1d25560c7748680387a542fb7d047c32205dad8",
+  "modules": {
+    "codex:tests.test_bridge": 310.0,
+    "codex:tests.test_cli_billing_runtime": 62.27,
+    "codex:tests.test_container_stop": 67.62,
+    "codex:tests.test_host_commands": 119.56,
+    "codex:tests.test_lost_run_settlement": 98.64,
+    "codex:tests.test_project_driver": 390.32,
+    "codex:tests.test_run_network": 63.28,
+    "codex:tests.test_trial_run_driver_bugs": 70.22,
+    "codex:tests.test_write_merge": 241.24,
+    "root:test_install": 110.14,
+    "root:test_install_claude_upgrade": 120.33,
+    "root:test_setup_sh": 177.88,
+    "root:test_setup_straight": 264.44,
+    "root:test_setup_update": 167.88,
+    "root:test_setup_wizard_direct": 265.86
+  }
+}

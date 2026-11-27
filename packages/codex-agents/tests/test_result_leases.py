@@ -134,6 +134,27 @@ class ResultLeaseTests(unittest.TestCase):
         self.assertEqual("expired", self.store.release_unsent_result_lease(lease_binding(2)).state)
         self.reserve(3)  # The released body space is free again.
 
+    def test_retained_finished_leases_never_bound_live_capacity_reads_or_admission(self):
+        """S15-O0C-P3 (0.3.4 R1d, RS-B-B6-2 decision 210): MAX_LEASE_ROWS bounds the work of verifying the live
+        leases, not retained history. Finished (withdrawn-unsent) lease rows kept until their purge must neither
+        make the live counts unreadable nor refuse a later run; a live lease past them is still charged."""
+        from codex_agents import project_history
+        baseline = self.store._result_counts()
+        with mock.patch.object(project_history, "MAX_LEASE_ROWS", 2):
+            for number in range(1, 5):
+                self.reserve(number)
+                self.assertEqual("expired", self.store.release_unsent_result_lease(lease_binding(number)).state)
+                self.assertEqual(baseline, self.store._result_counts())
+            self.assertEqual(4, self.store._connection.execute("SELECT COUNT(*) FROM result_leases").fetchone()[0])
+            self.reserve(5)  # Admission is not refused by the four retained finished rows.
+            entries, charged, written = self.store._result_counts()
+            self.assertEqual((baseline[0] + 1, baseline[1] + 1, baseline[2]), (entries, charged, written))
+            # The live lease's sealed state still decides: a label alone frees nothing.
+            self.store._connection.execute("UPDATE result_leases SET state='expired' WHERE run_handle=?",
+                                           (lease_binding(5).run_handle,))
+            with self.assertRaisesRegex(HistoryError, "history_incompatible"):
+                self.store._result_counts()
+
     def test_a_lease_is_never_released_once_its_claim_may_have_been_sent(self):
         self.reserve()
         self.store.arm_result_lease(lease_binding())
@@ -167,6 +188,22 @@ class ResultLeaseTests(unittest.TestCase):
         # Corrected for 0.3.4 R1 (owner, 2026-11-18): a retired result keeps its tombstone but no longer
         # takes an entry, so the third fits. 0.8.29 refused it (a lifetime cap).
         self.reserve(3)
+
+    def test_RC_1_space_held_by_running_results_is_busy_not_full(self):
+        """O10 RC-1: results in flight hold the body space, so the refusal is busy (wait), not full."""
+        self.reserve()
+        self.reserve(2)
+        with self.assertRaises(HistoryError) as refused:
+            self.reserve(3)
+        self.assertEqual('history_result_capacity_busy', refused.exception.reason_code)
+
+    def test_RC_1_live_entries_at_their_limit_are_full(self):
+        self.fixture.capacity = replace(self.fixture.capacity, max_entries=1)
+        self.reopen()
+        self.reserve()
+        with self.assertRaises(HistoryError) as refused:
+            self.reserve(2)
+        self.assertEqual('history_result_capacity', refused.exception.reason_code)
 
     def test_mixed_live_body_capacity_cannot_be_bypassed_by_legacy_or_leased_reserve(self):
         self.fixture.reserve()
@@ -256,6 +293,29 @@ class ResultLeaseTests(unittest.TestCase):
         self.assertEqual(first, self.store.result_lease(lease_binding()))
         with self.assertRaisesRegex(HistoryError, "history_conflict"):
             self.bind(hard_deadline_at_ms=2001)
+
+    def test_reserving_verifies_a_live_lease_once_not_again_on_every_later_reserve(self):
+        """The capacity check re-read and re-verified every live lease on each reserve (quadratic over a pass). A lease
+        whose stored rows are unchanged is verified once; any changed row is verified again (the corruption tests)."""
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES
+        self.fixture.capacity = ResultCapacity(2048, 2048 * MAX_RESULT_BODY_BYTES, 60_000, 120_000)
+        self.reopen(result_capacity=self.fixture.capacity)
+        count = 60
+        digests = []
+        original = ProjectHistory._lease_digest
+        def counted(self, *args, **kwargs):
+            digests.append(1)
+            return original(self, *args, **kwargs)
+        with mock.patch.object(ProjectHistory, "_lease_digest", counted):
+            for number in range(1, count + 1):
+                self.reserve(number)
+        self.assertLessEqual(len(digests), 10 * count, len(digests))  # was about 2 * count * count / 2 = 3,600
+        # Same capacity answer at the cap, and a changed row is still refused.
+        self.assertEqual(count, self.store._result_counts()[0])
+        self.store._connection.execute("UPDATE result_leases SET state='expired' WHERE run_handle=?",
+                                       (lease_binding(7).run_handle,))
+        with self.assertRaisesRegex(HistoryError, "history_incompatible"):
+            self.store._result_counts()
 
     def test_state_or_scope_corruption_cannot_free_lease_capacity(self):
         self.reserve()
@@ -395,7 +455,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
                 ProjectHistory(self.fixture.directory, self.fixture.store.project_id, **options)
             self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(16, self.store._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(23, self.store._connection.execute("PRAGMA user_version").fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
         for name, rows in snapshot.items():
             self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute("SELECT * FROM " + name)])
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))
@@ -438,7 +498,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
             self.fixture.open()
         self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(16, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(23, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
         for name, rows in snapshot.items():
             assert_migrated_rows(self, self.store, name, rows)
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))

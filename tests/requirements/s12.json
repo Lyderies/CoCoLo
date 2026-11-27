@@ -1,0 +1,45 @@
+{
+ "authority": "docs/requirements/s12.md",
+ "requirements": [
+  {
+   "id": "M8",
+   "source": "tests/requirements/s12.json#M8",
+   "statement": "Unknown signature custody faults the lane; restart requires fresh child proof and a replacement accepts an idempotent next claim exactly once."
+  },
+  {
+   "id": "M9",
+   "source": "tests/requirements/s12.json#M9",
+   "statement": "Unknown billing custody faults the lane; later child proof settles once and the next probe succeeds after replacement."
+  },
+  {
+   "id": "M10",
+   "source": "tests/requirements/s12.json#M10",
+   "statement": "An inconclusive probe tree is checked again without signalling a reaped root; only proven cleanup permits one settlement and a subsequent probe."
+  },
+  {
+   "id": "H1c-1",
+   "source": "tests/requirements/s12.json#H1c-1",
+   "statement": "An account lane with unknown work is faulted, making restart due at the next check; status names held processes and the next action."
+  },
+  {
+   "id": "H1c-3",
+   "source": "tests/requirements/s12.json#H1c-3",
+   "statement": "The collector restarts only after every account lane child is proven gone; retained signature pipes close after proof."
+  },
+  {
+   "id": "S12-B0-6",
+   "source": "tests/requirements/s12.json#S12-B0-6",
+   "statement": "Account lane inconclusive-to-clear collector scenarios settle exactly once, return live probe counts to baseline and permit the next claim or probe."
+  },
+  {
+   "id": "S12-N1",
+   "source": "tests/requirements/s12.json#S12-N1",
+   "statement": "An observation child reaped before cleanup cannot authorize signalling its former process group."
+  },
+  {
+   "id": "S12-N3",
+   "source": "tests/requirements/s12.json#S12-N3",
+   "statement": "After three non-transient record failures a proven-ended probe settles as a denial; transient SQL failures remain retryable and later passes never duplicate settlement."
+  }
+ ]
+}

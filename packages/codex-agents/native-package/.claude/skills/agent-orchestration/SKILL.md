@@ -49,10 +49,12 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
      returns the same fenced result, which you record. If that is no longer possible,
      close the orchestration anyway once the run is released: the run is counted
      abandoned. A `dispatch` that fails after launch with no result leaves nothing to
-     record: pause the orchestration, classify that run abandoned
-     (`host_confirmed_gone`), and resume.
+     record: run `learning-run-status` until the run has ended, then close the
+     orchestration (the run is counted abandoned). Only a run that never took a lease
+     is classified abandoned instead (pause, `learning-classify-host-run-abandoned
+     --reason host_confirmed_gone`, resume); for any other run that is refused.
      While `dispatch` waits, another command can run
-     `learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
+     `learning-run-status --project-root <exact-root> --orchestration-handle <orc> --run-handle <handle>` for the
      child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
      `terminal`), or `learning-cancel-run` with the same arguments to stop it.
      A cancellation reply is a request, not confirmed cleanup; `dispatch` then returns
@@ -116,6 +118,9 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
    recorded worker only while it runs (it stops after twelve idle hours, or when the
    owner migrates or updates the project), and its result at most seven days, so
    verify and run operational QA in the same working session, before closing.
+   For a review, `learning-review worker|verify|finish --project-root <exact-root> --spec <file>
+   --work-dir <folder>` runs steps 2 to 9 in this order for one worker and its verifier, saving each
+   reply, and stops (with the reason and next step) at a refused step or a result with no verdict.
 8. **Operational QA.** With both digests, run
    `learning-run-operational-checks --project-root <exact-root>
    --host-outcome-digest <worker host_outcome_digest>
@@ -127,6 +132,11 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
    --evaluator-result <worker result file> --verifier-assignment <verifier assignment
    file> --verifier-result <verifier result file>`. Every argument is required. The
    assignment and result files are the exact ones you validated and recorded.
+   For a review task (operation `review`), QA judges the review, not the code: it is accepted when the
+   verifier confirms the worker's findings (same per-criterion outcomes), whatever verdict either gives
+   the code, and an expected "tests not run" unverified claim in a read-only review does not count against
+   it. A refuted finding or any other unverified claim still gives `accepted: false`, which is not
+   retried. Other task types keep the strict rule.
 9. **Close.** Report failed, blocked and unverified work plainly, then run
    `learning-close-orchestration` with the real terminal state. Claude Code has no
    native goal counters, so omit `--goal-tokens-used` and `--goal-time-used-seconds`

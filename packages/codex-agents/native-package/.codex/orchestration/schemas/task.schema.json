@@ -23,6 +23,9 @@
     "failure_events"
   ],
   "properties": {
+    "review_phase": {"enum": ["first", "delta", "confirmation"]},
+    "parent_review_id": {"type": "string", "minLength": 1},
+    "expanded_scope": {"type": "boolean"},
     "id": {"type": "string", "minLength": 1},
     "objective": {"type": "string", "minLength": 1},
     "family": {

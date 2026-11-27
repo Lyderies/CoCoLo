@@ -69,7 +69,7 @@ from either primary, goes through the bridge. See [dispatch paths](how-it-works.
 
 ## I lost my owner key passphrase. What now?
 
-Choose "Replace a lost owner key" in `./setup.sh`. You then sign again in each project. See
+Choose Configure, then "Replace a lost owner key" in `./setup.sh`. You then sign again in each project. See
 [troubleshooting](troubleshooting.md#i-lost-my-owner-key-passphrase).
 
 ## What is planned?

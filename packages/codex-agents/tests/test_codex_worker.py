@@ -308,6 +308,19 @@ for row in json.loads((root / "frames.json").read_text()):
             self.pool.withdraw_prepared(prepared[3])
         self.assertGreater(self.pool._charged, 0)
 
+    def test_or4_safe_report_keeps_every_readable_diagnostic_reason_and_refuses_others(self):
+        """OR-4: the bridge reports `contract_validation_failed` for an untyped validator error."""
+        from codex_agents.codex_worker import _safe_report
+        from codex_agents.contracts import RESULT_DIAGNOSTIC_REASON_CODES
+        report = {'provider': 'codex', 'requested_model': 'gpt-6.1-sol', 'effort': 'high', 'wall_seconds': 1,
+                  'read_containment': 'advisory', 'rerouted': False, 'outcome': 'invalid_result', 'usage': None}
+        for code in sorted(RESULT_DIAGNOSTIC_REASON_CODES):
+            with self.subTest(code=code):
+                body = json.loads(_safe_report({**report, 'result_validation_reason_code': code}, 'codex'))
+                self.assertEqual(code, body['result_validation_reason_code'])
+        with self.assertRaises(CodexWorkerError):
+            _safe_report({**report, 'result_validation_reason_code': 'free text from a child'}, 'codex')
+
     def test_safe_validator_reason_survives_worker_and_owner_delivery_without_rejected_content(self):
         invalid = {**fixtures.result(), "evidence": [], "summary": "PRIVATE-REJECTED-RESULT"}
         prepared = self.prepare(value=invalid)
@@ -318,6 +331,47 @@ for row in json.loads((root / "frames.json").read_text()):
         self.assertEqual("failed", json.loads(result.packet.body)["execution_state"])
         self.assertNotIn("PRIVATE", result.packet.body.decode())
         self.assertNotIn("PRIVATE", result.packet.report.decode())
+
+    def test_an_invalid_answer_on_the_worker_path_is_kept_owner_only_with_its_digest(self):
+        """Review r2 MED-1 (VF-INV-a, decision 26 "original kept"): the pool's runners did not offer the
+        raw answer, so a worker-process dispatch kept nothing."""
+        import hashlib
+        import stat
+
+        ledger, project = self.fixture.ledger, self.fixture.project_id
+
+        class Keeper:  # The worker's project id names the run; the fixture ledger holds its one project.
+            def keep_child_answer(self, _project_id, content):
+                return ledger.keep_child_answer(project, content)
+
+        invalid = {**fixtures.result(), "admission_state": "accepted", "summary": "PRIVATE-KEPT-CLAIM"}
+        prepared = self.prepare(value=invalid, submit=False)
+        self.pool.attach_answer_keeper(prepared[3], Keeper())
+        self.pool.submit(prepared[3])
+        self.returned(prepared)
+        result = self.owner.result(prepared[1], self.pool, prepared[3])
+        report = json.loads(result.packet.report)
+        self.assertEqual("invalid_result", report["outcome"])
+        self.assertNotIn("PRIVATE", result.packet.body.decode() + result.packet.report.decode())
+        (path,) = sorted((self.fixture.state.artifacts / project).glob("child_answer_*.json"))
+        raw = path.read_bytes()
+        kept = report["raw_answer"]
+        self.assertEqual({"kept", "sha256", "bytes", "truncated", "scrubbed"}, set(kept))
+        self.assertEqual((hashlib.sha256(raw).hexdigest(), len(raw), True, False),
+                         (kept["sha256"], kept["bytes"], kept["kept"], kept["scrubbed"]))
+        self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
+        self.assertEqual("accepted", json.loads(raw)["admission_state"])
+        with ledger._held():
+            row = ledger._connection.execute("SELECT content_digest FROM stored_files WHERE project_id=? AND file_id=?",
+                                             (project, path.stem)).fetchone()
+        self.assertEqual(kept["sha256"], row["content_digest"])
+
+    def test_a_worker_without_a_keeper_reports_no_kept_answer_and_still_returns(self):
+        prepared = self.prepare()
+        self.returned(prepared)
+        report = json.loads(self.owner.result(prepared[1], self.pool, prepared[3]).packet.report)
+        self.assertEqual("result", report["outcome"])
+        self.assertNotIn("raw_answer", report)
 
     def test_unknown_native_model_text_is_not_retained_as_report_metadata(self):
         rows = [{"frame": {"type": "turn.started", "model": "PRIVATE-UNKNOWN-MODEL"}},
@@ -399,7 +453,9 @@ for row in json.loads((root / "frames.json").read_text()):
                 self.assertEqual("worker_input_invalid", packet.error_code)
                 self.assertIsNone(packet.body)
                 self.assertFalse((prepared[0] / "launches").exists())
-                self.assertFalse(prepared[4].snapshot()["cleanup_confirmed"])
+                # Corrected for O0c M1 (requirement): an execution that provably never launched is clean
+                # once its worker returned, so its normal release frees its slots (it held them for good).
+                self.assertTrue(prepared[4].snapshot()["cleanup_confirmed"])
                 self.assertNotIn("PRIVATE", repr(packet))
 
     def test_publication_fault_keeps_unknown_custody_and_cannot_deliver_a_success(self):

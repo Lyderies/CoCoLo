@@ -15,8 +15,13 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from . import lane_health
+from .sql_read_budget import SQLReadError
 from .account_api import MAX_ACCOUNT_FRAME_BYTES, AccountError, decode_account_request
 from .account_service import AccountService
+
+
+IDLE_WAIT_SECONDS = 0.05  # how long the frontend thread sleeps when no connection is attached
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,7 @@ class AccountIngress:
         self._limits = AccountIngressLimits(**vars(limits))
         self._pid, self._owner_thread = os.getpid(), threading.current_thread()
         self._lock = threading.Lock()
+        self._wake = threading.Event()  # set when a peer is attached or a close is requested (see IDLE_WAIT_SECONDS)
         self._peers: dict[object, _Peer] = {}
         # Owner-only ticket/subscriber state. Detached tickets retain custody
         # until the actual coordinator returns a ready result or fully drains.
@@ -100,6 +106,10 @@ class AccountIngress:
         self._subscriptions: dict[object, object] = {}
         self._rotation: deque[object] = deque()
         self._started = self._closing = self._closed = self._faulted = False
+        # S1-H1a: published notes (reporting only): the front thread's and the owner's.
+        self.health = lane_health.Lane('ingress')
+        self._front_note, self._note = self.health.slot('front'), self.health.slot('owner')
+        self._kept_descriptors = set()  # the front's own record, written only by the front
         self._front_exiting = self._front_stopped = self._pumping = False
         self._thread = threading.Thread(target=self._front, name="account-ingress", daemon=True)
         jobs._ingress_owner = self
@@ -122,9 +132,11 @@ class AccountIngress:
         try:
             self._started = True
             self._thread.start()
-        except BaseException:
+        except BaseException as error:
             with self._lock:
                 self._faulted = self._front_stopped = True
+            lane_health.safely(lambda: self._note.publish(faulted=True))  # S1-H1a
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'ingress_start_failed', error))
             raise
 
     def attach(self, connection: socket.socket, context: object, *, health=False):
@@ -153,8 +165,9 @@ class AccountIngress:
                 raise AccountError("account_invalid_request")
             count = sum(p.health == health for p in self._peers.values())
             if count >= (self._limits.health_connections if health else self._limits.ordinary_connections):
-                raise AccountError("account_unavailable")
+                raise AccountError("account_busy")  # R7b: told to the client as service_refused_busy
             self._peers[object()] = peer
+        self._wake.set()
 
     @staticmethod
     def _wire(raw):
@@ -210,6 +223,12 @@ class AccountIngress:
             if trailing:
                 self._drop(selector, token, peer)
                 return
+            upgrade = self._service.runtime_upgrade_reply(raw)
+            if upgrade is not None:
+                peer.outgoing = self._wire(upgrade) + b"\n"
+                peer.incoming.clear()
+                selector.modify(peer.connection, selectors.EVENT_WRITE, token)
+                return
             try:
                 request = decode_account_request(raw)
             except AccountError:
@@ -245,6 +264,12 @@ class AccountIngress:
                     peers = tuple(self._peers.items())
                 if closing:
                     break
+                if not peers:
+                    # S13d-1: with nothing attached there is nothing to poll. Wait for an attach or a close
+                    # (both set the event); the bound only covers a state change nobody signals.
+                    self._wake.wait(IDLE_WAIT_SECONDS)
+                    self._wake.clear()
+                    continue
                 for token, peer in peers:
                     if peer.io_closed:
                         continue
@@ -270,7 +295,9 @@ class AccountIngress:
                     rotation.append(token)
                     if token in events:
                         self._front_step(selector, token, active[token], events[token])
-        except BaseException:
+        except BaseException as error:
+            lane_health.safely(lambda: self._front_note.publish(faulted=True))  # S1-H1a, by the front, before its lock
+            lane_health.safely(lambda error=error: self.health.note_failure(self._front_note, 'ingress_front_failed', error))
             with self._lock:
                 self._faulted = True
         finally:
@@ -282,9 +309,12 @@ class AccountIngress:
             for token, peer in peers:
                 try:
                     self._drop(selector, token, peer)
-                except Exception:
+                except Exception as error:
                     # Unknown descriptor state fails closed, never a cleanup
                     # acknowledgement. The slot remains for explicit shutdown.
+                    lane_health.safely(lambda: self._kept_descriptors.add(id(peer)))  # S1-H1a, by the front
+                    lane_health.safely(lambda: self._front_note.publish(faulted=True, kept=frozenset(self._kept_descriptors)))
+                    lane_health.safely(lambda error=error: self.health.note_failure(self._front_note, 'ingress_cleanup_failed', error))
                     with self._lock:
                         self._faulted = True
             if selector is not None:
@@ -312,6 +342,15 @@ class AccountIngress:
         now = time.monotonic_ns()
         with self._lock:
             return any(not self._peers[token].disconnected and now < self._peers[token].deadline for token in group)
+
+    def _publish_health(self):
+        """S1-H1a C5: this owner's note: requests being answered (busy) and waiting (queued)."""
+        try:
+            with self._lock:
+                queued = sum(p.request is not None and not p.processing for p in self._peers.values())
+            lane_health.safely(lambda: self._note.publish(busy=len(self._groups), queued=queued))
+        except Exception:
+            pass
 
     def pump_owner(self):
         """Bounded owner batches, with no socket wait, worker start or join.
@@ -349,6 +388,9 @@ class AccountIngress:
                          if p.request is not None and not p.processing and not p.disconnected][:steps]
                 for _, peer, _ in batch:
                     peer.processing, peer.request = True, None
+                waiting = sum(p.request is not None and not p.processing for p in self._peers.values())
+            # S1-H1a C5: busy and queued published before the owner hands the batch on (where it may block).
+            lane_health.safely(lambda: self._note.publish(busy=len(self._groups) + len(batch), queued=waiting))
             for token, peer, raw in batch:
                 reply = self._service.begin(raw, peer.context, _ingress=self)
                 if type(reply) is bytes:
@@ -370,11 +412,21 @@ class AccountIngress:
                     self._subscriptions[token] = reply
                 else:
                     raise AccountError("account_incompatible")
-            self._service.drive_claims()
+            try:
+                self._service.drive_claims()
+            except SQLReadError as error:
+                if error.reason_code != "sql_read_busy":
+                    raise
+                return  # Existing tickets retain custody until a later owner turn.
             for _ in range(min(steps, len(self._rotation))):
                 ticket = self._rotation.popleft()
                 self._rotation.append(ticket)
-                reply = self._service.take_claim_reply(ticket, _ingress=self)
+                try:
+                    reply = self._service.take_claim_reply(ticket, _ingress=self)
+                except SQLReadError as error:
+                    if error.reason_code != "sql_read_busy":
+                        raise
+                    continue  # Queue admission failed before consuming the completion.
                 if reply is None:
                     continue
                 group = self._groups[ticket]
@@ -386,12 +438,20 @@ class AccountIngress:
                     del self._subscriptions[token]
                 del self._groups[ticket]
                 self._rotation.remove(ticket)
-        except BaseException:
+        except BaseException as error:
+            lane_health.safely(lambda: self._note.publish(faulted=True))  # S1-H1a
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'ingress_owner_failed', error))
             with self._lock:
                 self._faulted = True
             raise
         finally:
             self._pumping = False
+            self._publish_health()  # S1-H1a C5
+
+    def engaged(self):
+        """S13d-1: whether any connection or in-flight request is held; read-only, any thread."""
+        with self._lock:
+            return bool(self._peers or self._groups)
 
     def request_close(self):
         self._owner()
@@ -401,6 +461,7 @@ class AccountIngress:
                 self._closing = True
                 if not self._started:
                     self._front_stopped = True
+            self._wake.set()
             self._jobs.request_close()
             if self._observations is not None:
                 self._observations.request_close()

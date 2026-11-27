@@ -6,9 +6,22 @@ from typing import Any
 
 from .learning_contracts import MAX_RECORD_BYTES
 
-LEDGER_SCHEMA_VERSION = 14
+LEDGER_SCHEMA_VERSION = 18  # B4t: additive version floor and machine-local custody lineage
 COLLECTOR_PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
+
+# Owner decision 129.3: pre-1.0 callers must use the serving runtime's identity.
+COLLECTOR_MUTATING_OPERATIONS = frozenset({
+    "bind", "ingest", "issue_result_repair", "register", "commit_owner_record", "confirm_legacy_slot",
+    "learning_moved_if_empty", "shutdown", "shutdown_if_drained",
+    "record_launch",  # RS-E E2a-3: setup's launch record
+    "start_unpark",  # RS-E E2c-4: the owner's start command ends a crash-loop park
+})
+RUNTIME_UPDATE_COMMAND = "./setup.sh --update"
+RUNTIME_UPGRADE_MESSAGE = (
+    "This client and the collector must use the same runtime. "
+    f"Update this project with: {RUNTIME_UPDATE_COMMAND}"
+)
 
 
 def _version_tuple(value: Any) -> tuple[int, int, int] | None:

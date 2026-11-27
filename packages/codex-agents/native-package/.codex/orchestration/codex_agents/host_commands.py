@@ -35,6 +35,8 @@ values that would move them (``cli._require_own_roots``).
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -95,6 +97,7 @@ PRIMARY_HOST_COMMANDS = (
     "provider-observe",
     "learning-run-operational-checks",
     "learning-record-operational-qa",
+    "learning-review",
 )
 CLI_RELATIVE = Path(".codex") / "orchestration" / "cli.py"
 MANIFEST_RELATIVE = ".codex/orchestration/install-manifest.json"
@@ -368,7 +371,7 @@ def _manifest_files(raw: bytes) -> dict[str, str]:
 
     try:
         manifest = json.loads(raw)
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise HostCommandError("the install manifest is invalid") from exc
     if (
         not isinstance(manifest, dict)
@@ -557,7 +560,7 @@ def _binding_bytes(root: Path, digest: str, version: str, clone: Path) -> bytes:
 def _parse_binding(raw: bytes) -> dict[str, str]:
     try:
         binding = json.loads(raw)
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise HostCommandError("the protected runtime binding is invalid") from exc
     if (
         not isinstance(binding, dict)
@@ -1025,10 +1028,21 @@ def install_runtime_copy(
     staging = f".{copy.name}.{token}.tmp"
     aside = f".{copy.name}.{token}.old"
     clone = Path(os.path.realpath(clone_root)) if clone_root is not None else root
+    held = None
+    project_lock = None
     try:
+        # RS-E E2a-4 (review round 1): a replacement takes the project's stable lock, as prune, removal and pins do.
+        project_lock = _take_project_lock(container)
         if os.path.lexists(copy):
-            if runtime_copy_problem(copy, root) is None and _bound_clone(copy) == clone:
+            if runtime_copy_problem(copy, root) is None and (
+                    _bound_clone(copy) == clone or _registered(container, copy.name)):
+                # Decision 179: the registered copy (the one the launch record names) is never replaced while it
+                # verifies; only where setup ran differs, which a launch target does not consult (E2a-3).
                 return copy, "unchanged"
+            # RS-E E2a-4: never replace a copy a launcher holds in use.
+            held = _lock_copy(container, copy.name, exclusive=True)
+            if held is None:
+                raise HostCommandError("the runtime copy is in use by a starting service; run setup again shortly")
             os.rename(copy.name, aside, src_dir_fd=container, dst_dir_fd=container)
             outcome = "replaced"
         os.mkdir(staging, 0o700, dir_fd=container)
@@ -1057,6 +1071,10 @@ def install_runtime_copy(
                 remove_tree_at(container, leftover)
             except OSError:
                 pass
+        if held is not None:
+            _unpin(container, copy.name, held)
+        if project_lock is not None:
+            os.close(project_lock)
         os.close(container)
     problem = runtime_copy_problem(copy, root)
     if problem is not None:
@@ -1070,10 +1088,264 @@ def _bound_clone(copy: Path) -> Path | None:
     return None if raw is None else Path(_parse_binding(raw)["clone_root"])
 
 
+# RS-E E2a-4: pins beside the copies, in `.pins` (removed once empty). The project's stable lock is its copies'
+# folder itself (a directory is never replaced while its project's copies exist): prune, replacement, removal and
+# the registered marks take it, exclusive and in turn, so a mark and a removal never interleave. `<digest>.lock` is held shared by a launcher from its
+# verification until its child serves, and exclusive (never waited for) by a prune, replacement or removal of that
+# copy; an acquirer checks that the path still names the inode it locked, so a lock file a remover dropped is never
+# taken as a pin. `<digest>.registered` marks the copy the collector's launch record names: setup adds the new mark
+# before its record commits and drops the earlier one only after it.
+PINS = ".pins"
+
+
+def _pins_directory(container: int, *, create: bool) -> int | None:
+    try:
+        if create:
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(PINS, 0o700, dir_fd=container)
+        descriptor = os.open(PINS, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=container)
+    except FileNotFoundError:
+        return None
+    info = os.fstat(descriptor)
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        os.close(descriptor)
+        raise HostCommandError("the runtime copy pins are not private")
+    return descriptor
+
+
+def _take_project_lock(container: int) -> int:
+    """The project's stable lock (its copies' folder), exclusive (a short wait for another setup step); the
+    returned descriptor holds it."""
+    descriptor = os.open(".", os.O_RDONLY | os.O_DIRECTORY, dir_fd=container)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    except OSError:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+@contextlib.contextmanager
+def _project_locked(container: int):
+    descriptor = _take_project_lock(container)
+    try:
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _lock_copy(container: int, name: str, *, exclusive: bool) -> int | None:
+    """The copy's pin lock, taken without waiting; its descriptor holds it, or None when someone else holds it or
+    the lock file this opened was dropped meanwhile."""
+    pins = _pins_directory(container, create=True)
+    if pins is None:
+        return None  # its pins folder was removed between its creation and its open
+    try:
+        try:
+            descriptor = os.open(name + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=pins)
+        except FileNotFoundError:
+            return None  # its pins folder was just emptied and removed
+        try:
+            fcntl.flock(descriptor, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            try:
+                named = os.stat(name + ".lock", dir_fd=pins, follow_symlinks=False)
+            except FileNotFoundError:
+                named = None
+            opened = os.fstat(descriptor)
+            if named is None or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+                raise BlockingIOError()
+        except OSError:
+            os.close(descriptor)
+            return None
+        return descriptor
+    finally:
+        os.close(pins)
+
+
+def _unpin(container: int, name: str, held: int) -> None:
+    """Drop a removed or replaced copy's lock file while still holding it (a later acquirer sees the new inode),
+    and the pins folder once it is empty."""
+    try:
+        pins = _pins_directory(container, create=False)
+        if pins is not None:
+            try:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(name + ".lock", dir_fd=pins)
+            finally:
+                os.close(pins)
+            with contextlib.suppress(OSError):
+                os.rmdir(PINS, dir_fd=container)
+    finally:
+        os.close(held)
+
+
+def _registered(container: int, name: str) -> bool:
+    pins = _pins_directory(container, create=False)
+    if pins is None:
+        return False
+    try:
+        os.stat(name + ".registered", dir_fd=pins, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(pins)
+
+
+def _set_mark(container: int, name: str) -> None:
+    """Under the project lock: mark an existing copy registered (durably)."""
+    try:
+        os.stat(name, dir_fd=container, follow_symlinks=False)
+    except FileNotFoundError:
+        raise HostCommandError("the runtime copy is gone") from None
+    pins = _pins_directory(container, create=True)  # under the project lock: nothing removes it meanwhile
+    if pins is None:
+        raise HostCommandError("the runtime copy pins are unavailable")
+    try:
+        os.close(os.open(name + ".registered", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=pins))
+        os.fsync(pins)
+    finally:
+        os.close(pins)
+
+
+def _drop_marks(container: int, *, keep: str | None = None, only: str | None = None) -> None:
+    """Under the project lock: drop every mark but `keep`'s, or only `only`'s."""
+    pins = _pins_directory(container, create=False)
+    if pins is None:
+        return
+    try:
+        for entry in os.listdir(pins):
+            if entry.endswith(".registered") and entry != f"{keep}.registered" and (
+                    only is None or entry == f"{only}.registered"):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(entry, dir_fd=pins)
+        os.fsync(pins)
+    finally:
+        os.close(pins)
+    with contextlib.suppress(OSError):
+        os.rmdir(PINS, dir_fd=container)
+
+
+def _copy_container(copy: Path, *, create: bool = False) -> int:
+    copy = Path(copy)
+    if copy.parent.parent.name != RUNTIME_CONTAINER:
+        raise HostCommandError("the launch target is not a protected runtime copy")
+    try:
+        container = open_private_directories(copy.parent.parent.parent, (RUNTIME_CONTAINER, copy.parent.name),
+                                             create=create)
+    except (OSError, HostPathError) as exc:
+        raise HostCommandError("the runtime copy directory is unavailable") from exc
+    if container is None:
+        raise HostCommandError("the runtime copy directory is unavailable")
+    return container
+
+
+@contextlib.contextmanager
+def pin_runtime_copy(copy: Path):
+    """Hold `copy` in use (shared, never waited for): no prune, replacement or removal takes it meanwhile."""
+    container = _copy_container(copy)
+    try:
+        held = _lock_copy(container, Path(copy).name, exclusive=False)
+    finally:
+        os.close(container)
+    if held is None:
+        raise HostCommandError("the runtime copy is being changed by setup; try again")
+    try:
+        yield Path(copy)
+    finally:
+        os.close(held)
+
+
+def mark_registered_copy(copy: Path) -> None:
+    """Mark `copy` as the one the collector's launch record names; the project's earlier mark goes."""
+    container = _copy_container(copy)
+    try:
+        with _project_locked(container):
+            _set_mark(container, Path(copy).name)
+            _drop_marks(container, keep=Path(copy).name)
+    finally:
+        os.close(container)
+
+
+def launch_target_problem(
+    copy: Path, project_root: Path, environ: Mapping[str, str] | None = None
+) -> str | None:
+    """RS-E E2a-3: why `copy` cannot be this project's launch target, or None.
+
+    It must be this project's protected copy at the place setup writes it, named by its digest, bound to this
+    project and verifying byte for byte (`runtime_copy_problem`). Where setup ran (`clone_root`) is not consulted.
+    """
+    try:
+        root, _cli = project_cli(project_root)
+        copy = Path(copy)
+        if copy != _copy_root(root, copy.name, environ):
+            return "the launch target is not this project's protected runtime copy"
+    except HostCommandError as exc:
+        return str(exc)
+    return runtime_copy_problem(copy, root)
+
+
+def _record_target(copy, project_root, record_launch, environ) -> str:
+    """RS-E E2a-3: the collector's launch record names this copy only once it is a valid launch target. E2a-4: the
+    copy is marked registered before the record commits and the earlier mark dropped only after, so no prune ever
+    removes the copy a record names. A refused record keeps the earlier record and mark (and drops only a mark it
+    added). Decision 179: the project lock is held from the mark to the cleanup, so concurrent setups take turns and
+    none clears the mark of the record that won; a record whose outcome is unknown (its reply lost after a possible
+    commit) keeps both marks until the next record that succeeds."""
+    try:
+        container = _copy_container(copy)
+    except HostCommandError:
+        return "not_recorded"
+    try:
+        with _project_locked(container):
+            earlier = _registered(container, copy.name)
+            _set_mark(container, copy.name)
+            outcome = "refused"
+            try:
+                if launch_target_problem(copy, project_root, environ) is None:
+                    record_launch(copy, copy.name)
+                    outcome = "recorded"
+            except Exception as error:
+                outcome = "unknown" if _outcome_unknown(error) else "refused"
+            if outcome == "recorded":
+                _drop_marks(container, keep=copy.name)
+            elif outcome == "refused" and not earlier:
+                _drop_marks(container, only=copy.name)
+        return "recorded" if outcome == "recorded" else "not_recorded"
+    except (OSError, HostCommandError):
+        return "not_recorded"
+    finally:
+        os.close(container)
+
+
+def _outcome_unknown(error: Exception) -> bool:
+    """Decision 179: whether a failed record may still have committed: the collector exchange failed after the
+    request may have been delivered (a transport failure, or a reply it could not read: invalid or oversized).
+    A refusal the collector named, setup's own check and a failure before any write are known to change nothing."""
+    from .collector_contracts import CollectorError, CollectorTransportError
+    if isinstance(error, CollectorTransportError):
+        return True
+    return isinstance(error, CollectorError) and error.code in {None, "response_invalid", "transport_unavailable"}
+
+
+def record_setup_launch(project_root: Path, record_launch, environ: Mapping[str, str] | None = None,
+                        clone_root: Path | None = None) -> str:
+    """RS-E E2a-10 (decision 171): setup's registration step, for every project (Codex rule or not): install the
+    protected runtime copy and record it as the launch target. `recorded` or `not_recorded`; never raises."""
+    try:
+        copy, _outcome = install_runtime_copy(project_root, environ, clone_root)
+    except Exception:
+        return "not_recorded"
+    return _record_target(copy, project_root, record_launch, environ)
+
+
 def prune_runtime_copies(
     project_root: Path, keep: Path, environ: Mapping[str, str] | None = None
 ) -> list[str]:
-    """Remove this project's other runtime copies once the rule names `keep`."""
+    """Remove this project's other runtime copies once the rule names `keep`.
+
+    RS-E E2a-4: the registered copy and copies held in use are skipped, as is the pins folder.
+    """
 
     root, _cli = project_cli(project_root)
     home = codex_home(environ)
@@ -1083,13 +1355,25 @@ def prune_runtime_copies(
     if container is None:
         return []
     removed = []
+    project_lock = None
     try:
+        project_lock = _take_project_lock(container)
         with os.scandir(container) as entries:
             names = sorted(entry.name for entry in entries)
         for name in names:
-            if name != keep.name and remove_tree_at(container, name):
-                removed.append(str(keep.parent / name))
+            if name in {keep.name, PINS} or _registered(container, name):
+                continue
+            held = _lock_copy(container, name, exclusive=True)
+            if held is None:
+                continue  # in use by a launcher: kept
+            try:
+                if remove_tree_at(container, name):
+                    removed.append(str(keep.parent / name))
+            finally:
+                _unpin(container, name, held)
     finally:
+        if project_lock is not None:
+            os.close(project_lock)
         os.close(container)
     return removed
 
@@ -1101,6 +1385,7 @@ def install_rule(
     *,
     replace: bool = False,
     clone_root: Path | None = None,
+    record_launch=None,
 ) -> dict[str, str]:
     """Owner setup: write the protected runtime copy, then the rule that names it.
 
@@ -1111,16 +1396,20 @@ def install_rule(
 
     copy, copy_outcome = install_runtime_copy(project_root, environ, clone_root)
     outcome = write_rule(project_root, environ, interpreter, replace=replace)
+    launch = None if record_launch is None else _record_target(copy, project_root, record_launch, environ)
     if outcome != "differs":
         try:
             prune_runtime_copies(project_root, copy, environ)
-        except (OSError, HostPathError):
+        except (OSError, HostPathError, HostCommandError):
             pass  # an older copy no rule names is inert; the next setup retries
-    return {
+    report = {
         "codex_rule": outcome,
         "runtime_copy": str(copy),
         "runtime_copy_status": copy_outcome,
     }
+    if launch is not None:
+        report["launch_record"] = launch
+    return report
 
 
 def remove_rule(
@@ -1180,8 +1469,40 @@ def _remove_from(home: Path, digest: str) -> list[str]:
     if container is None:
         return removed
     try:
-        if remove_tree_at(container, digest):
-            removed.append(str(canonical / RUNTIME_CONTAINER / digest))
+        # RS-E E2a-4: a copy held in use, or the registered one, is left in place (and so is its folder); the others
+        # go. All under the project's stable lock.
+        held, busy = [], []
+        project = None
+        try:
+            project = open_private_directories(canonical, (RUNTIME_CONTAINER, digest), create=False)
+        except HostPathError:
+            project = None
+        if project is not None:
+            try:
+                held.append(_take_project_lock(project))
+                with os.scandir(project) as entries:
+                    names = sorted(entry.name for entry in entries if entry.name != PINS)
+                for name in names:
+                    if _registered(project, name):
+                        busy.append(name)
+                        continue
+                    descriptor = _lock_copy(project, name, exclusive=True)
+                    if descriptor is None:
+                        busy.append(name)
+                    else:
+                        held.append(descriptor)
+                if busy:
+                    for name in names:
+                        if name not in busy and remove_tree_at(project, name):
+                            removed.append(str(canonical / RUNTIME_CONTAINER / digest / name))
+            finally:
+                os.close(project)
+        try:
+            if not busy and remove_tree_at(container, digest):
+                removed.append(str(canonical / RUNTIME_CONTAINER / digest))
+        finally:
+            for descriptor in held:
+                os.close(descriptor)
     finally:
         os.close(container)
     return removed

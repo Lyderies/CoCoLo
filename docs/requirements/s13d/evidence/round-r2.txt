@@ -1,0 +1,16 @@
+FAILED codex:tests.test_project_start#0 (exit 1) -> <tmp>
+FAILED (failures=1, errors=1)
+FAILED codex:tests.test_project_start#3 (exit 1) -> <tmp>
+FAILED (failures=1)
+FAILED codex:tests.test_project_service_startup (exit 1) -> <tmp>
+FAILED (failures=1, errors=2)
+FAILED codex:tests.test_lost_run_settlement#0 (exit 1) -> <tmp>
+FAILED (errors=1)
+FAILED codex:tests.test_project_start#1 (exit 1) -> <tmp>
+FAILED (failures=1, errors=6)
+FAILED codex:tests.test_billing_gate (exit 1) -> <tmp>
+FAILED (errors=167)
+FAILED codex:tests.test_lost_run_settlement#2 (exit 1) -> <tmp>
+FAILED (failures=1, errors=1)
+OVER BUDGET: codex:tests.test_lost_run_settlement integration/scenario 136.721s > 60.000s (4 fragments)
+ "failed_units": [

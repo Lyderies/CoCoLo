@@ -87,6 +87,16 @@ and stops waiting as soon as that process serves or exits. A dead host's leftove
 hint, sockets and capability are replaced by the next start. Endpoints published
 without a host lock, as the older process fixtures do, are used as hinted.
 
+A starting host takes the host lock before it withdraws a dead host's hint, so for a
+moment the dead hint and the new lock are on disk together (CI2). The starting host
+holds `hint.lock` exclusively from before it takes the host lock until that hint is
+gone, and a client reads the hint and probes the host lock under the same lock,
+shared (waiting at most `HINT_READ_WAIT_SECONDS`, then counting the project as not
+served now), so it never takes that pair for a service. A start whose own host ended
+while another host holds the host lock (another start's, not serving yet) keeps
+waiting for that host to serve, within the start's time, instead of failing
+(`ProjectServiceStartupTests.test_CI2_*`).
+
 ### Account services in the collector process
 
 `learning-serve` now hands over to the separate entry `collector_host.py`, so the
@@ -272,6 +282,28 @@ lease that was never armed, which no claim can use, is released locally. Not
 closed: a run that failed before it took a lease keeps its account binding
 `pending` (no storage custody exists to fence it with).
 
+The project's hold register (`project_holds`, format 18; run supervisor slice B1) has
+one row per lease and per reservation, written in the same store transaction as the
+lease or reservation row it records (`project_holds_schema.take_hold`, `arm_hold`,
+`release_hold`). A lease is taken `unarmed` with its cleanup slot, armed, and released
+`withdrawn_unsent` (by `release_unsent_result_lease`, by the expiry of an unarmed
+lease, or by the writer pass below), `denied` or `fenced` (only by the verified
+denial closure: `fenced` when the account closed the request unanswered, its
+`claim_not_open` receipt) or `bound` (in the transaction that inserts the
+reservation). The reservation, the attempt's obligation from then on, is released
+`completed` only in the transaction that records the account's verified release, once
+a terminal exists; its commit, retirement and expiry change nothing in the register,
+and the result purge keeps a reservation whose obligation is still held. A released
+row is kept for good: a take of its identity (the same attempt's lease, or the same
+claim) is refused `history_conflict`. The 17 -> 18 step adopts existing leases and
+reservations by class before the validators; an ordinary open never adopts and
+refuses a lease or reservation without its row (`history_incompatible`). The
+writer's periodic pass (the first at service start) releases `withdrawn_unsent` every
+unarmed lease no live job of this service holds: only this service writes the store,
+so such a lease is a stopped service's, and it is released at once, not at its
+deadline. Custody rows (D1), open bindings (B3), memory holds (B2) and `lost_unbound`
+(B5) are later slices.
+
 Account calls from the driver are retried, for up to ten minutes per call, only
 when the account services are unreachable, with the same request ID; the owner
 then answers it for the first time or returns the reply it already committed. A
@@ -379,21 +411,22 @@ reconnaissance (`routing_evidence_refs: ["outcome:<host_outcome_digest>"]`) is r
 as hard end-to-end work only if every citation is trusted. For a run the project's
 service recorded, the CLI asks that service (`history.routing_evidence`, role `host`,
 one cited digest per request; `client_runtime.routing_evidence_client`):
-`project_routing_evidence.trusted_reconnaissance` answers true only when the service
-still keeps that run's originals for this host class, they match the run's consumed
+`project_routing_evidence.trusted_reconnaissance` answers true only when the project
+store holds that run's record context for this host class (D1), it matches the run's consumed
 grant and returned result, the run's task has the same `id` and `family` as the task
 being routed and was reconnaissance (ambiguity or context breadth unknown), the
 project's own operational QA row for the outcome is intact and accepted, the verified
 outcome is positive and completed, and the owner has not rejected the run (live or
 imported feedback). A citation the service holds but that fails any of these refuses
-the route; it is never ignored. A citation the service does not hold (another host
-class, a run from before a service restart, or a run an earlier version recorded) is
+the route; it is never ignored. A citation the store holds no context for (another host
+class, or a run recorded before format 18, whose originals only that service's memory held) is
 left to the ledger's own check only while the project's learning still lives in the
 ledger; once it has moved, the citation is refused, because the owner may have rejected
-that run in the project store since and the ledger's frozen copy would not know. Kept
-originals live in memory (at most 64), so after a service restart earlier
-reconnaissance can no longer be cited. Test:
-`HostVerificationTests.test_accepted_reconnaissance_of_the_same_task_is_trusted_routing_evidence`.
+that run in the project store since and the ledger's frozen copy would not know. The
+originals are stored with the run, so earlier reconnaissance is still cited after a
+service restart. Tests:
+`HostVerificationTests.test_accepted_reconnaissance_of_the_same_task_is_trusted_routing_evidence`,
+`StoredContextRestartTests.test_A1_after_restarts_a_verifier_qa_and_routing_evidence_still_find_the_recorded_originals`.
 
 Host crash recovery (owner decision 2026-11-13: automatic; finding 18). If a project
 host stops or crashes while a run holds an admitted claim, the new host does not know
@@ -416,6 +449,77 @@ of the run can still be running:
   relies on, with the root seen stopped instead of waited for. It names the bridge run
   and the child's pid and birth. A watchdog that was killed, or could not confirm, writes
   nothing. A normal release removes both files.
+- Container entries (0.4.0 slice C2, only while `container_launch.SETTINGS` is set; it is
+  None as shipped, which keeps the process launch above). Version 2 entries, keyed by a
+  launch token (`lnc_` + 32 hex) made before the claim. The driver writes `intent` before
+  the claim is handed to the account: the container's name (derived from the token) and its
+  labels `cocolo.project`, `cocolo.run` (the token), `cocolo.kind=run`, plus the lease, claim
+  request, identity digest and storage evidence a fence needs. A failed write stops the run
+  before the claim is sent. The admitted claim (bridge run id, deadline) is recorded on the
+  intent. At spawn the registry launches the container through `ContainerRuntime.launch`,
+  whose `record` reads the admitted intent back (`check_intent`) before `podman create`;
+  the run's deadline is set on the container (`--timeout`, enforced by conmon, so it fires
+  with the service killed; checked at start); `started` (container id, cgroup) is written
+  once podman returns. The bridge reads the output through a local `podman logs --follow`
+  then `podman wait`. Cleanup writes `stopping`, then `gone` or `stop_failed`; a run whose
+  container is not proven gone is never confirmed clean. `tree_state` never reads a
+  container entry as gone: only the container recovery (C4, below) settles one. Tests:
+  `tests/test_container_launch_journal.py`.
+- Container stops (0.4.0 slice C3, container mode only). One stop action,
+  `ContainerLauncher.stop` over `ContainerRuntime.stop` (SIGTERM, the grace, SIGKILL to
+  every process in the container, removal, "gone" asked of the OS), for every reason: the
+  liveness clock's (`supervisor.request_stop`, run on the launcher's helper thread since the
+  request is made under the registry lock), the bridge's own deadline and end
+  (`begin_cleanup(reason)`), the service closing (`CodexWorkerPool.close` marks the registry
+  `closing`, so a cancel is recorded as `service_close`), a refused launch. Each attempt
+  writes `stopping` with the first reason (`stop_reason`, kept) and counts `stop_attempts`.
+  Stops of one container are serialized (a stop under way is joined; one proven gone is never
+  repeated). A `stop_failed` run stays unconfirmed (slot held) and is retried by the live
+  sweep (`retry_stops`, 1 s doubling to 300 s); a later "gone" confirms the run clean through
+  the registry (`_container_proven_gone`), so its normal release goes on. The driver settles
+  its own failed admitted runs whose container is `gone` (`_settle_own_ended`:
+  `settle_lost_run`, entry `settled`, preparation given back) while it runs; at its own stop
+  it stops what is left once more (`service_close`) and settles what is gone; another
+  instance's container entries are left to the next service's recovery (C4). The detached watchdog gets the container
+  (`--container <json>`, the podman client's environment only) and, once its service has died (its
+  parent pid changed), calls the same stop tool ONCE (decision 49: the run's labels checked first, one
+  17 s total for the stop and ending the tree, the result written to `<token>.watchdog` beside the journal
+  entry, exit 0 gone / 2 not gone / 3 tree end unconfirmed / 4 total ran out); while the service lives it
+  leaves the container to it. The stop tool owns every cleanup: each podman command runs under a guard that
+  dies with its caller, one absolute deadline bounds the stop (`deadline`), the grace is capped by the time
+  left, a kill or reap error is reported. The run's deadline is also podman's `--timeout` only when
+  `podman version` shows a client and server of at least 4.0. Status: `learning-status` `container_holds` (counts by state,
+  each `stop_failed` with reason, detail, attempts) and one owner alert per `stop_failed`
+  container in `account_health.attention`, naming `podman rm --force <name>`. Tests:
+  `tests/test_container_stop.py`, `tests/test_hold_lifecycle.py` (ContainerRunHoldTests).
+- Container recovery (0.4.0 slice C4, container mode only; `container_recovery`). At start
+  and on each sweep (`RunDriver._settle_lost`, on the sweep thread, never the foreground
+  account thread), every unsettled container entry of a stopped instance (its lock free) is
+  recovered: first the project's listing (`podman ps --all --filter
+  label=cocolo.project=<project>`); podman unreachable settles nothing and writes no entry,
+  and the listing is asked again after 1 s doubling to 300 s. Then the entry is adopted
+  (`LaunchJournal.adopt`: rewritten under this instance, so a later instance takes it over
+  the same way if this one dies), its container stopped through the one stop action (reason
+  `service_lost`; only a container under its name that carries the run's own
+  `cocolo.project`/`cocolo.run` labels, else `stop_failed`, left alone), unless the entry is
+  already `gone` and nothing is listed for it. A stop not proven gone stays `stop_failed`,
+  held, retried with the launcher's back-off. Once gone: an admitted entry is settled
+  (`settle_lost_run`); an `intent` whose admission was never recorded is fenced
+  (`RunDriver._fence_entry`, `account.fence_claim`, request id `recover-<sha256(token)[:32]>`):
+  closed for good (entry outcome `fenced`; its armed lease is expired by the existing
+  earlier-lease fence) or, admitted after all, settled lost with the receipt's bridge run id.
+  Then the workspace is removed (unchecked, as before) and the entry written `settled`, its
+  stop answer kept as evidence. Account failures back off the same way. Orphans: at start and
+  every 60 s, each listed container whose run has no journal entry (tokens read after the
+  listing) is stopped (`ContainerRuntime.stop_orphans`); other projects' containers are never
+  listed, labelled ones whose name is not their run's are `skipped`. The last pass is kept in
+  `launches/container-recovery.json` (podman ok or unavailable, entries waiting, the newest
+  16 orphans); `learning-status` shows it as `container_holds.recovery`, with an owner line
+  when entries wait on podman and for each orphan that could not be stopped.
+  `unresolved_launches` names a container entry by `token` (its own field) and its
+  `bridge_run_id` once admitted. A per-run network must carry the run's labels
+  (`network_not_this_run` otherwise). Not yet: checked workspace removal (design draft 2
+  item 8). Tests: `tests/test_container_recovery.py`.
 - Instance lock. Each driver holds an exclusive `flock` on its own
   `<instance>.lock` for as long as any of its threads may launch or own a child: the
   kernel frees it when the process dies, and a graceful stop frees it only after every
@@ -454,6 +558,10 @@ of the run can still be running:
   tombstone for 24 hours, through which `run.describe`, `learning-run-status`
   (`reason_code: run_lost`, `terminal_state: abandoned`, `outcome: unknown`,
   `capacity_state` `released` or `held`) and the abandonment command report the run.
+  While a new host is still warming up (its first listing of earlier leases or its first sweep is not
+  collected yet) it cannot tell a run of an earlier host from an unknown handle: `run.describe` and
+  `learning-run-status` then answer `run_settling` (`ready: false`, no `terminal_state`, no `outcome`;
+  "ask again shortly"), never the generic refusal (LRS-1). After warm-up an unknown handle is refused as before. The gate is both conditions (leases listed and first sweep collected) and comes before any fenced or lost entry, so a final answer never changes (LRS-6). The capacity report's `run_slots` also carries `warm_up` {state warming|ready|failing, since_ms, failed_phase listing|sweep|null, last_failure_code (fixed code)}, shown by `learning-status` as `project_service.warm_up` (LRS-7).
 - Graceful stop (SIGTERM, idle stop, update): `serve_project` closes the host, waits for
   its threads, and if they all stopped settles its own runs the same way before freeing
   its instance lock, so a run stopped in any state (claimed but not launched, running,
@@ -564,12 +672,19 @@ sandboxed helper-process stack that an earlier design planned for this calculati
 (`learning_cycle_execution`, `_worker`, `_process`, `_input`) was removed by owner
 decision on 2026-11-13; nothing called it.
 
-Verification and operational QA on the host path. When the CLI reports a recorded
-result (`run.recorded`) it names the result's `host_outcome_digest`; the driver then
-keeps that run's originals (`HostResultContext`: binding, assignment, task, route,
-client capability) in memory, keyed by the digest, for the host class that ran it
-(at most 64, newest kept; lost on a host restart, after which a verifier or QA of an
-earlier run is refused). A task with `verification_for_outcome`:
+Verification and operational QA on the host path. A run's originals (its record
+context: assignment, task, route, the client capability it was prepared with and the
+host class that opened it) are stored by the project writer with the run's lease, in a
+private file beside its result (`project_result_contexts`, slice D1, RS-D draft 2-3):
+verified at host open, bound to the claim at bind, committed with the result and
+associated with the outcome's `host_outcome_digest` in the admission's own transaction.
+Every reader builds the `HostResultContext` (binding, assignment, task, route, client
+capability) from the store, for the host class that ran it, checked against the lease,
+the claim association and the consumed grant (`stored_result_context`,
+`stored_worker_context`), so a successor service of the same runtime serves them after
+a restart; `run.recorded` is only a hint. A run recorded before format 18 is adopted as
+`legacy_no_context` and refused plainly (`history_worker_context_unavailable`). A task
+with `verification_for_outcome`:
 
 - routes even though the legacy ledger does not know the outcome (the open binds it);
 - opens with the kept worker: the project host's `history.open_scope` authorizer adds
@@ -577,16 +692,17 @@ earlier run is refused). A task with `verification_for_outcome`:
   consumed grant (`current_input_reference`), and the CLI fetches the same snapshot
   through `history.worker_input` (host role, kept runs only, 80 KiB reply) for the
   account open, whose worker digest must match the project's proof;
-- registers with the kept worker, and the driver reads the worker's terminal and result
-  through its own project API on its helper thread (as the run's host class), checks
+- registers, and the driver reads the stored worker (`history.worker_input`), its
+  terminal and result through its own project API on its helper thread (as the run's
+  host class), checks
   the body against the terminal and hands it to preparation, which places it at
   `.orchestration-input/worker-result.json`; open provenance names the worker digest.
 
 `learning-run-operational-checks` and `learning-record-operational-qa` use the project
 API when the host recorded both runs: `history.qa_scope`, `history.issue_qa_checks`
 (the fixed check report travels as the request's protected context) and
-`history.commit_qa`, authorized from the two kept originals. The record command checks
-the evaluator and verifier assignment and result files against the kept originals and
+`history.commit_qa`, authorized from the two stored originals. The record command checks
+the evaluator and verifier assignment and result files against the stored originals and
 the stored results. Outcomes the host did not record keep the legacy ledger path.
 Tests: `HostVerificationTests` (Codex verifier) and `HostClaudeVerificationTests`
 (Claude verifier for a Claude primary): worker, verifier with its exact worker result,
@@ -621,9 +737,9 @@ registration (the account run then stays open until reconciled). Neither is
 reachable by a session that can only read the state root.
 
 A project host stops on a signal, after
-fifteen idle minutes with no run held (twelve hours while it keeps recorded runs for
-their verifiers), or when its hint or lock file is removed, in which case it first
-finishes any run it holds;
+fifteen idle minutes with no run held (since D1 it keeps nothing a recorded run's
+verifier or QA needs: those originals are in the project store), or when its hint or
+lock file is removed, in which case it first finishes any run it holds;
 there is no drain command or status command for it yet, and a host that fails
 leaves no diagnostic because its output is discarded.
 
@@ -803,8 +919,9 @@ against a pinned real client without keeping anything a child said:
   the path that reads the child's output and applies the fences does no file work for the
   record (`test_no_file_is_touched_while_the_child_runs`). What it does add there is the
   small, bounded work of shaping each frame. A failure switches recording off for that run
-  and is not reported. Nothing is recorded once the folder holds 512 files or 256 MiB: the
-  owner deletes records to make room. That limit is checked when a run starts, so runs that
+  and is not reported. The folder stays under 512 files and 256 MiB: when a run starts, the
+  oldest records COCOLO wrote are removed to make room (anything else in the folder is never
+  touched; if it alone fills the folder, nothing is recorded). That limit is checked when a run starts, so runs that
   are under way together can pass it by their own records (16 MiB each at most, and the
   number of runs is capped), and each holds up to that much in memory until it ends. A
   service that is killed mid-run leaves no record of that run.
@@ -961,8 +1078,9 @@ project store". The ledger keeps its schema; the only ledger addition is one
 recorded. Account data does not move.
 
 Left for a later release: the candidate pipeline on the project store (0.4.0),
-deleting expired records from project stores (retention is applied at read), keeping a
-recorded run's originals across a service restart, and measurements under real load.
+deleting expired records from project stores (retention is applied at read), and
+measurements under real load. (A recorded run's originals are kept across a service
+restart since slice D1.)
 
 ## Historical learning corpus staging (uninstalled source)
 
@@ -1088,6 +1206,22 @@ identity check; feedback alone carries its own authority, the owner's signature.
   One checkpoint per orchestration is read to find it; rows are selected by SQLite and
   only that orchestration's (at most 512 runs, else refused) are parsed in the service.
   The SQLite scans themselves still grow with the project's history.
+- `learning-usage-report` (RT-8): read-only, never through a service. It maps the project root to its id in
+  the ledger's `projects` table and opens the project's `history.sqlite3` and the ledger read-only
+  (`project_usage_report.py`; with write-ahead files present it shares the database with its writer, without
+  them it opens it immutable so nothing is created). A run is the `provider_usage` or `observation_unavailable`
+  record its terminal wrote, counted once at that record's time, joined to its first host `outcome` for model,
+  effort, role and status; a run with no usage record (an earlier version's native child) is counted by its
+  outcome. Run ids are `external_id(digest key, "run", run id)`. At most `--limit` runs (default 500, at most
+  2,000) and a window of at most 366 days; a larger window is cut and says `truncated`.
+  S44a: a relative project root (`.`) is read from the folder the command runs in, every path check unchanged; a root that
+  fails a check is refused `usage_project_root_invalid`, a state or key that fails one `usage_state_unavailable`. The reply
+  also carries `window_data` (`has_runs`, `no_runs_in_window`, `before_usage_recorded` or `nothing_recorded`, with the first and
+  last recorded times and a plain note) and `usage_coverage` (per provider `reported`, `partial`, `not_reported` or `no_runs`;
+  the primary session's own tokens are always `not_reported`). `learning-status` adds `run_usage` (the same coverage for the last
+  7 days, from the project's running service through the read-only operation `history.run_usage`; `state: "unavailable"` with
+  `child_runs: null` and a plain reason when the service is not running; the status client opens no database). `ingestion.coverage.root_usage` and `child_usage` stay false: they describe the Codex
+  hook surface, which carries no token counts, not the runs.
 - `learning-expire` still applies the ledger's retention to the ledger. Separately, the
   collector's `sweep_event_retention` runs every `WORKER_RESULT_SWEEP_SECONDS`: up to
   `EVENT_SWEEP_BATCH` (500) expired hook and app-server events that no record link
@@ -1329,8 +1463,10 @@ real admitted-child concurrency, native enrollment or installed release readines
 
 For a trusted Codex run, `learning-record-host-result` now requires `--route`
 with the same original route used by open and dispatch. It reads one
-`dispatch.status` using the original assignment/task/route/parent digest; it
-never submits or launches an execution. Missing runtime, route or published
+`history.result_reference` (D1: the attempt's binding and published terminal, from
+the project store, authorized by the stored context's host class and the original
+assignment/task/route/parent digest), so it works after the service that ran the
+child has stopped; it never submits or launches an execution. Missing runtime, route or published
 terminal refuses without a ledger or collector fallback. Claude and legacy
 telemetry recording still require migration.
 
@@ -2346,8 +2482,10 @@ for its own host class answers `control_attempt_not_found`; the driver remembers
 last 256 retired runs for that. So a long-lived service is no longer limited to four
 children in its lifetime: four is the number of attempts it tracks at once (found in
 the third real trial; `test_a_project_keeps_more_than_four_recorded_results`,
-`ManyRunsTests`). A run that failed after its claim was admitted, or one released
-but not yet recorded (up to the hour's record grace), still holds its slot.
+`ManyRunsTests`). A run that failed after its claim was admitted still holds its slot;
+one released keeps only its dispatch view, for the dispatching command, until it is
+recorded or for `PUBLISHED_VIEW_SECONDS` (two minutes; D1 removed the hour's record
+grace, since the record reads the store).
 
 Trusted startup/activity/status/cancel calls use the complete immutable binding.
 Wrong scope/process/thread refuses before clock sampling. Tick and pending-stop

@@ -1,0 +1,11 @@
+.......packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py:160: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x106fcb100>
+  def _fenced(self, sql, operation):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py:160: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x106af7100>
+  def _fenced(self, sql, operation):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..
+----------------------------------------------------------------------
+Ran 9 tests in 0.381s
+
+OK

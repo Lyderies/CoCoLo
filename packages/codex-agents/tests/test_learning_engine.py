@@ -1637,6 +1637,31 @@ class VerifiedQaTests(unittest.TestCase):
         self.assertTrue(record["accepted"])
         self.assertEqual("not-ready", record["semantic_verdict"])
 
+    def test_or1_qa_refuses_to_copy_a_stored_inconsistent_axes_into_a_new_outcome(self) -> None:
+        """A stored host outcome may hold the old `inconsistent_axes` code and is still read; the NEW
+        verified or operational outcome would copy it, which no new outcome may carry, so QA refuses."""
+        for builder, operational in ((build_verified_qa_records, False), (build_operational_qa_records, True)):
+            inputs = verified_qa_inputs()
+            if operational:
+                inputs.pop("evaluation_assignment")
+                inputs.pop("evaluation_case")
+                inputs["host_outcome"]["evaluation_candidate_digest"] = None
+                inputs["host_outcome"]["evaluation_case_digest"] = None
+            inputs["host_outcome"].update(repairs=1, repair_reason_codes=["inconsistent_axes"])
+            inputs["verifier_assignment"]["context"] = [content_digest(inputs["host_outcome"])]
+            inputs["verifier_host_outcome"]["evidence_digests"] = sorted({
+                keyed_digest(DIGEST_KEY, canonical_json(inputs["verifier_assignment"])),
+                keyed_digest(DIGEST_KEY, canonical_json(inputs["verifier_result"])),
+            })
+            with self.subTest(operational=operational), self.assertRaisesRegex(ContractError, "repair reason codes"):
+                builder(**inputs)
+
+    def test_or1_analysis_and_case_readers_still_read_a_stored_legacy_outcome(self) -> None:
+        from codex_agents.learning_analysis import analyze_outcomes
+        record = outcome()
+        record.update(repairs=1, repair_reason_codes=["inconsistent_axes"])
+        analyze_outcomes([record], as_of_ms=2000, max_age_ms=10**9)
+
     def test_legacy_qa_evidence_without_separated_axes_remains_valid(self) -> None:
         qa, _ = build_verified_qa_records(**verified_qa_inputs())
         legacy = {
@@ -1720,6 +1745,65 @@ class OutcomeAndCaseTests(unittest.TestCase):
         self.assertNotIn("secret command", encoded)
         self.assertNotIn("secret output", encoded)
         self.assertEqual(1, record["required_criteria_passed"])
+
+    def test_or2_host_outcome_passes_the_validator_for_every_code_a_rejected_attempt_can_carry(self) -> None:
+        """OR-2: the host builds an outcome from each rejected attempt's reason code; its own validator
+        must accept every one. A rejected attempt carries a ResultContractError code (receipt issue)."""
+        from codex_agents.contracts import (
+            RESULT_DIAGNOSTIC_REASON_CODES, RESULT_VALIDATION_REASON_CODES, ResultContractError,
+        )
+        from codex_agents.learning_engine import build_host_result_records
+        from tests.learning_support import champion_configuration, routing_fields
+
+        assigned = assignment()
+        task = {
+            "id": "task-1", "objective": "Read one fixture", "family": "research",
+            "complexity": "medium", "risk": "low", "meaningful": True, **routing_fields(),
+            "deterministic_validation": True, "independent_parts": 1,
+            "parallel_safe": False, "failed_attempts": 0, "failure_events": [],
+        }
+        configuration = {
+            **champion_configuration(), "model": assigned["model"], "effort": assigned["effort"],
+            "role": assigned["role"], "client_digest": content_digest(END_TO_END_CAPABILITY),
+        }
+        # The only source of an attempt's code is ResultContractError, which refuses any other.
+        for diagnostic_only in sorted(RESULT_DIAGNOSTIC_REASON_CODES - RESULT_VALIDATION_REASON_CODES):
+            with self.assertRaises(ValueError):
+                ResultContractError(diagnostic_only, "x")
+        for code in sorted(RESULT_VALIDATION_REASON_CODES):
+            with self.subTest(code=code):
+                _, record, _ = build_host_result_records(
+                    assignment=assigned, task=task, result=result(),
+                    observation={"run_id": "run_1", "client_version": "codex-host-v1", "result_attempts": [
+                        {"status": "rejected", "reason_code": code, "receipt_id": "rpr_" + "a" * 48},
+                        {"status": "accepted", "reason_code": None, "receipt_id": None}]},
+                    host_evidence={"run_id": "run_1", "coverage": "lifecycle_partial", "usage": full_usage(),
+                                   "usage_source": "host_observed", "observed_at_ms": 1000, "no_progress_events": 0},
+                    execution_configuration=configuration, digest_key=DIGEST_KEY,
+                    client_capability=END_TO_END_CAPABILITY,
+                )
+                self.assertEqual([code], record["repair_reason_codes"])
+                self.assertEqual(record, validate_learning_record(record))
+
+    def test_or1_build_outcome_refuses_codes_a_rejected_attempt_cannot_carry(self) -> None:
+        for code in ("inconsistent_axes", "contract_validation_failed"):
+            with self.subTest(code=code), self.assertRaisesRegex(ContractError, "repair reason codes"):
+                self._build(repairs=1, repair_reason_codes=[code])
+        self.assertEqual(["missing_evidence"], self._build(repairs=1, repair_reason_codes=["missing_evidence"])["repair_reason_codes"])
+
+    @staticmethod
+    def _build(**changes: object) -> dict:
+        arguments = dict(
+            assignment=assignment(), result=result(), digest_key=DIGEST_KEY, run_id="run_observed",
+            task_slice="coding-low-low", fixture_digest=DIGEST_A, topology="delegated", max_parallel=1,
+            verification_required=True, verifier_digest=DIGEST_A, bounds_digest=DIGEST_B, package_digest=DIGEST_A,
+            policy_digest=DIGEST_B, agent_digest=DIGEST_C, skill_digests=[DIGEST_A], prompt_digest=DIGEST_B,
+            client_digest=DIGEST_C, deterministic_pass=True, security_pass=True, quality_score=1.0, repairs=0,
+            repair_reason_codes=[], delegation_overhead_tokens=10, no_progress_events=0, terminal_failure=False,
+            verifier_disagreement=False, accepted=True, coverage="end_to_end_complete", workflow_usage=full_usage(),
+            observed_at_ms=1000,
+        )
+        return build_outcome(**{**arguments, **changes})
 
     def test_accepted_outcome_cannot_hide_a_failed_gate(self) -> None:
         with self.assertRaisesRegex(ContractError, "failed hard gate"):
@@ -2245,7 +2329,7 @@ class InstalledEvidenceTests(unittest.TestCase):
                 "objective": "Research one bounded question",
                 "family": "research",
                 "complexity": "medium",
-                "risk": "low",
+                "risk": "high",
                 **routing_fields(acceptance_strength="independent_judgment"),
                 "meaningful": True,
                 "deterministic_validation": False,

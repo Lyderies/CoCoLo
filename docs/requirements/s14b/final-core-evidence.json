@@ -1,0 +1,289 @@
+{
+ "elapsed_seconds": 91.13964533398394,
+ "jobs": 16,
+ "job_seconds": 138.63086237292737,
+ "metadata_errors": [],
+ "budget_failures": [
+  {
+   "budget": 60.0,
+   "fragments": 1,
+   "layer": "scenario",
+   "module": "codex:tests.test_run_retention",
+   "seconds": 91.12489954102784,
+   "stage": "integration"
+  }
+ ],
+ "workers": [
+  {
+   "unit": "tests.test_learning_chunk_upgrade",
+   "names": [
+    "tests.test_learning_chunk_upgrade"
+   ],
+   "returncode": 0,
+   "seconds": 0.5979400840587914,
+   "tests": 5,
+   "outcomes": {
+    "codex:tests.test_learning_chunk_upgrade.LearningChunkUpgradeTests.test_interrupted_upgrade_rolls_back_then_exact_replay_backfills_only_membership": "passed",
+    "codex:tests.test_learning_chunk_upgrade.LearningChunkUpgradeTests.test_normal_open_refuses_old_staging_without_changing_it": "passed",
+    "codex:tests.test_learning_chunk_upgrade.LearningChunkUpgradeTests.test_old_receipt_cannot_backfill_membership_over_changed_stored_companions": "passed",
+    "codex:tests.test_learning_chunk_upgrade.LearningChunkUpgradeTests.test_revoked_known_replay_rolls_back_new_membership_without_touching_original_rows": "passed",
+    "codex:tests.test_learning_chunk_upgrade.LearningChunkUpgradeTests.test_unknown_old_trigger_refuses_before_any_upgrade_write": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_learning_qa_upgrade",
+   "names": [
+    "tests.test_learning_qa_upgrade"
+   ],
+   "returncode": 0,
+   "seconds": 0.6607163338921964,
+   "tests": 3,
+   "outcomes": {
+    "codex:tests.test_learning_qa_upgrade.LearningQACorpusUpgradeTests.test_explicit_upgrade_rolls_back_failure_then_preserves_every_original_row": "passed",
+    "codex:tests.test_learning_qa_upgrade.LearningQACorpusUpgradeTests.test_normal_open_cannot_upgrade_staged_v12_data": "passed",
+    "codex:tests.test_learning_qa_upgrade.LearningQACorpusUpgradeTests.test_unknown_v12_trigger_refuses_before_any_upgrade_write": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_project_learning_corpus",
+   "names": [
+    "tests.test_project_learning_corpus"
+   ],
+   "returncode": 0,
+   "seconds": 1.66103091603145,
+   "tests": 17,
+   "outcomes": {
+    "codex:tests.test_project_learning_corpus.LearningCorpusUpgradeTests.test_v10_upgrade_is_explicit_preserves_existing_bytes_and_rolls_back_interruption": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_bounds_and_noncanonical_records_fail_without_writes": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_changed_stored_receipt_cannot_return_extra_or_unbounded_metadata": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_empty_staging_remains_unavailable_and_scope_capacity_is_finite": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_exact_chunk_replay_is_identical_and_changed_replay_conflicts": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_foreign_thread_cannot_stage_or_read": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_input_mutation_during_authorization_cannot_change_captured_record_bytes": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_missing_reordered_duplicate_and_unbound_signature_chunks_are_refused": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_normal_owner_and_generic_append_cannot_import_controlled_records": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_original_record_bytes_metadata_and_signature_survive_stage_and_reopen": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_reads_are_bounded_and_resume_by_original_source_sequence": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_resumed_chunks_preserve_order_and_final_manifest_chain": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_revocation_after_row_writes_rolls_back_rows_counters_and_receipt": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_wrong_final_chain_never_becomes_a_complete_or_ready_corpus": "passed",
+    "codex:tests.test_project_learning_corpus.ProjectLearningCorpusTests.test_wrong_project_manifest_or_changed_identity_cannot_resume": "passed",
+    "codex:tests.test_project_learning_corpus.SignedLegacyLearningStagingTests.test_actual_signed_owner_feedback_and_all_selected_record_bytes_survive_closed_source_copy": "passed",
+    "codex:tests.test_project_learning_corpus.SignedLegacyLearningStagingTests.test_current_and_legacy_signed_formal_qa_keep_exact_bytes_without_activation": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_project_history",
+   "names": [
+    "tests.test_project_history"
+   ],
+   "returncode": 0,
+   "seconds": 1.7070783750386909,
+   "tests": 35,
+   "outcomes": {
+    "codex:tests.test_project_history.ProjectHistoryTests.test_another_project_commits_during_project_a_writer_stall": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_boolean_float_versions_and_numeric_overflow_are_fixed_rejections": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_canonical_bytes_and_first_ingest_metadata_survive_retry_and_reopen": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_corrupted_binding_or_record_returns_fixed_failure_without_chained_input": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_corrupted_observation_aggregate_cannot_escape_or_append": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_database_failure_returns_only_a_fixed_code_without_exception_context": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_delivery_pages_bound_encoded_bytes_and_allow_continuation": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_forked_process_cannot_use_or_close_the_inherited_writer": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_generic_outcome_append_cannot_claim_a_verified_disposition_from_any_source": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_generic_unverified_outcome_remains_byte_exact_and_replayable": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_incompatible_version_application_and_columns_are_not_opened_as_history": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_integer_and_text_blob_storage_cannot_allocate_or_escape_during_replay": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_invalid_noncanonical_and_unsupported_records_create_no_rows": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_lock_and_sidecar_aliases_are_refused_before_sqlite_open": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_missing_or_corrupted_identity_counters_fail_with_fixed_reasons": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_nested_oversized_record_failure_keeps_the_unavailable_reason": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_one_attempt_and_claim_digest_cannot_acquire_a_second_terminal_binding": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_or1_a_stored_legacy_outcome_is_read_but_the_insertion_helper_stays_strict": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_or1_generic_append_refuses_repair_codes_no_new_outcome_may_carry": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_other_process_cannot_acquire_the_same_writer": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_owner_affinity_and_lifetime_writer_lock": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_process_death_rolls_back_uncommitted_terminal_and_preserves_committed_outbox": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_recycled_numeric_thread_identity_cannot_read_or_close_a_writer": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_replaceable_ancestor_is_refused_before_sqlite_open": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_sequence_exhaustion_does_not_wrap_or_leave_terminal_rows": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_sqlite_length_limit_bounds_oversized_corrupt_rows_before_delivery": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_supported_run_records_preserve_their_bytes": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_terminal_record_and_outbox_are_atomic_and_exactly_idempotent": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_unexpected_schema_is_refused_without_running_its_triggers": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_unfenced_completion_keeps_its_unknown_forced_terminal_state": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_unsupported_record_is_rejected_before_generic_validation": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_unsupported_sqlite_limit_binding_is_refused_before_opening_files": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_verified_receipt_ack_does_not_allow_changed_binding_or_receipt": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_wrong_project_and_unsafe_database_aliases_fail_closed": "passed",
+    "codex:tests.test_project_history.ProjectHistoryTests.test_wrong_project_or_run_and_reused_record_cannot_create_another_delivery": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_legacy_capacity_upgrade",
+   "names": [
+    "tests.test_legacy_capacity_upgrade"
+   ],
+   "returncode": 0,
+   "seconds": 3.0973301249323413,
+   "tests": 12,
+   "outcomes": {
+    "codex:tests.test_legacy_capacity_upgrade.EarlierVersionRunsStatusTests.test_the_collector_reports_it_with_the_learning_move_state": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.EarlierVersionRunsStatusTests.test_the_ledger_says_how_many_earlier_runs_hold_slots_and_when_the_last_stops": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.EarlierVersionRunsStatusTests.test_with_no_earlier_runs_holding_a_slot_there_is_no_time": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.LegacyCapacityUpgradeTests.test_RS_A_F8_a_recent_earlier_run_has_no_finite_eligible_time": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.LegacyCapacityUpgradeTests.test_a_recent_run_from_an_earlier_version_still_counts_until_it_cannot_be_running": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.LegacyCapacityUpgradeTests.test_bridged_and_native_runs_from_an_earlier_version_count_for_a_day": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.LegacyCapacityUpgradeTests.test_old_runs_from_an_earlier_version_neither_hold_capacity_nor_block_the_move": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.LegacyCapacityUpgradeTests.test_replacing_the_collector_does_not_wait_for_runs_an_earlier_version_left": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.LegacyCapacityUpgradeTests.test_the_bound_is_a_cautious_day": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.UpgradePhaseTests.test_S3_P3a_P3b_an_upgrade_reports_each_backup_and_the_upgrade": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.UpgradePhaseTests.test_S3_P3a_nothing_extra_is_written_unless_asked": "passed",
+    "codex:tests.test_legacy_capacity_upgrade.UpgradePhaseTests.test_S3_P4_a_failing_standard_error_never_stops_the_upgrade": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_learning_source_image_legacy",
+   "names": [
+    "tests.test_learning_source_image_legacy"
+   ],
+   "returncode": 0,
+   "seconds": 4.452296332921833,
+   "tests": 7,
+   "outcomes": {
+    "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_central_original_custody_change_refuses_despite_valid_backup_and_same_staged_subsets": "passed",
+    "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_complete_original_image_matches_existing_owner_and_stays_read_only": "passed",
+    "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_existing_unicode_backup_identifiers_keep_their_original_file_and_body": "passed",
+    "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_only_the_exact_self_registration_is_excluded": "passed",
+    "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_other_project_history_changes_do_not_change_this_source_identity": "passed",
+    "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_real_complete_source_identity_binds_record_signature_and_qa_staging": "passed",
+    "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_wrong_existing_target_key_domain_refuses_without_staging_or_key_changes": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_learning_source_image",
+   "names": [
+    "tests.test_learning_source_image"
+   ],
+   "returncode": 0,
+   "seconds": 5.176178790978156,
+   "tests": 33,
+   "outcomes": {
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_added_deleted_and_changed_central_rows_refuse": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_an_extra_column_on_an_allowed_extra_table_refuses": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_arbitrary_registered_path_is_not_followed": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_boolean_counts_and_duplicate_original_keys_refuse": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_callback_budget_bounds_global_pending_scan_and_preserves_owner": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_cancellation_closes_snapshot_cursors_and_backup_descriptor": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_changed_primary_key_is_not_inferred_from_columns": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_collector_reader_and_outer_transaction_refuse_without_taking_over": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_deadline_failure_preserves_settings_without_opening_snapshot": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_default_owner_refuses_before_any_key_read": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_digest_corruption_refuses": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_empty_project_still_queries_all_thirty_tables_and_preserves_settings": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_expiry_and_backward_clock_are_not_refreshed": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_foreign_progress_handler_is_preserved_and_not_invoked": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_forged_limits_and_bad_identifiers_are_fixed_errors": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_generated_columns_on_wake_and_projects_refuse": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_global_pending_run_in_another_project_blocks_without_key_io": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_global_unreleased_unknown_capacity_is_not_adopted_or_released": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_null_expiry_keeps_original_registry_meaning": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_original_manifest_versions_require_exact_integers": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_original_row_order_unicode_and_whitespace_are_preserved": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_oversized_sparse_backup_refuses_before_read": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_read_value_budget_failure_restores_settings_and_rolls_back": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_reentrant_clock_mutation_cannot_receive_an_image": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_registry_types_and_oversized_path_refuse_before_conversion": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_replaced_backup_and_changed_existing_key_refuse": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_replaced_writer_lock_refuses": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_rows_and_bytes_use_keyset_pages_without_losing_unconsumed_rows": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_schema_version_columns_and_primary_key_are_exact": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_symlink_hardlink_fifo_and_wrong_mode_refuse": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_unknown_partition_table_and_inactive_project_refuse": "passed",
+    "codex:tests.test_learning_source_image.LearningSourceImageTests.test_wrong_pid_thread_connection_and_closed_owner_refuse": "passed",
+    "codex:tests.test_learning_source_image.ProbeSchemaSourceMetadataTests.test_PC4_schema16_source_metadata_is_supported": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_learning_source_transfer",
+   "names": [
+    "tests.test_learning_source_transfer"
+   ],
+   "returncode": 0,
+   "seconds": 7.5060289580142125,
+   "tests": 13,
+   "outcomes": {
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_canonical_image_capacity_refuses_before_any_target_import": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_capacity_remains_bounded_by_original_import_slots": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_changed_source_refuses_and_preserves_prior_inert_image": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_complete_original_rows_signatures_and_qa_survive_restart_and_exact_replay": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_different_key_default_owner_outer_transaction_and_foreign_thread_refuse": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_exact_schema14_upgrade_preserves_rows_and_does_not_infer_missing_image": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_full_original_qa_and_host_check_rows_are_not_replaced_by_subsets": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_image_corruption_is_not_accepted_even_on_finished_replay": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_interrupted_transfer_resumes_exact_original_chunks_after_restart": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_many_original_records_use_bounded_archive_and_original_staging_pages": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_source_key_and_file_reads_never_occur_inside_target_transaction": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_source_reentrant_change_leaves_partial_staging_without_activation": "passed",
+    "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_unknown_schema14_trigger_refuses_without_changing_original_rows": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_run_retention_integration",
+   "names": [
+    "tests.test_run_retention_integration"
+   ],
+   "returncode": 1,
+   "seconds": 22.647362916031852,
+   "tests": 4,
+   "outcomes": {
+    "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_collector_sweep_sql_runs_on_the_E1b_owner_thread": "passed",
+    "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_pinned_ledger_reaches_idle_without_delaying_owner_requests": "passed",
+    "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary": "failed",
+    "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_summary_survives_original_source_image_and_learning_transfer": "passed"
+   }
+  },
+  {
+   "unit": "tests.test_run_retention",
+   "names": [
+    "tests.test_run_retention"
+   ],
+   "returncode": 0,
+   "seconds": 91.12489954102784,
+   "tests": 25,
+   "outcomes": {
+    "codex:tests.test_run_retention.RunRetentionTests.test_backup_bytes_exclude_index_and_restored_rows_rebuild_answers": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_collector_maintenance_contains_failure_and_is_the_only_automatic_entry": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_completion_replay_fence_pins_expired_outcome_and_its_event": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_cutoff_summary_counts_and_old_detail_answer": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_equal_prefixes_never_return_another_members_summary": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_failed_fast_continuation_stops_and_batch_ceiling_never_limits_a_run": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_five_year_projection_at_double_peak_includes_every_family": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_full_outcomes_and_attested_and_file_backed_rows_stay": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_historical_lookup_budget_failure_does_not_invent_membership": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_linked_group_rolls_back_together_and_reconsiders_released_protection": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_live_windows_Claude_bootstrap_and_latest_reading_preserve_admission_answers": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_mistyped_content_digest_is_not_found": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_old_detail_resolves_its_own_summary_after_other_batches": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_oversize_linked_group_stays_atomic_without_starving_later_work": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_past_batch_limit_and_protected_prefix_drain_without_starvation": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_protected_tail_reaches_idle_and_does_not_wrap_on_short_pages": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_protection_is_checked_inside_write_transaction_and_propagates": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_released_capacity_history_does_not_exhaust_retention_work_budget": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_reopen_upgrade_rebuild_is_paged_resumable_and_lookup_is_safe": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_sql_work_is_bounded_even_when_every_row_is_protected": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_summary_contract_is_closed_and_old_vocabulary_remains_readable": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_summary_failure_rolls_back_and_readers_and_transactions_skip": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_summary_stays_readable_when_live_writer_vocabulary_shrinks": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_typed_history_and_years_of_summaries_use_indexed_membership": "passed",
+    "codex:tests.test_run_retention.RunRetentionTests.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer": "passed"
+   }
+  }
+ ],
+ "requirements": {
+  "S14b-1": "failed",
+  "S14b-2": "failed",
+  "S14b-3": "passed",
+  "S14b-4": "passed",
+  "S14b-5": "failed"
+ }
+}

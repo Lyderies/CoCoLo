@@ -221,7 +221,7 @@ def _installed_managed_files(root: Path) -> tuple[list[str], dict[str, bytes]]:
     manifest_raw = _read_managed_bytes(root, manifest_relative)
     try:
         manifest = json.loads(manifest_raw)
-    except (UnicodeError, json.JSONDecodeError) as exc:
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("installed package manifest is invalid") from exc
     if (
         not isinstance(manifest, dict)
@@ -2126,6 +2126,145 @@ def _committed_and_clean(git_executable: str, root: Path, commit: str, relative:
         os.close(descriptor)
 
 
+_QA_FINDING_LINE = re.compile(
+    rb"([^\n\r]{1,512}?):(\d{1,9}): "
+    rb"(home-path|hostname|email|denylisted-term|non-noreply-email|non-utf8-name)"
+)
+MAX_QA_FINDING_RECORDS = 50
+MAX_QA_FINDING_BYTES = 64 * 1024
+QA_REDACTED = "[redacted]"
+# The one file list the identifier scanner uses, with the same flags as scripts/check_identifiers.py
+# (a test keeps the two equal). QA cannot start git inside its sandbox, so the host runs this first.
+QA_MANIFEST_LIST_ARGS = ("ls-files", "-z", "--cached", "--others", "--exclude-per-directory=.gitignore")
+# Ignore rules are matched case-sensitively whatever the repository's own config says, as in the scanner.
+QA_MANIFEST_CONFIG = ("core.ignorecase=false",)
+MAX_QA_MANIFEST_BYTES = 16 * 1_048_576
+MAX_QA_DENYLIST_BYTES = 1_048_576
+QA_MANIFEST_ENVIRONMENT = "AO_QA_FILE_MANIFEST"
+QA_DENYLIST_ENVIRONMENT = "AO_IDENTIFIER_DENYLIST"
+QA_INPUTS_UNAVAILABLE = "security check inputs (git file list, private denylist) are unavailable"
+QA_DEFAULT_DENYLIST = (
+    Path("~/.config/codex-claude-agent-orchestration/identifier-denylist.txt")
+)
+_QA_SAFE_PATH = re.compile(r"[A-Za-z0-9._/-]{1,512}")
+
+
+def _qa_file_manifest(root: Path) -> bytes | None:
+    """git's own list of the files a scan covers, NUL-separated; None when git cannot produce it.
+
+    Runs outside the sandbox before a check starts, so the check scans exactly the files CI scans.
+    The scanner refuses when this is missing, never scanning a smaller set.
+    """
+
+    executable = find_git(untrusted=[root])
+    if executable is None:
+        return None
+    try:
+        if repository_layout_problem(executable, root) is not None:
+            return None
+        completed = run_git(
+            executable, root, *QA_MANIFEST_LIST_ARGS, timeout=60, max_output_bytes=MAX_QA_MANIFEST_BYTES,
+            config=QA_MANIFEST_CONFIG,
+        )
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        return None
+    return completed.stdout if completed.returncode == 0 else None
+
+
+def _qa_denylist_bytes() -> bytes | None:
+    """The owner's private identifier denylist, for the sandbox that cannot read the home folder.
+
+    The file the scanner itself would read: ``$AO_IDENTIFIER_DENYLIST`` or the default. A missing file
+    means no terms (as for the scanner); an unreadable or oversize one is None, so the scanner refuses.
+    """
+
+    configured = os.environ.get(QA_DENYLIST_ENVIRONMENT)
+    path = Path(configured) if configured else QA_DEFAULT_DENYLIST.expanduser()
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_QA_DENYLIST_BYTES + 1)
+    except FileNotFoundError:
+        return b""
+    except OSError:
+        return None
+    return None if len(data) > MAX_QA_DENYLIST_BYTES else data
+
+
+def _qa_denylist_terms(data: bytes) -> tuple[str, ...]:
+    lines = (line.strip() for line in data.decode("utf-8", errors="replace").splitlines())
+    return tuple(line.casefold() for line in lines if line and not line.startswith("#"))
+
+
+def _qa_listed_names(manifest: bytes) -> frozenset[str]:
+    return frozenset(
+        os.fsdecode(name) for name in manifest.split(b"\0") if name and not name.endswith(b"/")
+    )
+
+
+def _qa_write_private(path: Path, data: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(descriptor, view):]
+    finally:
+        os.close(descriptor)
+
+
+def _diagnostic_path(raw: bytes, listed: frozenset[str], denylist: tuple[str, ...]) -> str | None:
+    """The path only when the host can vouch for it: listed by git, a plain alphabet, no value in it."""
+
+    try:
+        name = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if name not in listed or not _QA_SAFE_PATH.fullmatch(name) or name.startswith("/"):
+        return None
+    if ".." in name.split("/"):
+        return None
+    folded = name.casefold()
+    if ".local" in folded or "macbook" in folded or any(term in folded for term in denylist):
+        return None
+    return name
+
+
+def _security_findings(
+    stderr_file: Path, *, listed: frozenset[str], denylist: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Bounded ``{path, line, category}`` records from a scanner's stderr; never any matched value.
+
+    The wrapper is pinned project code, but its output is not trusted. Only lines of the exact shape
+    ``path:line: category`` (category from a closed set) are kept. A path is forwarded only if it is in
+    the host's git file list, uses a plain alphabet, names no host and holds no denylisted term, else it
+    is ``[redacted]``. The line is always 0: the host cannot tell a true line from a number the wrapper
+    chose, and any number up to the file's length is a channel for a value. A final line cut by the read
+    bound is dropped.
+    """
+
+    try:
+        descriptor = os.open(stderr_file, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as handle:
+            data = handle.read(MAX_QA_FINDING_BYTES)
+    except OSError:
+        return []
+    if len(data) >= MAX_QA_FINDING_BYTES:
+        data = data[: data.rfind(b"\n") + 1]
+    records: list[dict[str, Any]] = []
+    for line in data.splitlines():
+        if len(records) >= MAX_QA_FINDING_RECORDS:
+            break
+        match = _QA_FINDING_LINE.fullmatch(line)
+        if match is None:
+            continue
+        path = _diagnostic_path(match.group(1), listed, denylist)
+        records.append({
+            "path": path if path is not None else QA_REDACTED,
+            "line": 0,
+            "category": match.group(3).decode("ascii"),
+        })
+    return records
+
+
 def run_operational_check_suite(
     project_root: Path, *, scratch_root: Path,
     diagnostics: list[dict[str, Any]] | None = None,
@@ -2159,6 +2298,11 @@ def run_operational_check_suite(
         "security_checks": [],
         "observed_at_ms": 0,
     }
+    # Security checks scan what git lists, with the owner's real denylist. The sandbox cannot run git or
+    # read the home folder, so both are read here and handed over read-only (a missing one makes the
+    # scanner refuse instead of scanning less).
+    scan_manifest = _qa_file_manifest(root) if normalized["security_checks"] else None
+    scan_denylist = _qa_denylist_bytes() if normalized["security_checks"] else None
     for group, checks in normalized.items():
         for check in checks:
             status = "failed"
@@ -2166,6 +2310,7 @@ def run_operational_check_suite(
             phase = "snapshot"
             reason_code = None
             process: subprocess.Popen[bytes] | None = None
+            findings: list[dict[str, Any]] = []
             try:
                 temporary = private_directory(scratch_root, "scratch", "qa-")
             except HostPathError as exc:
@@ -2176,8 +2321,20 @@ def run_operational_check_suite(
                 sealed.mkdir(mode=0o700)
                 work.mkdir(mode=0o700)
                 check_environment = {**environment, "TMPDIR": str(work)}
+                if group == "security_checks":
+                    for name, data, variable in (
+                        ("scan-manifest", scan_manifest, QA_MANIFEST_ENVIRONMENT),
+                        ("scan-denylist", scan_denylist, QA_DENYLIST_ENVIRONMENT),
+                    ):
+                        if data is not None:
+                            _qa_write_private(temporary / name, data)
+                            check_environment[variable] = str(temporary / name)
                 guard: _SnapshotGuard | None = None
                 try:
+                    if group == "security_checks" and (scan_manifest is None or scan_denylist is None):
+                        # Never launch a wrapper without both inputs: one that ignores them would pass
+                        # a scan of fewer files, or with fewer terms, than CI runs.
+                        raise ContractError(QA_INPUTS_UNAVAILABLE)
                     effective_argv = [
                         str(work / "pytest")
                         if item == QA_WORK_DIRECTORY_TOKEN else item
@@ -2213,18 +2370,25 @@ def run_operational_check_suite(
                         if check["runtime_libraries"] else None,
                     )
                     phase = "launch"
-                    process = subprocess.Popen(
-                        command,
-                        cwd=root,
-                        env=check_environment,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                        preexec_fn=_qa_resource_limiter(  # noqa: PLW1509
-                            check["timeout_seconds"]
-                        ),
+                    stderr_file = temporary / "stderr"
+                    stderr_descriptor = os.open(
+                        stderr_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
                     )
+                    try:
+                        process = subprocess.Popen(
+                            command,
+                            cwd=root,
+                            env=check_environment,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=stderr_descriptor,
+                            start_new_session=True,
+                            preexec_fn=_qa_resource_limiter(  # noqa: PLW1509
+                                check["timeout_seconds"]
+                            ),
+                        )
+                    finally:
+                        os.close(stderr_descriptor)
                     phase = "execution"
                     status, return_code = _wait_for_qa_process(
                         process,
@@ -2241,6 +2405,7 @@ def run_operational_check_suite(
                         "operational check temporary storage exceeds its bounds": "temporary_storage_limit",
                         "operational check temporary storage is invalid": "temporary_storage_invalid",
                         "operational check temporary storage is unstable": "temporary_storage_unstable",
+                        QA_INPUTS_UNAVAILABLE: "identifier_inputs_unavailable",
                     }.get(str(exc), f"{phase}_rejected")
                 finally:
                     cleanup_error: ContractError | None = None
@@ -2264,6 +2429,12 @@ def run_operational_check_suite(
                         guard.close()
                     if cleanup_error is not None:
                         raise cleanup_error
+                if group == "security_checks" and status == "failed":
+                    findings = _security_findings(
+                        temporary / "stderr",
+                        listed=_qa_listed_names(scan_manifest or b""),
+                        denylist=_qa_denylist_terms(scan_denylist or b""),
+                    )
             finally:
                 remove_private_directory(temporary)
             evidence_digest = content_digest(
@@ -2292,6 +2463,7 @@ def run_operational_check_suite(
                         "passed": "check_passed", "failed": "nonzero_exit",
                         "timeout": "deadline_elapsed",
                     }.get(status, "runner_unavailable"),
+                    **({"findings": findings} if findings else {}),
                 })
             report[group].append(
                 {
@@ -2304,6 +2476,12 @@ def run_operational_check_suite(
     _check_report_digests(report["deterministic_checks"], "deterministic_checks")
     _check_report_digests(report["security_checks"], "security_checks")
     return report
+
+
+def _verdict_class(verdict: str) -> str:
+    """Verdict agreement compares classes: pass and ready are one positive class;
+    every other verdict (ready-with-corrections, not-ready, blocked, ...) is its own."""
+    return "positive" if verdict in {"pass", "ready"} else verdict
 
 
 def build_verified_qa_records(
@@ -2321,8 +2499,8 @@ def build_verified_qa_records(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Derive verified QA from a durable host run and closed check contracts."""
 
-    host = validate_outcome(host_outcome)
-    verifier_host = validate_outcome(verifier_host_outcome)
+    host = validate_outcome(host_outcome, stored=True)
+    verifier_host = validate_outcome(verifier_host_outcome, stored=True)
     assignment_record = validate_evaluation_assignment(evaluation_assignment)
     case = validate_evaluation_case(evaluation_case)
     evaluator = validate_assignment_shape(evaluator_assignment)
@@ -2439,7 +2617,7 @@ def build_verified_qa_records(
     )
     verifier_disagreement = (
         evaluator_complete != verifier_complete
-        or evaluator_verdict != verifier_verdict
+        or _verdict_class(evaluator_verdict) != _verdict_class(verifier_verdict)
         or evaluator_outcomes != verifier_outcomes
         or host.get("semantic_verdict", "pass") != evaluator_verdict
         or verifier_host.get("semantic_verdict", "pass") != verifier_verdict
@@ -2580,6 +2758,38 @@ def build_verified_qa_records(
 
 # Operational QA accepts the routed verifier of either provider: the policy's
 # Codex verification role and its Claude verification role.
+# The only statements a read-only review is expected to make about not running tests.
+# Matched as a whole sentence (case, spacing and final punctuation aside), so a sentence
+# that also asserts anything else is never ignored.
+_EXPECTED_REVIEW_STATEMENTS = frozenset({
+    "tests were not run",
+    "tests were not run: this review is read-only",
+    "tests were not run because this review is read-only",
+    "i did not run the tests",
+    "i did not run any tests",
+    "no tests were run",
+    "tests not run",
+})
+
+
+def _is_expected_review_claim(claim: str) -> bool:
+    """True when every sentence of the claim is an expected 'tests not run' statement."""
+
+    sentences = [
+        " ".join(part.lower().split()).rstrip(" .!")
+        for part in re.split(r"(?<=[.!?])\s+", " ".join(claim.split()))
+    ]
+    sentences = [sentence for sentence in sentences if sentence]
+    return bool(sentences) and all(s in _EXPECTED_REVIEW_STATEMENTS for s in sentences)
+
+
+def _is_review_slice(task_slice: Any) -> bool:
+    """A review task slice has `review` as its operation (fourth) part."""
+
+    parts = task_slice.split("-") if isinstance(task_slice, str) else []
+    return len(parts) >= 4 and parts[3] == "review"
+
+
 OPERATIONAL_VERIFIER_ROLES = frozenset({
     "codex_agents_verification_worker",
     "claude_agents_verification_worker",
@@ -2599,8 +2809,8 @@ def build_operational_qa_records(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Derive routine automatic QA without granting release authority."""
 
-    host = validate_outcome(host_outcome)
-    verifier_host = validate_outcome(verifier_host_outcome)
+    host = validate_outcome(host_outcome, stored=True)
+    verifier_host = validate_outcome(verifier_host_outcome, stored=True)
     evaluator = validate_assignment_shape(evaluator_assignment)
     evaluator_output = validate_result(evaluator_result, assignment=evaluator)
     verifier = validate_assignment_shape(verifier_assignment)
@@ -2661,6 +2871,8 @@ def build_operational_qa_records(
     ):
         raise ContractError("operational verifier is not independently bound")
 
+    review = _is_review_slice(host["task_slice"])
+
     def assessment(result: dict[str, Any]) -> tuple[set[str], bool, str, dict[str, str]]:
         axes = result_axes(result)
         outcomes = {
@@ -2677,6 +2889,18 @@ def build_operational_qa_records(
         positive = axes["semantic_verdict"] in {
             "pass", "ready", "ready-with-corrections"
         }
+        if review:
+            # Judge the review, not the code: only a completed result that answers every
+            # criterion and has no unexpected unverified claim is complete.
+            complete = (
+                axes["execution_state"] == "completed"
+                and set(outcomes) == evaluator_criteria
+                and not [
+                    claim for claim in result["unverified_claims"]
+                    if not _is_expected_review_claim(claim)
+                ]
+            )
+            return passed, complete, axes["semantic_verdict"], outcomes
         complete = (
             axes["execution_state"] == "completed"
             and set(outcomes) == evaluator_criteria
@@ -2693,7 +2917,7 @@ def build_operational_qa_records(
     )
     verifier_disagreement = (
         evaluator_complete != verifier_complete
-        or evaluator_verdict != verifier_verdict
+        or (not review and _verdict_class(evaluator_verdict) != _verdict_class(verifier_verdict))
         or evaluator_outcomes != verifier_outcomes
         or host.get("semantic_verdict", "pass") != evaluator_verdict
         or verifier_host.get("semantic_verdict", "pass") != verifier_verdict
@@ -2808,7 +3032,7 @@ def mine_evaluation_case(
     criteria_digest: str,
     lineage_digest: str,
 ) -> dict[str, Any]:
-    checked = validate_outcome(outcome)
+    checked = validate_outcome(outcome, stored=True)
     record = {
         "schema_version": 1,
         "record_type": "evaluation_case",
@@ -3018,7 +3242,7 @@ def candidate_matches_outcome(
 
     checked_candidate = validate_candidate(candidate)
     checked_outcome = validate_outcome(
-        {key: value for key, value in outcome.items() if not key.startswith("_")}
+        {key: value for key, value in outcome.items() if not key.startswith("_")}, stored=True
     )
     if cohort not in {"champion", "candidate"}:
         return False
@@ -3136,7 +3360,7 @@ def build_evaluation_trial(
     """Derive one immutable comparison trial from a persisted outcome."""
 
     checked_case = validate_evaluation_case(case)
-    checked_outcome = validate_outcome(outcome)
+    checked_outcome = validate_outcome(outcome, stored=True)
     checked_assignment = validate_evaluation_assignment(assignment)
     planned = [
         item for item in checked_assignment["trial_plan"]
@@ -3524,8 +3748,8 @@ def build_canary_report(
             "case_digest", "champion_outcome", "candidate_outcome"
         }:
             raise ContractError("canary case result must use the closed field set")
-        champion = validate_outcome(item["champion_outcome"])
-        candidate = validate_outcome(item["candidate_outcome"])
+        champion = validate_outcome(item["champion_outcome"], stored=True)
+        candidate = validate_outcome(item["candidate_outcome"], stored=True)
         case_digest = item["case_digest"]
         if (
             champion["evaluation_candidate_digest"] != champion_digest
@@ -3595,9 +3819,11 @@ OWNER_GRANT_REQUEST_FIELDS = {
 class OwnerGrantAuthority:
     """Verify detached owner signatures using public keys only."""
 
-    def __init__(self, allowed_signers: Path, *, signer_line: bytes | None = None) -> None:
+    def __init__(self, allowed_signers: Path, *, signer_line: bytes | None = None,
+                 raise_verifier_failures: bool = False) -> None:
         self.allowed_signers = allowed_signers
         self.signer_line = signer_line
+        self.raise_verifier_failures = raise_verifier_failures
         if allowed_signers.is_symlink() or not allowed_signers.is_file():
             raise ContractError("owner allowed-signers file is unavailable")
 
@@ -3699,7 +3925,7 @@ class OwnerGrantAuthority:
                 or executable_stat.st_uid != 0
                 or executable_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
             ):
-                return False
+                raise OSError("owner signature verifier executable is unsafe")
             for parent in (executable.parent, executable.parent.parent):
                 parent_stat = parent.lstat()
                 if (
@@ -3708,7 +3934,7 @@ class OwnerGrantAuthority:
                     or parent_stat.st_uid != 0
                     or parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
                 ):
-                    return False
+                    raise OSError("owner signature verifier parent is unsafe")
             with tempfile.NamedTemporaryFile(
                 dir=self.allowed_signers.parent, prefix="owner-signature-", delete=False
             ) as handle:
@@ -3731,13 +3957,41 @@ class OwnerGrantAuthority:
                     "-s", str(signature_path),
                 ],
                 input=payload,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if self.raise_verifier_failures else subprocess.DEVNULL,
+                stderr=subprocess.PIPE if self.raise_verifier_failures else subprocess.DEVNULL,
                 timeout=5,
                 check=False,
             )
-            return completed.returncode == 0
+            if completed.returncode == 0:
+                return True
+            if not self.raise_verifier_failures:
+                return False
+            # Wrong-key rejection can have empty stderr. Otherwise accept only
+            # exact deterministic lines observed from ssh-keygen; any unknown
+            # line (including resource or I/O failures) leaves the row retryable.
+            signature_diagnostics = {
+                b"Couldn't parse signature: missing footer",
+                b"Couldn't parse signature: missing header",
+                b"sig_verify: sshsig_armor: invalid format",
+                b"sig_verify: sshsig_armor: incomplete message",
+                b"sshsig_dearmor: decode base64: invalid format",
+                b"Couldn't verify signature: invalid format",
+                b"sshsig_peek_hashalg: parse signature object: incomplete message",
+                b"Couldn't verify signature: namespace does not match",
+                b"Signature verification failed: incorrect signature",
+            }
+            if (completed.returncode == 255
+                    and completed.stdout in (b"Could not verify signature.",
+                                             b"Could not verify signature.\n",
+                                             b"Could not verify signature.\r\n")
+                    and all(line in signature_diagnostics for line in completed.stderr.splitlines())):
+                return False
+            raise OSError("owner signature verifier did not return a definitive verdict")
         except (OSError, subprocess.SubprocessError):
+            # Maintenance must distinguish a definitive invalid signature from
+            # an unavailable verifier before caching a negative verdict.
+            if self.raise_verifier_failures:
+                raise
             return False
         finally:
             if "signature_path" in locals():

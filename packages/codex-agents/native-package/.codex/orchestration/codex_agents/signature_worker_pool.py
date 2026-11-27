@@ -13,6 +13,7 @@ import queue
 import threading
 import time
 
+from . import lane_health
 from .signature_input_wire import SignatureWireLimits
 from .signature_job_intake import SignatureJobIntake
 from .signature_payloads import SignaturePayloadError
@@ -119,6 +120,14 @@ class _Slot:
         self.thread = None
         self.current = None
         self.pending = None
+        # O0c M8: what the owner reads to prove this worker's children gone. Written under `custody`:
+        # `executing` while a job's execution may hold a child, `retained` an unconfirmed execution's
+        # context (its process, tree and scratch), `sealed` once the owner proved the slot for a
+        # restart: a job taken after that is never started.
+        self.custody = threading.Lock()
+        self.executing = False
+        self.retained = None
+        self.sealed = False
 
 
 def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
@@ -138,6 +147,13 @@ def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
         admission = envelope.admission
         prepared = None
         retained = None
+        with slot.custody:
+            if slot.sealed:
+                # O0c M8: the owner proved this held slot for a restart; a job reaching it now (an
+                # ambiguous offer) is never started, and nothing waits for its reply.
+                envelope = inputs = admission = cancelled = None
+                continue
+            slot.executing = True
         try:
             if admission is not None:
                 prepared = prepare_claim_admission(
@@ -150,13 +166,22 @@ def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
         except execution.SignatureExecutionUnconfirmed as error:
             retained = error.context
             result = None
+            # O0c M8: an unknown execution faults the lane (S1-H1a: kept, by this worker).
+            lane_health.safely(lambda: slot.note.publish(faulted=True, kept=frozenset({slot.health_token})))
+            lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'signature_execution_unconfirmed', error))
         except SignaturePayloadError:
             result = SignatureWorkerResult('signature_execution_invalid_output', (), None, 0, False)
         except AdmissionDecodeError:
             # Parsing precedes execution: no helper has started on this path.
             result = SignatureWorkerResult('signature_execution_invalid_output', (), None, 0, True)
-        except BaseException:
+        except BaseException as error:
             result = SignatureWorkerResult('signature_execution_internal_failure', (), None, 0, False)
+            lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'signature_worker_failed', error))  # S1-H1a
+        with slot.custody:
+            # O0c M8: the execution has ended or left its context here; either way it holds no child
+            # the owner cannot see.
+            slot.retained = retained
+            slot.executing = False
         # No complete job retains a full input/wire/payload in its mailbox or
         # this persistent worker's locals. Exception handlers have also ended.
         inputs = None
@@ -177,9 +202,11 @@ def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
 def _worker(slot, wire_limits, poll_ns, cleanup_ns):
     try:
         _worker_loop(slot, wire_limits, poll_ns, cleanup_ns)
-    except BaseException:
+    except BaseException as error:
         # Retain the exceptional frame/custody without printing input-bearing
         # tracebacks. The owner sees a fault and never reuses this slot.
+        lane_health.safely(lambda: slot.note.publish(faulted=True))  # S1-H1a, by this worker
+        lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'signature_worker_failed', error))
         slot.fault.set()
         threading.Event().wait()
 
@@ -214,6 +241,14 @@ class SignatureWorkerPool:
         self._share = share
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._slots = [_Slot() for _ in range(limits.max_workers)]
+        # S1-H1a: published notes (reporting only). A slot keeps at most one unconfirmed job for good,
+        # so one token per slot counts it once, whichever of its worker or this owner publishes it.
+        self.health = lane_health.Lane('signature')
+        self._note = self.health.slot('owner')
+        for index, slot in enumerate(self._slots):
+            slot.lane, slot.note = self.health, self.health.slot(f'worker-{index}')
+            slot.health_token = lane_health.new_token()
+        self._intake_tokens = [lane_health.new_token() for _ in self._slots]
         self._returned = {}
         self._bootstrapped = self._starting = self._faulted = self._closing = self._closed = False
         self._clock_failed = False
@@ -229,12 +264,15 @@ class SignatureWorkerPool:
     def _now(self):
         try:
             value = time.monotonic_ns()
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
             self._clock_failed = True
             for slot in self._slots:
                 if slot.current is not None:
                     slot.current.cancelled.set()
+            lane_health.safely(lambda error=error: self.health.note_failure(  # S1-H1a C4
+                self._note, 'signature_clock_failed', error))
+            self._publish_health()
             raise
         if type(value) is not int or not 0 <= value <= _MAX_NS or (self._last_ns is not None and value < self._last_ns):
             self._faulted = True
@@ -242,6 +280,9 @@ class SignatureWorkerPool:
             for slot in self._slots:
                 if slot.current is not None:
                     slot.current.cancelled.set()
+            lane_health.safely(lambda: self.health.note_failure(  # S1-H1a C4
+                self._note, 'signature_clock_failed', None))
+            self._publish_health()
             raise SignatureWorkerError()
         self._last_ns = value
         return value
@@ -263,10 +304,12 @@ class SignatureWorkerPool:
             if not all(slot.ready.is_set() and slot.thread.is_alive() for slot in self._slots):
                 raise SignatureWorkerError()
             self._bootstrapped = True
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
             for slot in self._slots:
                 slot.stop.set()
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_start_failed', error))
+            self._publish_health()  # S1-H1a C4
             raise
         finally:
             self._starting = False
@@ -292,8 +335,9 @@ class SignatureWorkerPool:
             active = _Active(item.handle, token, cancelled, now, now + self._limits.timeout_ns, len(item.inputs.rows))
             slot.current = active
             slot.incoming.put_nowait(_Envelope(token, item.inputs, cancelled, active.deadline_ns, item.admission))
+            self._publish_health()  # S1-H1a
             return item.handle
-        except BaseException:
+        except BaseException as error:
             # No inference of no-start after an ambiguous queue/publication
             # fault. Retain intake/static shares and refuse further offers.
             self._faulted = True
@@ -301,6 +345,9 @@ class SignatureWorkerPool:
             if slot.current is not None:
                 slot.current.unknown = True
                 slot.current.cancelled.set()
+            # S1-H1a C4: noted and shown now (after its job is marked unknown), not at the next poll.
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_offer_failed', error))
+            self._publish_health()
             raise
 
     def cancel(self, handle):
@@ -374,6 +421,7 @@ class SignatureWorkerPool:
                     or not self._valid_result(message.result, active)):
                 active.unknown = True
                 slot.fault.set()
+                self._reply_fault(slot)  # S1-H1a C4
                 continue
             result = message.result
             # Keep the sole completion in its slot across a failed fresh clock
@@ -382,6 +430,7 @@ class SignatureWorkerPool:
             if result.finished_ns is not None and result.finished_ns > now:
                 active.unknown = True
                 slot.fault.set()
+                self._reply_fault(slot)  # S1-H1a C4
                 continue
             if self._clock_failed:
                 result = SignatureWorkerResult('signature_execution_clock_failure', (), result.finished_ns,
@@ -406,11 +455,13 @@ class SignatureWorkerPool:
                     raise SignatureWorkerError()
                 slot.pending = None
                 slot.current = None
-            except BaseException:
+            except BaseException as error:
                 self._faulted = True
                 active.unknown = True
                 active.cancelled.set()
                 slot.fault.set()
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_confirmation_failed', error))  # S1-H1a C4
+                self._publish_health()  # the fault is shown now, not at the next poll
                 slot.current = active
                 self._returned.pop(active.handle, None)
                 raise
@@ -423,7 +474,68 @@ class SignatureWorkerPool:
         # Results are repeated until explicit consumption/discard. A later slot
         # clock fault (or reply allocation failure) cannot lose an earlier
         # completion. Every entry remains under its intake reservation.
+        self._publish_health()
         return tuple(SignatureWorkerNotice(handle, self.result(handle), False) for handle in self._returned)
+
+    def stuck(self):
+        """O0c M8: True when no worker can take a job before a restart: each has faulted, ended or
+        holds an unconfirmed job. Owner thread."""
+        return all(slot.fault.is_set() or slot.thread is None or not slot.thread.is_alive()
+                   or (slot.current is not None and slot.current.unknown) for slot in self._slots)
+
+    def unknown_handles(self):
+        """O0c M8: the handles of jobs held unconfirmed (their claims are kept, not running). Owner thread."""
+        return frozenset(slot.current.handle for slot in self._slots
+                         if slot.current is not None and slot.current.unknown)
+
+    def unproven_children(self):
+        """O0c M8: the processes these workers started that are not proven gone, as [{'pid', 'why'}]
+        ([] when none can still run), for a restart. Owner thread.
+
+        A worker inside an execution, or an ordinary job not yet returned, may hold a child (`running`).
+        A held slot (faulted or unconfirmed) is sealed, so a job that reaches it later never starts, and
+        its retained execution names what it cannot prove (`signature_execution.unproven_children`).
+        Never raises."""
+        try:
+            pending = []
+            for slot in self._slots:
+                held = slot.fault.is_set() or (slot.current is not None and slot.current.unknown)
+                with slot.custody:
+                    executing = slot.executing
+                    if held and not executing:
+                        slot.sealed = True
+                    retained = slot.retained
+                if executing or (slot.current is not None and not held):
+                    pending.append({'pid': None, 'why': 'running'})
+                    continue
+                if retained is not None:
+                    pending.extend(execution.unproven_children(retained))
+            return pending
+        except Exception:
+            return [{'pid': None, 'why': 'unchecked'}]
+
+    def children_ended(self):
+        """O0c M8: whether every child these workers started is proven gone (see unproven_children)."""
+        return self.unproven_children() == []
+
+    def _reply_fault(self, slot):
+        """S1-H1a C4: an invalid reply or time faults its slot; noted once, with no exception."""
+        if not getattr(slot, 'noted_fault', False):
+            slot.noted_fault = True
+            lane_health.safely(lambda: self.health.note_failure(self._note, 'reply_mismatch', None))
+
+    def _publish_health(self):
+        """S1-H1a: this owner's note: active jobs busy, unconfirmed ones and selected intake without
+        a slot kept. Reporting only; never raises."""
+        try:
+            active = [slot for slot in self._slots if slot.current is not None]
+            kept = {slot.health_token for slot in active if slot.current.unknown}
+            spare = max(0, self._intake.snapshot().selected - len(active))
+            kept.update(self._intake_tokens[:spare])
+            # O0c M8: an unconfirmed job faults the lane, so the account's self-restart fires.
+            lane_health.safely(lambda: self._note.publish(kept=frozenset(kept), busy_tokens=frozenset(slot.health_token for slot in active), faulted=self._faulted or any(slot.fault.is_set() or slot.current.unknown for slot in active) or any(slot.fault.is_set() for slot in self._slots)))
+        except Exception:
+            pass
 
     def result(self, handle):
         self._owner()

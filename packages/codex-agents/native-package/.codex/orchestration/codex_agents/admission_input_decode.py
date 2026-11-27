@@ -1,7 +1,8 @@
 """Detached admission-input parsing, never admission or signature authority.
 
-This pure step validates a complete owner-local raw capture before decoding any
-JSON. It preserves row order and every candidate, including foreign restrictive
+This pure step validates a complete owner-local raw capture's shapes and charge
+before decoding any JSON, then bounds reconstruction of each row before parsing
+it. It preserves row order and every candidate, including foreign restrictive
 evidence. Returned dictionaries are detached mutable data, not authenticated or
 immutable decisions. No normal client or public operation uses this module.
 """
@@ -12,8 +13,9 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+from .admission_capture_content import AdmissionContentLimitError, unpack_content
 from .admission_inputs import (
-    ADMISSION_CAPTURE_RECORD_TYPES, AdmissionCaptureLimits, AdmissionInputPolicy,
+    ADMISSION_CAPTURE_RECORD_TYPES, ADMISSION_DECODED_CONTENT_MULTIPLE, AdmissionCaptureLimits, AdmissionInputPolicy,
     AdmissionInputRow, AdmissionInputSnapshot, admission_input_size,
 )
 from .contracts import ContractError
@@ -117,7 +119,7 @@ def _preflight(snapshot: AdmissionInputSnapshot, limits: AdmissionCaptureLimits)
     # Charge the whole capture before hashing, parsing or copying decoded values.
     size = admission_input_size(project, provider, runtime, policy, owner, signer, ())
     previous = 0
-    identifiers = set()
+    identifiers, shared = set(), {}
     for row in rows:
         if type(row) is not tuple or len(row) != 11:
             _invalid()
@@ -136,7 +138,15 @@ def _preflight(snapshot: AdmissionInputSnapshot, limits: AdmissionCaptureLimits)
                 _invalid()
         elif source != ("provider" if kind in {"provider_billing", "provider_headroom"} else "lifecycle"):
             _invalid()
-        size += 32 + len(scope) + identifier_size + len(kind) + len(content) + len(digest) + source_size
+        size += 32 + identifier_size + len(content) + len(digest)
+        for value, length in ((scope, len(scope)), (kind, len(kind)), (source, source_size)):
+            if value not in shared:
+                shared[value] = value
+                size += length
+            elif value is not shared[value]:
+                # Owner-local rows must really share these copies. A caller
+                # cannot undercharge separately allocated equal strings.
+                _invalid()
         size += 0 if signature is None else len(signature)
         if size > limits.max_bytes:
             raise AdmissionDecodeError("admission_decode_limit")
@@ -145,6 +155,19 @@ def _preflight(snapshot: AdmissionInputSnapshot, limits: AdmissionCaptureLimits)
     if size != retained:
         _invalid()
     return rows
+
+
+def _content(row, remaining):
+    limited = False
+    try:
+        return unpack_content(row[5], row[2], row[8], max_bytes=remaining)
+    except AdmissionContentLimitError:
+        limited = True
+    except ValueError:
+        pass
+    if limited:
+        raise AdmissionDecodeError("admission_decode_limit")
+    _invalid()
 
 
 def _depth_bounded(content: bytes) -> bool:
@@ -177,14 +200,17 @@ def decode_admission_inputs(
 ) -> tuple[ParsedAdmissionRow, ...]:
     """Parse all six closed record families without filtering or granting trust.
 
-    Limits bound rows and retained input-field bytes, not exact Python heap or
-    elapsed time. Owner signatures, current evidence/policy, native caller and
+    Limits bound rows, retained bytes and decoded content (3x retained limit),
+    not exact Python heap or elapsed time. Owner signatures, current evidence/policy, native caller and
     atomic account-cap/launch checks must be established elsewhere at use.
     """
     rows = _preflight(snapshot, limits)
     result = []
+    remaining = ADMISSION_DECODED_CONTENT_MULTIPLE * limits.max_bytes
     for row in rows:
         _, _, identifier, _, kind, content, digest, _, observed, _, _ = row
+        content = _content(row, remaining)
+        remaining -= len(content)
         if not _depth_bounded(content) or hashlib.sha256(content).hexdigest() != digest:
             _invalid()
         failed = False

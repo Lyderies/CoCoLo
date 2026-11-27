@@ -1,0 +1,26 @@
+{
+ "due": 1000,
+ "released": 1000,
+ "passes": 16,
+ "pass_limit": 64,
+ "cadence_seconds": 10.0,
+ "seconds_until_drained": 8.310901538818143,
+ "seconds_elapsed": 8.310901538818143,
+ "released_by_pass": [
+  64,
+  128,
+  192,
+  256,
+  320,
+  384,
+  448,
+  512,
+  576,
+  640,
+  704,
+  768
+ ],
+ "pass_ms_median": 19.05954151879996,
+ "limit_seconds": 60,
+ "released_within_60_s": 1000
+}

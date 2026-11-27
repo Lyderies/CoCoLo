@@ -1,0 +1,231 @@
+[60s] 20/38 units done, 0 failed; running: codex:tests.test_project_driver#27 16s, codex:tests.test_project_driver#19 10s, codex:tests.test_project_driver#1 5s, codex:tests.test_project_driver#0 1s
+FAILED codex:tests.test_b7b_budgets#0 (exit 1) -> /private/tmp/ptcqxesfu4/31.log
+F.
+======================================================================
+FAIL: test_measured_budgets_report_numbers_without_relabelling_failures (tests.test_b7b_budgets.BudgetMeasurements.test_measured_budgets_report_numbers_without_relabelling_failures)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-s13a/packages/codex-agents/tests/test_b7b_budgets.py", line 27, in test_measured_budgets_report_numbers_without_relabelling_failures
+    self.assertEqual('met', measurements[name]['status'], (name, measurements[name]))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'met' != 'failed'
+- met
++ failed
+ : ('B5', {'status': 'failed', 'numbers': {'eligible': 1000, 'blocked': 64, 'released': 0, 'batches': 1, 'limit_batches': 18}, 'scope': 'Real unarmed-lease start pass; 1,000 eligible leases behind 64 live leases. Does not establish memory-kind drain.'})
+
+----------------------------------------------------------------------
+Ran 2 tests in 29.572s
+
+FAILED (failures=1)
+B7B_MEASUREMENTS={"B1": {"numbers": {"calls": 5, "memory_limit_ms": 5, "memory_recovery_ms": 0.317459, "memory_recovery_samples_ms": [0.317459, 0.292292, 0.405375], "memory_rows_released": 2, "memory_transactions_samples_ms": [[0.5455, 0.31875, 0.28275, 0.27625], [0.464458, 0.378041, 0.353208, 0.221417], [0.530291, 0.316083, 0.41325, 0.268125]], "memory_warmup_runs": 1, "memory_writer_ms": 1.42325, "partial_register_ms": 0.20466600000000001}, "scope": "Actual reserve/arm/bind/commit register calls; excludes release tail and transaction commit cost. Full normal-run writer delta is not established.", "status": "unmeasured", "unmeasured_reason": "Full normal-run writer delta including the account release tail is not measured; memory transactions are measured separately."}, "B2": {"numbers": {"empty_open_ms": [3.519625, 3.725541, 3.579084], "empty_service_startup_ms": [5.217875, 5.122584, 5.92925], "held_1064_open_ms": [4.949458, 4.878583, 4.713917], "limit_ms": 100, "populated_service_startup_ms": [6.944583, 7.334791, 7.613125], "service_start_overhead_limit_ms": 100, "service_start_overhead_ms": 2.116916, "store_overhead_ms": 1.299499}, "scope": "Real store reopen proxy; when binding works, complete ProjectServiceHost startup with writer bootstrap, driver, listeners and published hint at empty/1,064 held leases.", "service_startup_status": "met", "status": "met"}, "B3": {"numbers": {"batch_ms": [11.004375], "batch_samples_ms": [[11.004375, 10.633875, 11.235958]], "limit_ms": 50, "maximum_ms": 11.004375, "warmup_runs": 1}, "scope": "Real release_earlier_unarmed_leases(limit=64), durable transactions included; maximum per-batch median of three identical drain passes after one warm-up pass.", "status": "met"}, "B4": {"numbers": {"comparisons": [{"context_sweep_vm_steps": 223, "has_holds": 1, "has_holds_vm_steps": 412, "holds_vm_steps": 994, "live_index_plan": [[3, 0, 213, "SCAN project_result_contexts USING INDEX project_result_contexts_live"]], "lookup_ms": 0.004166, "lookup_samples_ms": [0.005, 0.004166, 0.003833], "lookup_vm_steps": 15, "pending_settlement": 1, "reconcile_vm_steps": 157, "recovery_pending_vm_steps": 532, "released_leases": 0, "released_reservations": 0, "retired": 10, "retirement_ms": 11.018667, "retirement_samples_ms": [11.018667, 10.711417, 11.09475], "retirement_vm_steps": 37375, "retirement_vm_steps_samples": [37375, 37736, 38106], "tombstones": 0, "warmup_runs": 1}, {"context_sweep_vm_steps": 223, "has_holds": 1, "has_holds_vm_steps": 412, "holds_vm_steps": 994, "live_index_plan": [[3, 0, 213, "SCAN project_result_contexts USING INDEX project_result_contexts_live"]], "lookup_ms": 0.004, "lookup_samples_ms": [0.004875, 0.004, 0.003834], "lookup_vm_steps": 15, "pending_settlement": 1, "reconcile_vm_steps": 157, "recovery_pending_vm_steps": 532, "released_leases": 100000, "released_reservations": 100000, "retired": 10, "retirement_ms": 10.140167, "retirement_samples_ms": [10.140167, 9.933625, 10.371458], "retirement_vm_steps": 37375, "retirement_vm_steps_samples": [37375, 37736, 38106], "tombstones": 100000, "warmup_runs": 1}]}, "scope": "Actual hold report, context candidate sweep, reconciliation, absent outcome lookup and recovery_pending/has_holds at 0/100,000 custody/context and valid sealed released lease/reservation tombstones. VM work must differ by at most 16 instructions.", "status": "met"}, "B5": {"numbers": {"batches": 1, "blocked": 64, "eligible": 1000, "limit_batches": 18, "released": 0}, "scope": "Real unarmed-lease start pass; 1,000 eligible leases behind 64 live leases. Does not establish memory-kind drain.", "status": "failed"}, "B6": {"numbers": {"arrivals": 50, "blocked": 128, "limit_batches": 4, "memory_recovery_ms": 0.317459, "memory_recovery_samples_ms": [0.317459, 0.292292, 0.405375], "memory_rows_released": 2, "released": 64, "store_batches": 1, "store_pass_ms": 20.387667}, "scope": "Real lease pass releases target behind 128 live rows plus 50 arrivals. The generic re-due/backoff recurring-arrival scenario is not established by this lease pass.", "status": "unmeasured", "unmeasured_reason": "The generic recurring-arrival/re-due scheduler is not measured; memory recovery is measured separately."}, "S3": {"numbers": {"comparisons": [{"context_sweep_vm_steps": 223, "has_holds": 1, "has_holds_vm_steps": 412, "holds_vm_steps": 994, "live_index_plan": [[3, 0, 213, "SCAN project_result_contexts USING INDEX project_result_contexts_live"]], "lookup_ms": 0.004166, "lookup_samples_ms": [0.005, 0.004166, 0.003833], "lookup_vm_steps": 15, "pending_settlement": 1, "reconcile_vm_steps": 157, "recovery_pending_vm_steps": 532, "released_leases": 0, "released_reservations": 0, "retired": 10, "retirement_ms": 11.018667, "retirement_samples_ms": [11.018667, 10.711417, 11.09475], "retirement_vm_steps": 37375, "retirement_vm_steps_samples": [37375, 37736, 38106], "tombstones": 0, "warmup_runs": 1}, {"context_sweep_vm_steps": 223, "has_holds": 1, "has_holds_vm_steps": 412, "holds_vm_steps": 994, "live_index_plan": [[3, 0, 213, "SCAN project_result_contexts USING INDEX project_result_contexts_live"]], "lookup_ms": 0.004, "lookup_samples_ms": [0.004875, 0.004, 0.003834], "lookup_vm_steps": 15, "pending_settlement": 1, "reconcile_vm_steps": 157, "recovery_pending_vm_steps": 532, "released_leases": 100000, "released_reservations": 100000, "retired": 10, "retirement_ms": 10.140167, "retirement_samples_ms": [10.140167, 9.933625, 10.371458], "retirement_vm_steps": 37375, "retirement_vm_steps_samples": [37375, 37736, 38106], "tombstones": 100000, "warmup_runs": 1}], "empty_service_startup_ms": [4.701042, 4.586417, 4.993459], "empty_store_open_ms": 3.061375, "live_64_store_open_ms": 3.362625, "lookup_limit_ms": 5, "populated_service_startup_ms": [4.952416, 4.798291, 4.773916], "retirement_limit_ms": 50, "service_start_overhead_limit_ms": 200, "service_start_overhead_ms": 0.0972489999999997, "store_start_overhead_ms": 0.30125}, "scope": "Real retirement of ten committed bodies/contexts (VM counting enabled, so time includes tracing overhead), absent outcome lookup and context reconciliation at 0/100,000 tombstones; store startup with 64 context files. Median of three after one warm-up. Successful authenticated lookup is measured separately; full ProjectServiceHost startup is measured when sockets bind.", "service_startup_status": "met", "status": "met"}}
+B7B_SUCCESSFUL_LOOKUP=[{"limit_ms": 5, "lookup_ms": 0.631917, "lookup_samples_ms": [0.642584, 0.627333, 0.631917], "lookup_vm_steps": 491, "tombstones": 0, "warmup_runs": 1}, {"limit_ms": 5, "lookup_ms": 0.631958, "lookup_samples_ms": [0.649167, 0.631958, 0.629625], "lookup_vm_steps": 491, "tombstones": 100000, "warmup_runs": 1}]
+
+BUDGET DEBT: codex:tests.test_b2_service_outcome_paths ceiling=69.160s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_billing_gate ceiling=78.580s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_bridge ceiling=368.250s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_container_stop ceiling=72.230s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_host_commands ceiling=119.560s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_learning_cli ceiling=112.560s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_lost_run_settlement ceiling=119.750s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_project_driver ceiling=520.370s measured seconds=305.08316632942297
+BUDGET DEBT: codex:tests.test_project_start ceiling=183.400s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_result_lifetime ceiling=73.050s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_session_guard ceiling=7.230s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_trial_run_driver_bugs ceiling=103.340s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_write_merge ceiling=247.710s not_measured seconds=None
+BUDGET DEBT: root:test_install ceiling=113.540s not_measured seconds=None
+BUDGET DEBT: root:test_install_claude_upgrade ceiling=135.450s not_measured seconds=None
+BUDGET DEBT: root:test_setup_sh ceiling=203.640s not_measured seconds=None
+BUDGET DEBT: root:test_setup_straight ceiling=293.120s not_measured seconds=None
+BUDGET DEBT: root:test_setup_update ceiling=275.000s not_measured seconds=None
+BUDGET DEBT: root:test_setup_wizard_direct ceiling=282.080s not_measured seconds=None
+RUN RECORD: /tmp/claude-501/s13ar/cocolo-test-record-hoyeqyke/run.json
+{
+ "elapsed_seconds": 104.9,
+ "jobs": 4,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 383.139,
+ "over_budget": [
+  {
+   "module": "codex:tests.test_project_driver",
+   "seconds": 305.08316632942297,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 29
+  }
+ ],
+ "budget_failures": [],
+ "budget_warnings": [
+  {
+   "module": "codex:tests.test_b2_service_outcome_paths",
+   "ceiling": 69.16,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_billing_gate",
+   "ceiling": 78.58,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_bridge",
+   "ceiling": 368.25,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_container_stop",
+   "ceiling": 72.23,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "ceiling": 119.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "ceiling": 112.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "ceiling": 119.75,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "ceiling": 520.37,
+   "seconds": 305.08316632942297,
+   "status": "measured"
+  },
+  {
+   "module": "codex:tests.test_project_start",
+   "ceiling": 183.4,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_result_lifetime",
+   "ceiling": 73.05,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_session_guard",
+   "ceiling": 7.23,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "ceiling": 103.34,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "ceiling": 247.71,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install",
+   "ceiling": 113.54,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "ceiling": 135.45,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_sh",
+   "ceiling": 203.64,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_straight",
+   "ceiling": 293.12,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_update",
+   "ceiling": 275,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "ceiling": 282.08,
+   "seconds": null,
+   "status": "not_measured"
+  }
+ ],
+ "debt_retirement_required": [],
+ "discovery_seconds": 2.9139474999392405,
+ "preflight_seconds": 8.102090292144567,
+ "metadata_errors": [],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [
+  "RS-B-B7-5"
+ ],
+ "units": 38,
+ "tests": {
+  "codex": 260
+ },
+ "failed_units": [
+  "codex:tests.test_b7b_budgets#0"
+ ],
+ "slowest_units": [
+  [
+   "codex:tests.test_b7b_budgets#0",
+   29.8
+  ],
+  [
+   "codex:tests.test_project_driver#20",
+   19.7
+  ],
+  [
+   "codex:tests.test_project_driver#21",
+   19.6
+  ],
+  [
+   "codex:tests.test_project_driver#27",
+   18.5
+  ],
+  [
+   "codex:tests.test_project_driver#4",
+   18.2
+  ],
+  [
+   "codex:tests.test_project_hold_register",
+   16.8
+  ],
+  [
+   "codex:tests.test_project_driver#10",
+   15.8
+  ],
+  [
+   "codex:tests.test_project_driver#13",
+   13.9
+  ]
+ ],
+ "logs": "/private/tmp/ptcqxesfu4"
+}
+Unchecked requirements (88): API-1, API-10, API-11, API-12, API-13, API-14, API-15, API-16, API-17, API-18, API-19, API-2, API-20, API-21, API-22, API-23, API-24, API-25, API-26, API-27, API-3, API-4, API-5, API-6, API-7, API-8, API-9, G1, G2, G3, G4, G5, G6, G7, G8, G9, L1.1, L1.2, L10.1, L10.2, L10.3, L11.1, L11.2, L12.1, L12.2, L12.3, L12.4, L12.5, L12.6a, L12.6b, L12.7, L13.1, L13.2, L16.1, L16.2, L16.3, L2.1, L2.2, L3.1, L3.2, L3.3, L4.1, L4.2, L5.1, L5.2, L5.3, L6.1, L6.2, L7.1, L7.2, L7.3, L8.1, L8.2, L9.1, L9.2, L9.3, O0C-U4-3, P4-REPORT, RS-B-B6-6, TERM-13, TERM-17, TERM-5, TERM-6, TERM-7, TF-23, TF-25, TF-26, TF-27

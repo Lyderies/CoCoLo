@@ -96,9 +96,34 @@ class ResultDiagnosticTests(unittest.TestCase):
                 {**valid, "evidence": [{**evidence, "criterion_id": "CANARY-REJECTED"}]}, assignment()
             ),
             "unknown_fields": ({**valid, "CANARY-FIELD": "CANARY-REJECTED"}, assignment()),
-            "inconsistent_axes": ({**valid, "execution_state": "failed"}, assignment()),
+            # 0.4.0 item 0.5 (VF-INV-b, decision 26 branch split): `inconsistent_axes` is now one code per branch.
+            "axes_status_verdict_mismatch": ({**valid, "execution_state": "failed"}, assignment()),
+            "axes_verdict_without_completion": (
+                {**valid, "status": "failed", "execution_state": "failed"}, assignment()),
+            "axes_admission_without_completion": (
+                {**valid, "status": "failed", "execution_state": "failed", "semantic_verdict": "not-applicable",
+                 "admission_state": "accepted"}, assignment()),
+            "axes_retry_lineage": (
+                {**valid, "retry": {"attempt": 1, "retry_of_assignment_id": "earlier"}}, assignment()),
+            "child_set_admission": ({**valid, "admission_state": "accepted"}, assignment()),
+            "child_set_timeout": (
+                {**valid, "status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
+                assignment()),
+            # RV1: each evidence rule's own code, all content-free.
+            "evidence_missing_fields": ({**valid, "evidence": [{k: v for k, v in evidence.items() if k != "details"}]},
+                                        assignment()),
+            "evidence_unknown_fields": ({**valid, "evidence": [{**evidence, "CANARY-FIELD": "x"}]}, assignment()),
+            "evidence_unsupported_type": ({**valid, "evidence": [{**evidence, "type": "CANARY-REJECTED"}]}, assignment()),
+            "evidence_empty_criterion": ({**valid, "evidence": [{**evidence, "criterion_id": ""}]}, assignment()),
+            "evidence_empty_reference": ({**valid, "evidence": [{**evidence, "reference": ""}]}, assignment()),
+            "evidence_unsupported_outcome": ({**valid, "evidence": [{**evidence, "outcome": "CANARY-REJECTED"}]},
+                                             assignment()),
+            "evidence_details_not_text": ({**valid, "evidence": [{**evidence, "details": ["CANARY-REJECTED"]}]},
+                                          assignment()),
         }
-        self.assertEqual(RESULT_VALIDATION_REASON_CODES, set(cases))
+        # Corrected for O10 VF-2 (requirement): structured_output_missing is named by the bridge when the
+        # client gave no result to validate (test_claude_structured_output), never by the validator.
+        self.assertEqual(RESULT_VALIDATION_REASON_CODES - {"structured_output_missing"}, set(cases))
         for reason, (invalid, assigned) in cases.items():
             with self.subTest(reason=reason):
                 self.assertEqual(("invalid_result", reason), bridge._unrecordable(invalid, assigned))
@@ -139,15 +164,19 @@ class ResultDiagnosticTests(unittest.TestCase):
         self.assertEqual(("result_too_large", None), bridge._unrecordable(oversized, assignment()))
 
     def test_child_axes_cannot_claim_host_owned_admission_or_timeout(self) -> None:
-        for changes in (
-            {"admission_state": "accepted"},
-            {"admission_state": "rejected"},
-            {"admission_state": "pending"},
-            {"status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
+        # Owner decision 26 (VF-INV-d): this rejection holds for every role except a verifier, whose
+        # admission the host resets and records (VerifierHostSetFieldsDispatchTests, VerifierInvalidResultTests).
+        # A child's timeout claim is rejected for every role. Reason codes follow VF-INV-b.
+        for changes, reason in (
+            ({"admission_state": "accepted"}, "child_set_admission"),
+            ({"admission_state": "rejected"}, "child_set_admission"),
+            ({"admission_state": "pending"}, "child_set_admission"),
+            ({"status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
+             "child_set_timeout"),
         ):
             with self.subTest(changes=changes):
                 self.assertEqual(
-                    ("invalid_result", "inconsistent_axes"),
+                    ("invalid_result", reason),
                     bridge._unrecordable({**result(), **changes}, assignment()),
                 )
 
@@ -307,6 +336,12 @@ class ResultPromptContractTests(unittest.TestCase):
         self.assertEqual("completed", guidance["completed_status_by_verdict"]["not-ready"])
         self.assertEqual("blocked", guidance["completed_status_by_verdict"]["blocked"])
 
+    def test_CR2_the_prompt_says_a_finished_review_is_completed_whatever_its_verdict(self) -> None:
+        prompt = " ".join(bridge.child_prompt(assignment()).split())
+        self.assertIn("A review you finished is status completed and execution_state completed, whatever its "
+                      "verdict, a negative one included; failed means you could not do the work.", prompt)
+        self.assertIn("Set execution_state, semantic_verdict and admission_state; never leave them null.", prompt)
+
     def test_prompt_examples_validate_without_weakening_negative_fences(self) -> None:
         assigned = assignment()
         guidance, template = self.prompt_objects(assigned)
@@ -331,7 +366,7 @@ class ResultPromptContractTests(unittest.TestCase):
                     ))
                 if verdict != "pass":
                     wrong = "blocked" if value["status"] == "completed" else "completed"
-                    self.assertEqual(("invalid_result", "inconsistent_axes"), bridge._unrecordable(
+                    self.assertEqual(("invalid_result", "axes_status_verdict_mismatch"), bridge._unrecordable(
                         {**value, "status": wrong}, assigned,
                     ))
 
@@ -345,6 +380,190 @@ class ResultPromptContractTests(unittest.TestCase):
         self.assertEqual({"attempt": 2, "retry_of_assignment_id": "verifier-1"}, template["retry"])
         self.assertEqual("unverified", template["admission_state"])
         self.assertNotIn("assignment_id", guidance)
+
+
+
+class VerifierInvalidResultTests(unittest.TestCase):
+    """0.4.0 item 0.5 (VF-INV-b, -c, -d): split reasons, a narrowed child schema, host-set fields."""
+
+    VERIFIER = "codex_agents_verification_worker"
+
+    def verifier_assignment(self) -> dict:
+        return {**assignment(), "role": self.VERIFIER}
+
+    def axes(self, **changes) -> dict:
+        return {**result(), "execution_state": "completed", "semantic_verdict": "pass",
+                "admission_state": "unverified", **changes}
+
+    def test_each_inconsistent_axes_branch_has_its_own_fixed_reason(self) -> None:
+        retry_first = {"attempt": 1, "retry_of_assignment_id": "earlier"}
+        retry_second = {"attempt": 2, "retry_of_assignment_id": None}
+        later = {**assignment(), "attempt": 2}
+        cases = [
+            ("axes_status_verdict_mismatch",
+             self.axes(semantic_verdict="not-ready", status="blocked"), assignment()),
+            ("axes_verdict_without_completion",
+             self.axes(execution_state="failed", status="failed", semantic_verdict="pass"), assignment()),
+            ("axes_admission_without_completion",
+             self.axes(execution_state="failed", status="failed", semantic_verdict="not-applicable",
+                       admission_state="accepted"), assignment()),
+            ("axes_retry_lineage", self.axes(retry=retry_first), assignment()),
+            ("axes_retry_lineage", self.axes(retry=retry_second), later),
+            ("child_set_admission", self.axes(admission_state="accepted"), assignment()),
+            ("child_set_timeout",
+             self.axes(status="failed", execution_state="timed_out", semantic_verdict="not-applicable"),
+             assignment()),
+        ]
+        for reason, value, assigned in cases:
+            with self.subTest(reason=reason):
+                self.assertEqual(("invalid_result", reason), bridge._unrecordable(value, assigned))
+        self.assertNotIn("inconsistent_axes", RESULT_VALIDATION_REASON_CODES)
+
+    def test_split_reasons_are_in_the_observation_schema_and_old_records_replay(self) -> None:
+        from codex_agents.learning_contracts import content_digest
+        from tests.support import ORCHESTRATION_ROOT
+
+        listed = json.loads((ORCHESTRATION_ROOT / "schemas" / "learning-host-observation.schema.json").read_text())
+        codes = set()
+
+        def walk(node):
+            if isinstance(node, dict):
+                if node.get("enum") and "inconsistent_axes" in node["enum"]:
+                    codes.update(node["enum"])
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        walk(listed)
+        for code in ("axes_status_verdict_mismatch", "axes_verdict_without_completion",
+                     "axes_admission_without_completion", "axes_retry_lineage",
+                     "child_set_admission", "child_set_timeout", "inconsistent_axes"):
+            self.assertIn(code, codes)
+        for code in ("inconsistent_axes", "axes_retry_lineage", "child_set_timeout"):
+            material = {
+                "schema_version": 3, "record_type": "dispatch_result", "run_id": "run_1",
+                "bridge_run_id": "brg_" + "0" * 32, "result_digest": "1" * 64, "fenced": True,
+                "reviewed": True, "terminal_state": "failed", "result_validation_reason_code": code,
+                "client_diagnostics": None, "observed_at_ms": 5,
+            }
+            with self.subTest(code=code):
+                record = {**material, "record_id": f"dispatch_result:{content_digest(material)}"}
+                self.assertEqual(code, validate_learning_record(record)["result_validation_reason_code"])
+
+    def narrowed(self):
+        from tests.support import ORCHESTRATION_ROOT
+        original = json.loads((ORCHESTRATION_ROOT / "schemas" / "result.schema.json").read_text())
+        return original, bridge.narrow_verifier_schema(deepcopy(original))
+
+    def test_the_verifier_schema_only_offers_what_the_host_would_accept(self) -> None:
+        original, narrowed = self.narrowed()
+        properties = narrowed["properties"]
+        self.assertEqual(["unverified"], properties["admission_state"]["enum"])
+        self.assertEqual([state for state in original["properties"]["execution_state"]["enum"]
+                          if state != "timed_out"], properties["execution_state"]["enum"])
+        for name in ("status", "semantic_verdict", "evidence", "retry"):
+            self.assertEqual(original["properties"][name], properties[name])
+        self.assertEqual(original["required"], narrowed["required"])
+        strict = bridge.strict_output_schema(narrowed)
+        self.assertEqual(["unverified"], strict["properties"]["admission_state"]["anyOf"][0]["enum"])
+        self.assertNotIn("timed_out", strict["properties"]["execution_state"]["anyOf"][0]["enum"])
+        # No root-level anyOf: strict clients do not accept one.
+        self.assertEqual(set(original), set(narrowed))
+
+    def test_the_narrowed_schema_agrees_with_the_host_on_every_axis_combination(self) -> None:
+        from codex_agents.contracts import (
+            ADMISSION_STATES, EXECUTION_STATES, SEMANTIC_VERDICTS, legacy_result_status,
+        )
+        original, narrowed = self.narrowed()
+        checked = 0
+        for execution in sorted(EXECUTION_STATES):
+            for verdict in sorted(SEMANTIC_VERDICTS):
+                for admission in sorted(ADMISSION_STATES):
+                    candidate = self.axes(execution_state=execution, semantic_verdict=verdict,
+                                          admission_state=admission,
+                                          status=legacy_result_status(execution, verdict))
+                    try:
+                        validate_result(candidate, assignment=assignment())
+                    except ContractError:
+                        continue  # a cross-field rule the schema cannot state; the host rejects it
+                    checked += 1
+                    offered = (execution in narrowed["properties"]["execution_state"]["enum"]
+                               and admission in narrowed["properties"]["admission_state"]["enum"])
+                    host = bridge._unrecordable(candidate, assignment())[0] is None
+                    with self.subTest(execution=execution, verdict=verdict, admission=admission):
+                        self.assertEqual(host, offered)
+        self.assertGreater(checked, 20)
+
+    def test_only_a_verification_assignment_gets_the_narrowed_schema(self) -> None:
+        from tests.support import ORCHESTRATION_ROOT
+        raw = (ORCHESTRATION_ROOT / "schemas" / "result.schema.json").read_bytes()
+        worker = json.loads(bridge.result_schema_for(raw, assignment()))
+        verifier = json.loads(bridge.result_schema_for(raw, self.verifier_assignment()))
+        self.assertEqual(json.loads(raw), worker)
+        self.assertEqual(["unverified"], verifier["properties"]["admission_state"]["enum"])
+        security = {**assignment(), "role": "codex_agents_security_reviewer"}
+        self.assertEqual(json.loads(raw), json.loads(bridge.result_schema_for(raw, security)))
+
+    def prepared(self, value: dict, assigned: dict | None = None):
+        report = {"outcome": "result", "rerouted": False}
+        return bridge.prepare_dispatch_result(assigned or self.verifier_assignment(), value, report)
+
+    def test_a_verifier_status_that_disagrees_with_its_verdict_is_repaired_and_recorded(self) -> None:
+        for wrong, verdict, right in (("blocked", "not-ready", "completed"), ("failed", "pass", "completed"),
+                                      ("completed", "blocked", "blocked")):
+            with self.subTest(status=wrong, verdict=verdict):
+                finished, report, fenced, _, terminal, reason = self.prepared(
+                    self.axes(status=wrong, semantic_verdict=verdict))
+                self.assertEqual((False, None, None, "result"), (fenced, terminal, reason, report["outcome"]))
+                self.assertEqual(right, finished["status"])
+                self.assertEqual(verdict, finished["semantic_verdict"])
+                self.assertIn({"field": "status", "was": wrong, "now": right}, report["host_set_fields"])
+
+    def test_a_verifier_admission_is_set_by_the_host_and_recorded(self) -> None:
+        for claimed in ("accepted", "rejected", "pending"):
+            with self.subTest(admission=claimed):
+                finished, report, fenced, *_ = self.prepared(self.axes(admission_state=claimed))
+                self.assertFalse(fenced)
+                self.assertEqual("unverified", finished["admission_state"])
+                self.assertEqual([{"field": "admission_state", "was": claimed, "now": "unverified"}],
+                                 report["host_set_fields"])
+
+    def test_a_clean_verifier_result_records_no_host_set_fields(self) -> None:
+        finished, report, fenced, *_ = self.prepared(self.axes())
+        self.assertFalse(fenced)
+        self.assertNotIn("host_set_fields", report)
+
+    def test_the_host_never_fills_in_a_verdict_or_a_child_timeout(self) -> None:
+        value = self.axes()
+        value["semantic_verdict"] = None
+        _, _, fenced, _, terminal, reason = self.prepared(value)
+        self.assertEqual(("failed", "missing_required_fields", True), (terminal, reason, fenced))
+        timed_out = self.axes(status="failed", execution_state="timed_out", semantic_verdict="not-applicable")
+        self.assertEqual("child_set_timeout", self.prepared(timed_out)[5])
+        failed_with_verdict = self.axes(execution_state="failed", semantic_verdict="pass", status="completed")
+        _, _, fenced, _, _, reason = self.prepared(failed_with_verdict)
+        self.assertEqual(("axes_verdict_without_completion", True), (reason, fenced))
+
+    def test_host_set_fields_hold_only_fixed_values(self) -> None:
+        value = self.axes(admission_state={"CANARY-AXIS": "CANARY-VALUE"}, status="CANARY-REJECTED")
+        _, report, _, _, _, reason = self.prepared(value)
+        self.assertEqual("invalid_status", reason)
+        self.assertNotIn("host_set_fields", report)
+        self.assertNotIn("CANARY", json.dumps(report))
+
+    def test_worker_and_other_review_results_get_no_host_set_fields(self) -> None:
+        for role in ("codex_agents_researcher", "codex_agents_implementation_worker",
+                     "codex_agents_security_reviewer"):
+            assigned = {**assignment(), "role": role}
+            for changes, reason in (({"admission_state": "accepted"}, "child_set_admission"),
+                                    ({"status": "blocked", "semantic_verdict": "not-ready"},
+                                     "axes_status_verdict_mismatch")):
+                with self.subTest(role=role, reason=reason):
+                    _, report, fenced, _, terminal, code = self.prepared(self.axes(**changes), assigned)
+                    self.assertEqual((True, "failed", reason), (fenced, terminal, code))
+                    self.assertNotIn("host_set_fields", report)
 
 
 if __name__ == "__main__":

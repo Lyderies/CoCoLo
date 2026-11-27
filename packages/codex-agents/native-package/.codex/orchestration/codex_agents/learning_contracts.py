@@ -30,7 +30,7 @@ PRODUCER_AUTHORITY = {
     },
     "verifier": {"outcome", "qa_evidence", "evidence_review"},
     "owner": {
-        "feedback", "owner_grant", "grader_calibration", "billing_attestation",
+        "feedback", "owner_grant", "grader_calibration", "billing_attestation", "run_slot_confirmation",
     },
     "lifecycle": {"promotion"},
 }
@@ -61,6 +61,7 @@ DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RECORD_TYPES = {
     "event",
     "event_summary",
+    "retention_summary",
     "outcome",
     "feedback",
     "evaluation_case",
@@ -79,6 +80,7 @@ RECORD_TYPES = {
     "provider_headroom",
     "provider_billing",
     "billing_attestation",
+    "run_slot_confirmation",
     "admission_decision",
     "dispatch_intent",
     "dispatch_result",
@@ -87,6 +89,7 @@ RECORD_TYPES = {
     "execution_provenance",
     "host_open_provenance",
     "host_run_profile",
+    "route_availability",
     "probe_admission",
     "observation_unavailable",
     "provider_usage",
@@ -333,9 +336,20 @@ def parse_bounded_json_value(
         )
     except UnicodeDecodeError as exc:
         raise ContractError("record input must be UTF-8 JSON") from exc
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("record input is invalid JSON") from exc
     return value
+
+
+def route_identity(route: Any) -> Any:
+    """A route as bound by open, dispatch and results: without its advisory, timestamped availability audit.
+
+    RT-RX-18: availability data lives outside the selection identity. Routes stored before RT-ROUTE-EXHAUSTED
+    have no availability field, so their digests are unchanged.
+    """
+    if isinstance(route, dict) and "availability" in route:
+        return {key: value for key, value in route.items() if key != "availability"}
+    return route
 
 
 def canonical_json(data: Any) -> bytes:
@@ -593,7 +607,7 @@ def load_released_candidate_digests(
 
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("learning release registry is invalid") from exc
     if not isinstance(data, dict) or set(data) != {
         "version", "candidate_digests", "signature_b64"
@@ -708,7 +722,13 @@ OUTCOME_FIELDS = {
 }
 
 
-def validate_outcome(data: Any) -> dict[str, Any]:
+# Repair codes a released version wrote into stored outcomes and later dropped from the result
+# validation vocabulary: 4b49660c (0.8.43) split `inconsistent_axes` by branch. Stored records stay
+# readable with it (`stored=True`); a new outcome never carries it.
+LEGACY_OUTCOME_REPAIR_CODES = frozenset({"inconsistent_axes"})
+
+
+def validate_outcome(data: Any, *, stored: bool = False) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ContractError("outcome must be an object")
     axis_fields = {
@@ -806,7 +826,10 @@ def validate_outcome(data: Any) -> dict[str, Any]:
         not isinstance(reason_codes, list)
         or len(reason_codes) != data["repairs"]
         or any(
-            not isinstance(code, str) or code not in RESULT_VALIDATION_REASON_CODES
+            not isinstance(code, str) or (
+                code not in RESULT_VALIDATION_REASON_CODES
+                and (not stored or code not in LEGACY_OUTCOME_REPAIR_CODES)
+            )
             for code in reason_codes
         )
     ):
@@ -1709,10 +1732,11 @@ PROVIDER_IDENTITY_FIELDS = {
     "logged_in", "auth_method", "subscription_type", "plan_type", "client_path",
     "client_sha256", "client_version", "observed_at_ms",
 }
-PROVIDER_HEADROOM_FIELDS = {
+PROVIDER_HEADROOM_REQUIRED_FIELDS = {
     "schema_version", "record_type", "record_id", "provider", "account_fingerprint",
     "windows", "status", "run_id", "phase", "observed_at_ms",
 }
+PROVIDER_HEADROOM_FIELDS = PROVIDER_HEADROOM_REQUIRED_FIELDS | {"probe_id", "restriction_provenance"}
 # When an observation was taken relative to the run it belongs to.
 OBSERVATION_PHASES = {"before", "during", "after"}
 HEADROOM_WINDOW_FIELDS = {"window_minutes", "scope", "used_percent", "resets_at"}
@@ -1724,7 +1748,7 @@ PROVIDER_BILLING_REQUIRED_FIELDS = {
     "ordinary_usage_allowed", "is_using_overage", "overage_status",
     "overage_disabled_reason", "run_id", "phase", "observed_at_ms",
 }
-PROVIDER_BILLING_FIELDS = PROVIDER_BILLING_REQUIRED_FIELDS | {"spend_control_reached"}
+PROVIDER_BILLING_FIELDS = PROVIDER_BILLING_REQUIRED_FIELDS | {"spend_control_reached", "probe_id"}
 # The owner's optional statement that Codex credit spending is disabled on the
 # account. The observation cannot show it, so only a signed grant carries it.
 CODEX_CREDITS_DISABLED_FIELD = "codex_credits_spending_disabled"
@@ -1762,6 +1786,8 @@ ADMISSION_REASON_CODES = {
     "codex_spend_control_reached",
     "window_run_cap_reached",
     "probe_cooldown",
+    # BR-13 (decision 44): a repeat of a finished request that would need a new provider call.
+    "probe_replay_stale",
 }
 CLAUDE_HEADROOM_STATUSES = {"allowed", "allowed_warning", "rejected"}
 CLAUDE_OVERAGE_STATUSES = {"allowed", "allowed_warning", "rejected"}
@@ -1813,6 +1839,10 @@ def _observation_base(data: dict[str, Any], record_type: str) -> None:
 
 
 def _run_phase(data: dict[str, Any]) -> None:
+    if "probe_id" in data:
+        _digest(data["probe_id"], "probe_id", nullable=True)
+        if data["probe_id"] is not None and (data["provider"] != "claude" or data["run_id"] is not None):
+            raise ContractError("probe provenance belongs only to a Claude probe")
     _identifier(data["run_id"], "run_id", nullable=True)
     _enum(data["phase"], OBSERVATION_PHASES, "phase", nullable=True)
     if (data["run_id"] is None) != (data["phase"] is None):
@@ -1844,7 +1874,7 @@ def validate_provider_identity(data: Any) -> dict[str, Any]:
 
 
 def validate_provider_headroom(data: Any) -> dict[str, Any]:
-    data = _closed(data, PROVIDER_HEADROOM_FIELDS, "provider_headroom")
+    data = _closed_optional(data, PROVIDER_HEADROOM_REQUIRED_FIELDS, PROVIDER_HEADROOM_FIELDS, "provider_headroom")
     _observation_base(data, "provider_headroom")
     windows = data["windows"]
     if not isinstance(windows, list) or len(windows) > 16:
@@ -1859,6 +1889,14 @@ def validate_provider_headroom(data: Any) -> dict[str, Any]:
         )
         _integer(window["resets_at"], "resets_at", nullable=True)
     _enum(data["status"], CLAUDE_HEADROOM_STATUSES, "status", nullable=True)
+    provenance = data.get("restriction_provenance")
+    if provenance is not None:
+        if not isinstance(provenance, list) or not 1 <= len(provenance) <= 128:
+            raise ContractError("headroom provenance must be a bounded array")
+        for component in provenance:
+            _closed(component, {"windows", "status", "observed_at_ms"}, "headroom provenance")
+            validate_provider_headroom({**{k: v for k, v in data.items() if k != "restriction_provenance"},
+                                       **component})
     _run_phase(data)
     return data
 
@@ -1959,6 +1997,35 @@ def validate_admission_decision(data: Any) -> dict[str, Any]:
     return data
 
 
+def _slot_confirmation_identity(data):
+    # A confirmation names a slot by (project, handle); an earlier record without a handle names a run id.
+    material = {"run_id": data["run_id"]}
+    if "handle_digest" in data:
+        material["handle_digest"] = data["handle_digest"]
+    return "run_slot_confirmation:" + content_digest(material)
+
+
+def run_slot_confirmation(run_id, handle_digest=None):
+    material = {"schema_version": 1, "record_type": "run_slot_confirmation", "run_id": run_id}
+    if handle_digest is not None:
+        material["handle_digest"] = handle_digest
+    material["record_id"] = _slot_confirmation_identity(material)
+    return validate_run_slot_confirmation(material)
+
+
+def validate_run_slot_confirmation(data):
+    data = _closed_optional(data, {"schema_version", "record_type", "record_id", "run_id"},
+                            {"schema_version", "record_type", "record_id", "run_id", "handle_digest"},
+                            "run_slot_confirmation")
+    _base(data, "run_slot_confirmation")
+    _identifier(data["run_id"], "run_id")
+    if "handle_digest" in data:
+        _digest(data["handle_digest"], "handle_digest")
+    if data["record_id"] != _slot_confirmation_identity(data):
+        raise ContractError("slot confirmation identity is invalid")
+    return data
+
+
 DISPATCH_INTENT_FIELDS = {
     "schema_version", "record_type", "record_id", "run_id", "bridge_run_id",
     "provider", "model", "effort", "deadline_at_ms", "observed_at_ms",
@@ -1991,6 +2058,9 @@ DISPATCH_RESULT_FIELDS = {
 }
 DISPATCH_RESULT_SCHEMA_VERSION = 3
 DISPATCH_RESULT_V2_FIELDS = DISPATCH_RESULT_FIELDS | {"result_validation_reason_code"}
+# L6.1: the Claude client's own tool names; any other denied name is reported as "other".
+CLIENT_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit",
+    "WebFetch", "WebSearch", "Task", "TodoWrite", "StructuredOutput", "other"})
 DISPATCH_RESULT_V3_FIELDS = DISPATCH_RESULT_V2_FIELDS | {"client_diagnostics"}
 
 
@@ -2059,6 +2129,20 @@ HOST_RUN_PROFILE_FIELDS = {
 }
 
 
+def validate_route_availability(data: Any) -> dict[str, Any]:
+    data = _closed(data, {"schema_version", "record_type", "record_id", "run_id",
+                          "availability", "observed_at_ms"}, "route_availability")
+    _base(data, "route_availability")
+    _identifier(data["run_id"], "run_id")
+    _integer(data["observed_at_ms"], "observed_at_ms")
+    audit = data["availability"]
+    if (type(audit) is not dict or audit.get("status") not in {"checked", "not_checked"}
+            or type(audit.get("open_attempts")) is not list or not 1 <= len(audit["open_attempts"]) <= 2
+            or audit.get("open_attempt_count") != len(audit["open_attempts"])):
+        raise ContractError("route availability open attempts are invalid")
+    return data
+
+
 def validate_host_run_profile(data: Any) -> dict[str, Any]:
     """The host-side checks an opened run passed, and how its model was pinned."""
 
@@ -2116,6 +2200,68 @@ def validate_observation_unavailable(data: Any) -> dict[str, Any]:
     _enum(data["phase"], OBSERVATION_PHASES, "phase")
     _enum(data["reason_code"], OBSERVATION_UNAVAILABLE_REASONS, "reason_code")
     _integer(data["observed_at_ms"], "observed_at_ms")
+    return data
+
+
+# Never shrink this vocabulary: a summary is a stored historical record.
+STORED_RETENTION_DETAIL_TYPES = frozenset({
+    'provider_identity', 'provider_headroom', 'provider_billing', 'admission_decision', 'dispatch_intent',
+    'outcome', 'event',
+})
+RETAINABLE_DETAIL_TYPES = STORED_RETENTION_DETAIL_TYPES - {'event'}
+# Stored history has its own additive vocabulary, independent of live writers.
+STORED_RETENTION_SOURCES = frozenset({
+    'hook', 'app_server', 'host', 'evaluator', 'verifier', 'owner', 'lifecycle', 'provider',
+})
+STORED_RETENTION_OUTCOME_STATUSES = frozenset({
+    'accepted', 'rejected', 'unverified', 'failed', 'cancelled', 'interrupted',
+})
+
+
+def validate_retention_summary(data: Any) -> dict[str, Any]:
+    data = _closed(data, {'schema_version', 'record_type', 'record_id', 'observed_at_ms', 'keep_days',
+                         'first_observed_at_ms', 'last_observed_at_ms', 'record_count',
+                         'record_counts', 'source_counts', 'record_id_digests', 'record_content_digests',
+                         'outcome_counts', 'detail'} | ({'record_id_types'} if type(data) is dict and 'record_id_types' in data else set()), 'retention_summary')
+    _base(data, 'retention_summary')
+    for name in ('observed_at_ms', 'first_observed_at_ms', 'last_observed_at_ms'):
+        _integer(data[name], name)
+    _integer(data['keep_days'], 'keep_days', minimum=90, maximum=90)
+    _integer(data['record_count'], 'record_count', minimum=1, maximum=32)
+    _digest_list(data['record_id_digests'], 'record_id_digests')
+    _digest_list(data['record_content_digests'], 'record_content_digests')
+    if 'record_id_types' in data:
+        types = data['record_id_types']
+        if (type(types) is not list or len(types) != data['record_count']
+                or any(type(kind) is not str or kind not in STORED_RETENTION_DETAIL_TYPES for kind in types)
+                or {kind: types.count(kind) for kind in set(types)} != data['record_counts']):
+            raise ContractError('invalid retention identity types')
+    if len(data['record_id_digests']) != data['record_count']:
+        raise ContractError('retention identities do not add up')
+    if not data['first_observed_at_ms'] <= data['last_observed_at_ms'] <= data['observed_at_ms']-90*86_400_000:
+        raise ContractError('retention summary times are inconsistent')
+    for field, allowed in (('record_counts', STORED_RETENTION_DETAIL_TYPES), ('source_counts', STORED_RETENTION_SOURCES)):
+        counts = data[field]
+        if type(counts) is not dict or not counts or not set(counts) <= allowed:
+            raise ContractError('invalid retention counts')
+        for value in counts.values():
+            _integer(value, field, minimum=1, maximum=32)
+        if sum(counts.values()) != data['record_count']:
+            raise ContractError('retention counts do not add up')
+    if len(data['record_content_digests']) not in {data['record_count'], data['record_counts'].get('outcome', 0)}:
+        raise ContractError('retention content identities do not add up')
+    counts = data['outcome_counts']
+    if type(counts) is not dict or not set(counts) <= STORED_RETENTION_OUTCOME_STATUSES:
+        raise ContractError('invalid historical outcome counts')
+    for value in counts.values():
+        _integer(value, 'outcome_counts', minimum=1, maximum=32)
+    if sum(counts.values()) != data['record_counts'].get('outcome', 0):
+        raise ContractError('outcome counts do not add up')
+    if type(data['detail']) is not str or data['detail'] not in {
+        'Details older than 90 days; counts only.',
+        'Individual details older than 90 days were removed; these are historical counts only.',
+    }:
+        raise ContractError('invalid retention explanation')
     return data
 
 
@@ -2345,6 +2491,7 @@ def validate_host_open_provenance(data: Any) -> dict[str, Any]:
 
 
 VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    "retention_summary": validate_retention_summary,
     "host_open_provenance": validate_host_open_provenance,
     "execution_provenance": validate_execution_provenance,
     "host_result_admission": validate_host_result_admission,
@@ -2368,10 +2515,12 @@ VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "provider_headroom": validate_provider_headroom,
     "provider_billing": validate_provider_billing,
     "billing_attestation": validate_billing_attestation,
+    "run_slot_confirmation": validate_run_slot_confirmation,
     "admission_decision": validate_admission_decision,
     "dispatch_intent": validate_dispatch_intent,
     "dispatch_result": validate_dispatch_result,
     "host_run_profile": validate_host_run_profile,
+    "route_availability": validate_route_availability,
     "probe_admission": validate_probe_admission,
     "observation_unavailable": validate_observation_unavailable,
     "provider_usage": validate_provider_usage,
@@ -2380,14 +2529,19 @@ VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
 }
 
 
-def validate_learning_record(data: Any) -> dict[str, Any]:
+_STORED_READABLE = frozenset({"outcome"})
+
+
+def validate_learning_record(data: Any, *, stored: bool = False) -> dict[str, Any]:
+    """Validate one record. The default is for a record being written now. `stored=True` is only for
+    reading bytes that already exist: they may hold a value an earlier release wrote and no writer does."""
     if not isinstance(data, dict):
         raise ContractError("learning record must be an object")
     record_type = data.get("record_type")
     validator = VALIDATORS.get(record_type)
     if validator is None:
         raise ContractError("unsupported learning record type")
-    checked = validator(data)
+    checked = validator(data, stored=stored) if record_type in _STORED_READABLE else validator(data)
     if len(canonical_json(checked)) > MAX_RECORD_BYTES:
         raise ContractError("learning record is oversized")
     return checked

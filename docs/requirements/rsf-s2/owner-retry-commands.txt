@@ -1,0 +1,14 @@
+# Run from the repository root in an owner shell; PY is set in commands.txt.
+
+COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_account_billing_admission --module codex:tests.test_account_claim_jobs --module codex:tests.test_billing_gate --module codex:tests.test_cleanup_receipt_lifetime --module codex:tests.test_collector_read_scope --module codex:tests.test_diagnostic_delivery
+
+COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_e2a_launch_record --module codex:tests.test_e2a_wake_wire --module codex:tests.test_event_retention --module codex:tests.test_health_contention --module codex:tests.test_installer --module codex:tests.test_learning_cli
+
+COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_learning_migration --module codex:tests.test_learning_store --module codex:tests.test_ledger_lock_limits --module codex:tests.test_open_request_lifetime --module codex:tests.test_open_withdrawal --module codex:tests.test_owned_execution
+
+COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_project_hold_register --module codex:tests.test_project_host_open --module codex:tests.test_project_qa_commit --module codex:tests.test_project_start --module codex:tests.test_rsf_s4_slots --module codex:tests.test_state_location
+
+COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_upgrade_handover
+
+# Not run here: the live reply producer matrix requires Unix sockets and native child supervision.
+COCOLO_WORKER_TIMEOUT=240 "$PY" -B scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live

@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/p9.md",
+ "requirements": [
+  {
+   "id": "P9-1",
+   "statement": "### P9-1 \u2014 Claims use current verified applicable evidence\n\nAfter collector maintenance, a public deferred claim succeeds with an attestation capture limit of two despite three valid attestations for the same account/provider whose superseded rows remain cited. The latest verified applicable attestation wins, with source sequence breaking observation-time ties. Another account and another provider cannot replace it, and an invalid newer stored signature cannot supersede it. Admission and standalone signature capture use the same attestation candidates. The deferred job's aggregate admission budget remains separate from its two-attestation regression boundary.",
+   "source": "tests/requirements/p9.json#P9-1"
+  },
+  {
+   "id": "P9-2",
+   "statement": "### P9-2 \u2014 Collector maintenance preserves references and makes bounded progress\n\nThe collector's own sweep cycle uses independent inspection and deletion rowid cursors. Each pass examines at most a batch of deletion candidates even when they are cited, removes eligible uncited superseded attestations in bounded batches, retains cited records and signatures, and eventually finishes across repeated cycles. References remain readable through the repository. A signature row alone never proves supersession; only a verified later attestation for the same project, account and provider permits deletion.",
+   "source": "tests/requirements/p9.json#P9-2"
+  },
+  {
+   "id": "P9-3",
+   "statement": "### P9-3 \u2014 Projection is derived and fails closed on changes\n\nSupersession results are connection-local derived data, never durable signature authority. Results bind exact stored content, digest, source, sequence, observation time, signature and owner generation. A changed input or owner generation invalidates its cached result; uncached inputs remain candidates until checked. Capture performs no cryptography or writes, and the worker still verifies captured signatures and exact recapture before admission. Restart requires collector maintenance to rebuild the projection. Verification runs outside the ledger lock and account transaction, then records a verdict only after exact row and owner-generation recheck. Both valid and invalid verdicts are cached for unchanged inputs and generation. Verifier exceptions (including subprocess timeouts) leave rows unchecked for retry. No persistent schema or record shape changes.",
+   "source": "tests/requirements/p9.json#P9-3"
+  },
+  {
+   "id": "P9-4",
+   "statement": "### P9-4 \u2014 Remaining capture candidates retain hard quotas\n\nAfter maintenance, exact checked foreign-provider rows are excluded from signature capture. Unknown or changed rows are conservatively charged before provider filtering. Row and byte quotas still refuse overflow before copying bodies, and malformed metadata still refuses safely. Cited superseded history is retained independently of these capture quotas.\n\nThe P9-4 header, body and admission selection queries use indexed materialized candidate membership before ordering and limiting. SQLite VM work for a claim with zero versus 10,000 retained cited superseded rows differs by only a small constant. Unchecked rows remain charged.\n\nWork-budget and deadline refusal tests exercise unchecked candidate history, which is still charged, while unrelated events can be skipped by the candidate index. Refusal still precedes body copying and restores the read scope and owner connection.",
+   "source": "tests/requirements/p9.json#P9-4"
+  }
+ ]
+}

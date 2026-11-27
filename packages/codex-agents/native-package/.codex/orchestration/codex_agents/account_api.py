@@ -14,10 +14,12 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
+from .reply_shapes import reply_fields_match
 from .contracts import ContractError
+from .collector_contracts import RUNTIME_UPDATE_COMMAND, RUNTIME_UPGRADE_MESSAGE
 from .learning_contracts import canonical_json, parse_bounded_json
 from .owner_key_contracts import checked_public_key
-from .service_transport import MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
+from .service_transport import MAX_TIMEOUT_SECONDS, SERVICE_REFUSALS, ServiceTransportError, exchange_frame
 from .account_claim_contracts import CLAIM_ERROR_CODES, ClaimError, LaunchClaimInput, checked_claim_receipt, decode_claim_input
 from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status, decode_capacity_status_input
 from .execution_grant import ExecutionRegistrationInput, checked_execution_reply, decode_execution_registration
@@ -43,12 +45,18 @@ from .rate_limit_contracts import (
 from .billing_probe_contracts import (
     BILLING_PROBE_REASONS, BillingProbeError, checked_billing_probe_reply, decode_billing_probe_input,
 )
+from .open_withdrawal import (
+    WITHDRAW_ERROR_CODES, WithdrawError, WithdrawOpenInput, checked_withdraw_reply, decode_withdraw_open,
+)
+from .wake_contracts import WAKE_REASON_CODES, checked_wake_reply, decode_wake_publish
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
 MAX_ACCOUNT_INTEGER = (1 << 63) - 1
 ACCOUNT_READ_OPERATIONS = frozenset({
+    'account.takeover_report',
     "account.health", "account.project", "account.owner_key", "account.owner_public_key", "account.capacity_status",
+    "account.provider_state_snapshot",
 })
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
@@ -56,14 +64,23 @@ ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     'account.open_host_run', 'account.observe_provider',
     'account.record_observation_unavailable', 'account.record_rate_limit_event',
     'account.billing_probe',
+    # B3 (RS-B draft 2 §8): a never-claimed run's open, withdrawn by its project's service or its opening host.
+    'account.withdraw_open',
+    # B4s (RS-B-B4-1): a settled or released lost run's closure for the project store; settle_lost_run's reply is fixed.
+    'account.lost_run_closure',
+    # RS-E E2a-6: a project service's wake state, under its project-bound credential.
+    'account.publish_wake',
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
     "account_incompatible", "account_project_not_found",
+    "runtime_upgrade_required",
     # The account closed the connection without replying: it may have restarted (0.3.3, C11).
     "account_closed_without_reply",
-}) | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS | ADMISSION_CAPTURE_PUBLIC_REASONS
+    # The account's connection limit is reached (an attach refusal, said as service_refused_busy on the wire).
+    "account_busy",
+}) | SERVICE_REFUSALS | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS | ADMISSION_CAPTURE_PUBLIC_REASONS | WITHDRAW_ERROR_CODES | WAKE_REASON_CODES
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -80,7 +97,7 @@ class AccountError(RuntimeError):
         if type(reason_code) is not str or reason_code not in ACCOUNT_REASON_CODES:
             reason_code = "account_invalid_request"
         self.reason_code = reason_code
-        super().__init__(reason_code)
+        super().__init__(RUNTIME_UPGRADE_MESSAGE if reason_code == "runtime_upgrade_required" else reason_code)
 
 
 def matches(value: object, pattern: re.Pattern[str]) -> bool:
@@ -180,11 +197,27 @@ def _checked_request(data: object) -> None:
             decode_fence_claim(data['payload'])
         except ClaimError:
             raise AccountError('account_invalid_request') from None
-    elif data['operation'] == 'account.settle_lost_run':
+    elif data['operation'] in {'account.settle_lost_run', 'account.lost_run_closure'}:
         try:
             decode_settle_lost(data['payload'])
         except ClaimError:
             raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.withdraw_open':
+        try:
+            decode_withdraw_open(data['payload'])
+        except WithdrawError:
+            raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.publish_wake':
+        try:
+            decode_wake_publish(data['payload'])
+        except ValueError:
+            raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.takeover_report':
+        value = data['payload']
+        if (set(value) not in (set(), {'offset', 'predecessor_version'}) or not integer(value.get('offset', 0))
+                or (value.get('predecessor_version') is not None and (type(value['predecessor_version']) is not str
+                    or re.fullmatch(r'\d+\.\d+\.\d+', value['predecessor_version']) is None))):
+            raise AccountError('account_invalid_request')
     elif data["payload"]:
         raise AccountError("account_invalid_request")
 
@@ -219,8 +252,26 @@ def account_request_digest(request: AccountRequest) -> str:
 
 
 def _checked_result(result: object, request: AccountRequest) -> dict:
-    if type(result) is not dict:
+    if not reply_fields_match(request.operation, result):
         raise AccountError("account_invalid_response")
+    if request.operation == 'account.takeover_report':
+        if (('lineage_message' in result and type(result['lineage_message']) is not str)
+                or not integer(result['other_projects']) or not integer(result['other_runs'])
+                or (result['recorded_at_ms'] is not None and not integer(result['recorded_at_ms']))
+                or (result['next_offset'] is not None and (not integer(result['next_offset'])
+                    or result['next_offset'] <= request.payload.get('offset', 0)))
+                or type(result['updates']) is not list
+                or any(type(row) is not dict or set(row) != {'version', 'children', 'update_message'}
+                       or not integer(row['children']) or type(row['update_message']) is not str
+                       or (row['version'] is not None and (type(row['version']) is not str
+                           or re.fullmatch(r'\d+\.\d+\.\d+', row['version']) is None)) for row in result['updates'])):
+            raise AccountError('account_invalid_response')
+        return result
+    elif request.operation == 'account.publish_wake':
+        try:
+            return checked_wake_reply(result, decode_wake_publish(request.payload))
+        except ValueError:
+            raise AccountError('account_invalid_response') from None
     if request.operation == 'account.billing_probe':
         try:
             return checked_billing_probe_reply(result)
@@ -308,6 +359,22 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             return checked_lost_reply(result, decode_settle_lost(request.payload))
         except ClaimError:
             raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.lost_run_closure':
+        from .lost_run_closure import checked_lost_run_closure
+        try:
+            checked = checked_lost_run_closure(result, decode_settle_lost(request.payload))
+            if (checked['binding']['project_id'] != request.project_id
+                    or checked['binding']['runtime_digest'] != request.runtime_digest
+                    or checked['request_digest'] != account_request_digest(request)):
+                raise ClaimError('claim_cleanup_invalid')
+            return checked
+        except ClaimError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.withdraw_open':
+        try:
+            return checked_withdraw_reply(result, decode_withdraw_open(request.payload))
+        except WithdrawError:
+            raise AccountError('account_invalid_response') from None
     elif request.operation == 'account.close_denied_attempt':
         try:
             checked = checked_denial_closure(result, decode_close_denied(request.payload))
@@ -316,6 +383,18 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             return checked
         except ClaimError:
             raise AccountError('account_invalid_response') from None
+    elif request.operation == "account.provider_state_snapshot":
+        from .admission_metadata import ProviderStateSnapshot
+        try:
+            checked = ProviderStateSnapshot(result["project_id"], result["evaluated_at_ms"], result["providers"])
+            if (result != checked.audit() or result["project_id"] != request.project_id
+                    or type(result["evaluated_at_ms"]) is not int
+                    or set(result["providers"]) != {"codex", "claude"}
+                    or any(v["state"] not in {"unknown", "ample", "constrained", "exhausted"}
+                           for v in result["providers"].values())):
+                raise ValueError()
+        except (KeyError, TypeError, ValueError):
+            raise AccountError("account_invalid_response") from None
     elif request.operation == "account.health":
         if set(result) != {"transport_alive", "database_checked"} or result["transport_alive"] is not True or result["database_checked"] is not False:
             raise AccountError("account_invalid_response")
@@ -365,8 +444,13 @@ def decode_account_response(raw: bytes, request: AccountRequest) -> dict:
         if type(raw) is not bytes or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:
             raise AccountError("account_invalid_response")
         data = parse_bounded_json(raw, max_bytes=MAX_ACCOUNT_FRAME_BYTES - 1)
+        fields = _RESPONSE_FIELDS
+        if type(data) is dict and data.get("reason_code") == "runtime_upgrade_required":
+            fields = fields | {"message", "update_command"}
+            if data.get("message") != RUNTIME_UPGRADE_MESSAGE or data.get("update_command") != RUNTIME_UPDATE_COMMAND:
+                raise AccountError("account_invalid_response")
         if (
-            set(data) != _RESPONSE_FIELDS or type(data["protocol_version"]) is not int
+            set(data) != fields or type(data["protocol_version"]) is not int
             or data["protocol_version"] != ACCOUNT_PROTOCOL_VERSION
             or data["request_id"] != request.request_id or data["project_id"] != request.project_id
             or data["runtime_digest"] != request.runtime_digest
@@ -402,23 +486,32 @@ class AccountClient:
             raise AccountError("account_invalid_request")
         self._path, self._project, self._runtime, self._timeout = socket_path, project_id, runtime_digest, timeout
 
-    def _read(self, operation: str, request_id: str | None) -> dict:
+    def _read(self, operation: str, request_id: str | None, payload=None) -> dict:
         identity = "read-" + secrets.token_hex(16) if request_id is None else request_id
-        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, operation, identity, self._project, self._runtime, {})
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, operation, identity, self._project, self._runtime,
+                                 {} if payload is None else payload)
         raw = encode_account_request(request)
         sent = decode_account_request(raw)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else "account_unavailable"
         else:
-            failed = False
+            failed = None
         if failed:
-            raise AccountError("account_unavailable")
+            raise AccountError(failed)  # R7b: a service's own refusal reason is kept
         return decode_account_response(reply, sent)
 
     def health(self, *, request_id: str | None = None) -> dict:
         return self._read("account.health", request_id)
+
+    def takeover_report(self, offset=0, predecessor_version=None):
+        return self._read('account.takeover_report', None, dict(offset=offset, predecessor_version=predecessor_version))
+
+    def provider_state_snapshot(self, *, request_id: str | None = None):
+        from .admission_metadata import ProviderStateSnapshot
+        value = self._read("account.provider_state_snapshot", request_id)
+        return ProviderStateSnapshot(value["project_id"], value["evaluated_at_ms"], value["providers"])
 
     def project(self, *, request_id: str | None = None) -> dict:
         return self._read("account.project", request_id)
@@ -435,8 +528,9 @@ class AccountClient:
         raw = encode_account_request(request)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            raise AccountError('account_unavailable') from None
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            raise AccountError(error.reason_code if error.reason_code in SERVICE_REFUSALS
+                               else 'account_unavailable') from None
         return decode_account_response(reply, request)
 
     def observe_provider(self, provider, *, request_id, run_handle=None, phase=None):
@@ -449,8 +543,9 @@ class AccountClient:
         raw = encode_account_request(request)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            raise AccountError('account_unavailable') from None
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            raise AccountError(error.reason_code if error.reason_code in SERVICE_REFUSALS
+                               else 'account_unavailable') from None
         return decode_account_response(reply, request)
 
     def record_observation_unavailable(self, provider, *, run_handle, phase, reason_code, request_id):
@@ -463,8 +558,9 @@ class AccountClient:
         raw = encode_account_request(request)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            raise AccountError('account_unavailable') from None
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            raise AccountError(error.reason_code if error.reason_code in SERVICE_REFUSALS
+                               else 'account_unavailable') from None
         return decode_account_response(reply, request)
 
     def record_rate_limit_event(self, run_handle, rate_limit_info, *, request_id):
@@ -477,8 +573,9 @@ class AccountClient:
         raw = encode_account_request(request)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            raise AccountError('account_unavailable') from None
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            raise AccountError(error.reason_code if error.reason_code in SERVICE_REFUSALS
+                               else 'account_unavailable') from None
         return decode_account_response(reply, request)
 
     def claim_launch(self, run_handle: str, identity_digest: str, *, request_id: str) -> dict:
@@ -491,12 +588,12 @@ class AccountClient:
         raw = encode_account_request(request)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else "account_unavailable"
         else:
-            failed = False
+            failed = None
         if failed:
-            raise AccountError("account_unavailable")
+            raise AccountError(failed)  # R7b: a service's own refusal reason is kept
         return decode_account_response(reply, request)
 
     def open_host_run(self, opening: AccountOpenInput, *, request_id: str) -> dict:
@@ -510,8 +607,9 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  request_limit=MAX_ACCOUNT_FRAME_BYTES, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            raise AccountError('account_unavailable') from None
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            raise AccountError(error.reason_code if error.reason_code in SERVICE_REFUSALS
+                               else 'account_unavailable') from None
         return decode_account_response(raw, request)
 
     def register_execution(self, run_handle, bridge_run_id, claim_digest, claim_request_id, identity_digest, *, request_id):
@@ -526,10 +624,10 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else "account_unavailable"
         if failed:
-            raise AccountError("account_unavailable")
+            raise AccountError(failed)
         return decode_account_response(raw, request)
 
     def run_provenance(self, provenance_request, *, request_id):
@@ -545,10 +643,10 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  request_limit=MAX_ACCOUNT_FRAME_BYTES, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
         if failed:
-            raise AccountError('account_unavailable')
+            raise AccountError(failed)
         return decode_account_response(raw, request)
 
     def open_provenance(self, provenance_request, *, request_id):
@@ -563,8 +661,9 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  request_limit=MAX_ACCOUNT_FRAME_BYTES, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            raise AccountError('account_unavailable') from None
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            raise AccountError(error.reason_code if error.reason_code in SERVICE_REFUSALS
+                               else 'account_unavailable') from None
         return decode_account_response(raw, request)
 
     def release_capacity(self, submission, *, request_id):
@@ -579,8 +678,9 @@ class AccountClient:
                                  request_limit=MAX_ACCOUNT_FRAME_BYTES, response_limit=MAX_ACCOUNT_FRAME_BYTES)
         except ClaimError:
             raise AccountError('account_invalid_request') from None
-        except ServiceTransportError:
-            raise AccountError('account_unavailable') from None
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            raise AccountError(error.reason_code if error.reason_code in SERVICE_REFUSALS
+                               else 'account_unavailable') from None
         return decode_account_response(raw, request)
 
     def submit_terminal(self, submission, *, request_id):
@@ -598,10 +698,10 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
         if failed:
-            raise AccountError('account_unavailable')
+            raise AccountError(failed)
         return decode_account_response(raw, request)
 
     def close_denied_attempt(self, closure, *, request_id):
@@ -617,10 +717,10 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
         if failed:
-            raise AccountError('account_unavailable')
+            raise AccountError(failed)
         return decode_account_response(raw, request)
 
     def fence_claim(self, fence, *, request_id):
@@ -636,10 +736,10 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
         if failed:
-            raise AccountError('account_unavailable')
+            raise AccountError(failed)
         return decode_account_response(raw, request)
 
     def settle_lost_run(self, settle, *, request_id):
@@ -655,10 +755,48 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
         if failed:
-            raise AccountError('account_unavailable')
+            raise AccountError(failed)
+        return decode_account_response(raw, request)
+
+    def lost_run_closure(self, settle, *, request_id):
+        """B4s: the closure of a run the account settled lost or found released, for the project store."""
+        if type(settle) is not SettleLostInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.lost_run_closure', request_id,
+                                     self._project, self._runtime, settle.payload())
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
+        failed = False
+        try:
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
+        if failed:
+            raise AccountError(failed)
+        return decode_account_response(raw, request)
+
+    def withdraw_open(self, withdrawal, *, request_id):
+        """End a never-claimed run's open at the account (B3); an identical retry gets the stored receipt."""
+        if type(withdrawal) is not WithdrawOpenInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', request_id,
+                                     self._project, self._runtime, withdrawal.payload())
+        except WithdrawError:
+            raise AccountError('account_invalid_request') from None
+        failed = False
+        try:
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
+        if failed:
+            raise AccountError(failed)
         return decode_account_response(raw, request)
 
     def capacity_status(self, run_handle: str, bridge_run_id: str, *, request_id: str | None = None) -> dict:
@@ -678,10 +816,10 @@ class AccountClient:
         raw = encode_account_request(request)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else "account_unavailable"
         else:
-            failed = False
+            failed = None
         if failed:
-            raise AccountError("account_unavailable")
+            raise AccountError(failed)  # R7b: a service's own refusal reason is kept
         return decode_account_response(reply, request)

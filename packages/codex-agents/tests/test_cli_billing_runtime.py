@@ -3,9 +3,11 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -25,6 +27,12 @@ from codex_agents.learning_contracts import canonical_json, keyed_digest
                      'original fixed macOS signature worker guard')
 class CliBillingRuntimeTests(unittest.TestCase):
     launches = fixtures.AccountBillingJobTests.launches
+
+    @classmethod
+    def setUpClass(cls):
+        # TESTSPEED-4: the fresh CLIs share one bytecode cache outside the source tree, so only the first compiles.
+        cls.bytecode = tempfile.mkdtemp(prefix='cli-pyc-')
+        cls.addClassCleanup(shutil.rmtree, cls.bytecode, ignore_errors=True)
 
     def setUp(self):
         fixtures.AccountBillingJobTests.setUp(self)
@@ -79,9 +87,11 @@ class CliBillingRuntimeTests(unittest.TestCase):
             env['CODEX_THREAD_ID'] = 'fixture-billing-primary'
         else:
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-billing-primary')
+        env['COCOLO_TEST_ENDED_SERVICE_STARTS'] = '1'  # TESTSPEED-3: no collector runs here, so its start ends at once
         env.update(environment or {})
         args = [] if identity is None else ['--request-id', identity]
-        process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'provider-observe',
+        process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.bytecode, '-m', 'tests.dispatch_cli_fixture',
+            'provider-observe',
             '--project-root', str(root or self.fixture.project), '--state-root', str(self.state.root),
             '--provider', provider, *(['--billing-probe'] if billing else []), *args, *extra],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -114,6 +124,7 @@ class CliBillingRuntimeTests(unittest.TestCase):
                 time.sleep(.005)
         fixtures.AccountBillingJobTests.stop(self)
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-3', 'TESTSPEED-4', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_both_primary_hosts_use_account_api_and_preserve_launched_projection_and_redaction(self):
         for host in ('codex', 'claude'):
             code, result = self.take(self.start(host=host))
@@ -129,8 +140,11 @@ class CliBillingRuntimeTests(unittest.TestCase):
     def test_explicit_known_request_returns_original_records_without_another_observation_or_model(self):
         code, first = self.take(self.start(identity='original-cli-probe'))
         self.assertEqual(0, code, first)
-        with mock.patch.object(self.billing._observations, 'submit', side_effect=AssertionError('known identity reprobe')):
+        # Decision 47 (M-identity): a repeat is judged again on a new identity observation of its own (the local
+        # client's login: no model call, nothing spent), never on a reprobe: exactly one observation, one launch.
+        with mock.patch.object(self.billing._observations, 'submit', wraps=self.billing._observations.submit) as observed:
             code, known = self.take(self.start(identity='original-cli-probe'))
+        self.assertEqual(1, observed.call_count)
         self.assertEqual((0, {**first, 'known': True}), (code, known))
         self.assertEqual(1, len(self.launches()))
 
@@ -151,6 +165,33 @@ class CliBillingRuntimeTests(unittest.TestCase):
         self.assertEqual(0, code, known)
         self.assertTrue(known['known'])
         self.assertEqual(1, len(self.launches()))
+
+    def test_T2_a_probe_after_a_finished_claude_run_is_ready_and_reused_with_probe_records_only(self):
+        """R1 end to end: the child's own run-tagged records must not make the next probe unavailable."""
+        from codex_agents.providers import claude_rate_limit_records
+        code, first = self.take(self.start())
+        self.assertEqual(0, code, first)
+        fingerprint = next(r for r in first['records'] if r['record_type'] == 'provider_identity')['account_fingerprint']
+        now = int(time.time()*1000)
+        run = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': False, 'overageStatus': 'rejected',
+            'overageDisabledReason': 'org_level_disabled'}, account_fingerprint=fingerprint, observed_at_ms=now,
+            run_id='run-finished-1')
+        self.ledger._store_provider_observations(self.fixture.project_id, run, timestamp=now)
+        code, second = self.take(self.start())
+        self.assertEqual(0, code, second)
+        self.assertTrue(second['ready'])
+        self.assertEqual('reused', second['probe'])
+        self.assertTrue(all(r.get('run_id') is None and r.get('phase') is None for r in second['records']))
+        self.assertEqual(1, len(self.launches()))
+
+    def test_T4_a_reply_that_fails_its_own_contract_is_named_and_recorded_in_the_billing_lane(self):
+        """R3: no bare probe_unavailable for a reply-decode failure; the lane's last_failure says why."""
+        from codex_agents.account_api import AccountError
+        with mock.patch('codex_agents.account_service.decode_account_response',
+                        side_effect=AccountError('account_invalid_response')):
+            code, failed = self.take(self.start())
+        self.assertEqual((2, 'probe_reply_invalid'), (code, failed['reason_code']))
+        self.assertEqual('probe_reply_invalid', self.billing.health.view()['last_failure']['cause'])
 
     def test_paid_usage_failure_is_fixed_and_recovery_does_not_refresh_clean_billing(self):
         self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, bridge_fixtures.OVERAGE, {'sleep': 3}])
@@ -210,9 +251,13 @@ class CliBillingRuntimeTests(unittest.TestCase):
         code, alone = self.take(self.start(identity='probe-after-overlap'))
         self.assertEqual((0, None), (code, alone.get('reason_code')), alone)
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-2', 'TESTSPEED-3', 'TESTSPEED-4', 'TESTSPEED-5', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_second_project_fresh_cli_observes_while_first_probe_process_is_held(self):
-        # The first probe is held well past what a fresh CLI process takes to start on a slow machine.
-        self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, {'sleep': 8},
+        # The first probe is held until the test lets it go, however long a fresh CLI process takes to start
+        # on a slow machine (TESTSPEED-5: a gate file, not a fixed 8 s sleep every run pays).
+        gate = self.fixture.tools/'held-first-gate'
+        self.addCleanup(lambda: gate.parent.is_dir() and not gate.exists() and gate.write_text('go'))
+        self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, {'wait_for': str(gate)},
                                      bridge_fixtures.FAVOURABLE, bridge_fixtures.result_frame('OK')])
         first = self.start(identity='held-first')
         self.wait(lambda: any(j.state == 'offered' and j.supervisor is not None
@@ -227,4 +272,31 @@ class CliBillingRuntimeTests(unittest.TestCase):
         self.assertEqual(0, code, observed)
         self.assertLess(time.monotonic()-start, 6)
         self.assertIsNone(first.poll())  # Answered while the first probe was still held.
+        gate.write_text('go')
         self.assertEqual(0, self.take(first)[0])
+
+
+class ProbeCooldownRetryTests(unittest.TestCase):
+    def test_PC6_client_preserves_reply_retry_time(self):
+        from codex_agents import client_runtime as runtime
+        retry = '2026-11-23T12:34:00Z'
+        reply = {'probe': 'denied', 'reason_code': 'probe_cooldown', 'records': [],
+                 'known': False, 'observed_at_ms': 5, 'retry_at': retry}
+        with mock.patch.object(runtime, 'CollectorPaths'), mock.patch.object(runtime, 'CollectorClient') as collector, \
+                mock.patch.object(runtime, '_account_target', return_value=('p', Path('/tmp/account'))), \
+                mock.patch.object(runtime, 'enroll_clients'), mock.patch.object(runtime, 'api_keys_present', return_value=False), \
+                mock.patch.object(runtime, 'AccountClient') as account:
+            collector.return_value.health.return_value = {}
+            account.return_value.billing_probe.return_value = reply
+            with self.assertRaises(runtime.RuntimeBillingProbeError) as raised:
+                runtime.billing_probe_client('/tmp/state', '/tmp/project', request_id='pc6')
+        self.assertEqual(retry, raised.exception.retry_at)
+
+    def test_PC6_reply_contract_accepts_utc_retry_only_for_cooldown(self):
+        from codex_agents.billing_probe_contracts import checked_billing_probe_reply, BillingProbeError
+        reply = {'probe': 'denied', 'reason_code': 'probe_cooldown', 'records': [],
+                 'known': False, 'observed_at_ms': 5, 'retry_at': '2026-11-23T12:34:00Z'}
+        self.assertEqual(reply, checked_billing_probe_reply(reply))
+        for changes in ({'retry_at': 'bad'}, {'reason_code': 'probe_busy'}, {'retry_at': '2026-11-23T12:34:00+13:00'}):
+            with self.assertRaises(BillingProbeError):
+                checked_billing_probe_reply({**reply, **changes})

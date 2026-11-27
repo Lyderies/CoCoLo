@@ -1,0 +1,56 @@
+{
+ "base": {
+  "decoded_content_bytes": 1072927,
+  "packed_content_bytes": 334087,
+  "admission_retained_bytes": 681424,
+  "job_charged_bytes": 742567,
+  "decoded_to_packed_content": 3.2115197538365754,
+  "decoded_to_admission_charge": 1.5745365587358238,
+  "decoded_to_job_charge": 1.4448891480499402
+ },
+ "no_probes": {
+  "decoded_content_bytes": 693955,
+  "packed_content_bytes": 229578,
+  "admission_retained_bytes": 462867,
+  "job_charged_bytes": 524010,
+  "decoded_to_packed_content": 3.0227417261235834,
+  "decoded_to_admission_charge": 1.499253565279011,
+  "decoded_to_job_charge": 1.3243163298410336
+ },
+ "four_accounts": {
+  "decoded_content_bytes": 1677409,
+  "packed_content_bytes": 546745,
+  "admission_retained_bytes": 1097686,
+  "job_charged_bytes": 1218877,
+  "decoded_to_packed_content": 3.0679914768310637,
+  "decoded_to_admission_charge": 1.5281319065743755,
+  "decoded_to_job_charge": 1.3761921834606774
+ },
+ "largest_payload": {
+  "decoded_content_bytes": 1857277,
+  "packed_content_bytes": 368165,
+  "admission_retained_bytes": 715502,
+  "job_charged_bytes": 776645,
+  "decoded_to_packed_content": 5.044686485678976,
+  "decoded_to_admission_charge": 2.59576772671495,
+  "decoded_to_job_charge": 2.39141048999221
+ },
+ "combined_double_peak": {
+  "decoded_content_bytes": 3706195,
+  "packed_content_bytes": 727784,
+  "admission_retained_bytes": 1418958,
+  "job_charged_bytes": 1540149,
+  "decoded_to_packed_content": 5.092438140986887,
+  "decoded_to_admission_charge": 2.6119131080694427,
+  "decoded_to_job_charge": 2.4063873040855137
+ },
+ "double_peak": {
+  "decoded_content_bytes": 1533015,
+  "packed_content_bytes": 460699,
+  "admission_retained_bytes": 948269,
+  "job_charged_bytes": 1009412,
+  "decoded_to_packed_content": 3.3275848221941007,
+  "decoded_to_admission_charge": 1.6166456986361466,
+  "decoded_to_job_charge": 1.5187207998319814
+ }
+}

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import queue
+import stat
 import threading
 
 from .preparation_reasons import PREPARATION_STAGE_REASONS
@@ -16,7 +17,7 @@ from .codex_worker import MAX_INPUT_BYTES, CodexWorkerError, CodexWorkerPool, _d
 from .contracts import validate_assignment
 from .history_api import HistoryClient
 from .history_contracts import valid_integer
-from .host_paths import remove_private_directory
+from .host_paths import PREPARATION_OWNER_MARKER, preparation_owner_marker, remove_private_directory
 from .learning_contracts import canonical_json, parse_bounded_json
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest
 from .orchestration_api import OrchestrationScope
@@ -128,12 +129,74 @@ def preparation_payload(prospective, project_root, bundle_root, environ, *, expe
 def _remove(workspace):
     try:
         remove_private_directory(workspace)
+    except BaseException:
+        pass
+    # The remover may raise ENOENT for a child. Only observing this directory's
+    # absence proves cleanup, whatever the remover returned or raised.
+    try:
         workspace.lstat()
     except FileNotFoundError:
         return True
     except BaseException:
         pass
     return False
+
+
+def _write_owner_marker(workspace, marker):
+    """HM-2a: name the service that owns a new preparation folder (see host_paths.PREPARATION_OWNER_MARKER).
+
+    Written once, owner-only, never followed or replaced. A failure never fails the preparation: a folder whose
+    marker could not be written in full (an error from open, write or close, or a short write) is left with no
+    marker (a partial one is removed), so it has no owner proof and the health check only reports it, never removes
+    it. Returns None when written, else the failure recorded as a fixed reason code."""
+    if marker is None:
+        return None
+    path = workspace/PREPARATION_OWNER_MARKER
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0), 0o600)
+    except OSError:
+        return 'owner_marker_not_written'
+    failure = None
+    try:
+        if os.write(descriptor, marker) != len(marker):
+            failure = 'owner_marker_not_written'
+    except OSError:
+        failure = 'owner_marker_not_written'
+    try:
+        os.close(descriptor)
+    except OSError:
+        failure = 'owner_marker_not_closed'  # what was written may not be all there: it is not owner proof
+    if failure is not None:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    return failure
+
+
+def remove_recorded_workspace(recorded):
+    """Remove a folder an earlier service recorded as not yet removed (PREPCLEAN-4); True once it is observed absent.
+
+    The record is data from the store, never trusted as a path: only this host's own preparation folder (a real
+    directory of this user, named `prepare-*`, directly in the scratch container) is removed. A record that names
+    anything else is not ours and has nothing to remove (True). Something else standing where our folder was (a link,
+    a file, another owner's entry) is left alone and is not proof of removal (False)."""
+    try:
+        path = Path(recorded)
+        container = Path(os.path.realpath(bridge.scratch_base())) / bridge.SCRATCH_CONTAINER
+        if (not path.is_absolute() or '..' in path.parts or not path.name.startswith('prepare-')
+                or path.parent != container):
+            return True
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return True
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or os.path.realpath(container) != str(container):
+            return False
+    except Exception:
+        return False
+    return _remove(path)
 
 
 def _worker_input(prospective, endpoint, supplied=None):
@@ -167,7 +230,7 @@ def _worker_input(prospective, endpoint, supplied=None):
     return parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
 
 
-def _build(payload, scope):
+def _build(payload, scope, marker=None):
     workspace, started, stage = None, False, 'decode'
     try:
         value = parse_bounded_json(payload, max_bytes=MAX_INPUT_BYTES)
@@ -201,14 +264,12 @@ def _build(payload, scope):
                 raise PreparationError('preparation_invalid_input')
         root, bundle = Path(value['project_root']), Path(value['bundle_root'])
         stage = 'role_prompt'
-        if claude:
-            role_prompt, schema = bridge._claude_role_prompt(bundle, route), None
-        else:
-            role_prompt = bridge._codex_role_prompt(bundle, route)
-            from .learning_engine import _read_managed_bytes
-            schema = _read_managed_bytes(RUNTIME_ROOT, '.codex/orchestration/schemas/result.schema.json',
-                                         max_bytes=MAX_RESULT_BODY_BYTES)
-            bridge.codex_schemas(schema)
+        role_prompt = bridge._claude_role_prompt(bundle, route) if claude else bridge._codex_role_prompt(bundle, route)
+        # O10 VF-1: both providers' children are held to the same result schema.
+        from .learning_engine import _read_managed_bytes
+        schema = _read_managed_bytes(RUNTIME_ROOT, '.codex/orchestration/schemas/result.schema.json',
+                                     max_bytes=MAX_RESULT_BODY_BYTES)
+        bridge.codex_schemas(schema)
         stage = 'worker_input'
         worker_result = _worker_input(prospective, value['history_endpoint'], value['worker_result'])
         stage = 'read_paths'
@@ -220,6 +281,7 @@ def _build(payload, scope):
         started = True
         stage = 'workspace'
         workspace = bridge.private_workspace('prepare-', claude=claude, project_root=root)
+        _write_owner_marker(workspace, marker)
         try:
             metadata = bridge.export_committed_snapshot(root, paths, workspace/'export',
                 expected_commit=value['expected_export_commit'])
@@ -278,6 +340,7 @@ class CodexPreparationLane:
         self._lock, self._jobs = threading.Lock(), {}
         self._slots = [_Slot() for _ in range(limits.workers)]
         self._closing = self._busy = False
+        self._marker = None  # HM-2a: the owner marker each new preparation folder gets (set_owner)
         try:
             for slot in self._slots:
                 slot.thread = threading.Thread(target=self._worker, args=(slot,), daemon=True)
@@ -292,6 +355,18 @@ class CodexPreparationLane:
         if self._pid != os.getpid() or self._owner_thread is not threading.current_thread():
             raise PreparationError('preparation_not_authorized')
         self._pool._owner()
+
+    def set_owner(self, state_root, project_id, instance):
+        """HM-2a: name the service that owns this lane's preparation folders from now on: its learning state, its
+        project and its launch-journal instance, whose lock that service holds while it runs. Each new folder gets a
+        marker saying so, which is what lets a later cleanup prove the owner gone."""
+        self._owner()
+        try:
+            marker = preparation_owner_marker(state_root, project_id, instance)
+        except ValueError:
+            raise PreparationError('preparation_invalid_input') from None
+        with self._lock:
+            self._marker = marker
 
     def _job(self, handle):
         self._owner()
@@ -439,6 +514,18 @@ class CodexPreparationLane:
                 job.state = 'unknown'
                 raise PreparationError() from None
 
+    def workspace_of(self, handle):
+        """The folder of a given-back preparation whose removal is not observed, or None (PREPCLEAN-4)."""
+        job = self._job(handle)
+        with self._lock:
+            return job.workspace if job.state == 'unknown' and job.cancelled else None
+
+    def unlocated(self, handle):
+        """Whether a given-back preparation's removal is unconfirmed and no folder is known for it (PREPCLEAN-3)."""
+        job = self._job(handle)
+        with self._lock:
+            return job.state == 'unknown' and job.cancelled and job.workspace is None
+
     def retire(self, handle):
         job = self._job(handle)
         with self._lock:
@@ -494,8 +581,9 @@ class CodexPreparationLane:
                         continue
                     if state == 'queued':
                         job.state = 'exporting'
+                    marker = self._marker
                 if state == 'queued':
-                    artifact, reason, workspace, unknown = _build(job.payload, self._scope)
+                    artifact, reason, workspace, unknown = _build(job.payload, self._scope, marker)
                     with self._lock:
                         job.artifact, job.reason, job.workspace = artifact, reason, workspace
                         cleanup = artifact is not None and (job.cancelled or self._closing)

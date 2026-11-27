@@ -83,6 +83,52 @@ sandbox_mode = "workspace-write"
 network_access = true
 ```
 
+## Shared user settings
+
+The account state folder can contain an optional `user-settings.json`. Edit it to
+change ledger and project-store warnings without restarting the collector or
+changing the installed runtime. The default state folder is listed above;
+`XDG_STATE_HOME` can move it as described below.
+
+```json
+{
+  "store_size_bytes": 8589934592,
+  "store_growth_bytes_per_day": 1073741824,
+  "disk_free_bytes": 2147483648,
+  "disk_free_percent": 5,
+  "no_merge_warning_ms": 5400000,
+  "memory_available_percent": 10
+}
+```
+
+These defaults warn at 8 GiB, or growth over 1 GiB per day. They report to status
+and its owner attention list; new runs remain allowed. Size/growth values use
+integer bytes, at least 1 MiB and at most 2^63-1.
+Growth compares at least six hours, avoiding alarms from short bursts after a
+baseline renewal or WAL truncation. A backwards clock resets the growth baseline.
+Any key can be omitted to use its default. The next health pass
+reloads changes, and the health summary displays the S9 values in force, including
+before the first pass. Project measurements refresh as the bounded scan visits them. An invalid file produces a
+plain warning and uses the defaults. Use an ordinary file owned by your account;
+symlinks and special files are reported as invalid. Duplicate/unknown keys and
+non-integer values also make the whole file invalid; warnings contain no file content.
+
+This is the single file and shared `codex_agents.user_settings.load` loader for
+all user limits. S10 uses `disk_free_bytes` (default 2 GiB, minimum 1 MiB) and
+`disk_free_percent` (default 5, range 1-99): a new run is refused when free space
+on the workspace folder or on the account state folder is below the larger of the
+two (2 GiB on disks under 40 GiB, 5% above). The refusal says which folder, how
+much is free and needed, and how to change the limit; if the free space cannot be
+read the run is also refused. The check happens before anything is recorded for the
+run; the open command then exits with an error that gives the reason. Low disks are also
+shown in the status warning list, and so is an invalid settings file (the open command's
+reply also carries `settings_warning` while the defaults are in force).
+The VM disk joins in S19. `memory_available_percent` (default 10, range 1-99)
+only reports memory pressure in status; it never refuses a run. S35 will use
+`no_merge_warning_ms` (default 5,400,000 ms = 1.5 h, minimum 60,000 ms) for the
+no-merge warning. Integer limits have a maximum of 2^63-1
+unless a narrower range is stated. Defaults record owner decisions 340/341.
+
 ## Environment
 
 | Variable | Effect |

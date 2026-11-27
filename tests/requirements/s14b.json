@@ -1,0 +1,35 @@
+{
+ "authority": "docs/requirements/s14b.md",
+ "requirements": [
+  {
+   "id": "S14b-1",
+   "statement": "Five-year storage at twice the accepted peak fits 16 GiB.",
+   "source": "tests/requirements/s14b.json#S14b-1"
+  },
+  {
+   "id": "S14b-2",
+   "statement": "Expired run detail is summarised atomically while live authority and learning remain.",
+   "source": "tests/requirements/s14b.json#S14b-2"
+  },
+  {
+   "id": "S14b-3",
+   "statement": "Retention is bounded owner-thread maintenance and cannot block work.",
+   "source": "tests/requirements/s14b.json#S14b-3"
+  },
+  {
+   "id": "S14b-4",
+   "statement": "Swept detail has a plain historical answer and stored vocabulary remains readable.",
+   "source": "tests/requirements/s14b.json#S14b-4"
+  },
+  {
+   "id": "S14b-5",
+   "statement": "Retention summaries survive backup, upgrade, source imaging and transfer.",
+   "source": "tests/requirements/s14b.json#S14b-5"
+  },
+  {
+   "id": "S14b-6",
+   "statement": "Retention indexes are created inside the consented records-upgrade step (the ledger 17->18 open of --upgrade-ledger, and the B4t takeover adoption) on every path that performs it; a plain or unconsented open creates none; registration with a running collector leaves them in place (decision 349).",
+   "source": "tests/requirements/s14b.json#S14b-6"
+  }
+ ]
+}

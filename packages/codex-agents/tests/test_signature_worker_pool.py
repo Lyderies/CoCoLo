@@ -110,6 +110,60 @@ class SignatureWorkerPoolTests(unittest.TestCase):
             time.sleep(0.002)
         return list(received.values())
 
+    def started_on_a_worker(self, pool):
+        handle = self.capture(0)
+        pool.offer_next()  # the owner hands it to a worker
+        started = time.monotonic()
+        # The owner hands it to a worker (a fast fake job may already be done), then stops polling.
+        while (not any(slot.current is not None for slot in pool._slots)
+               and pool.health.view()['last_failure'] is None):
+            pool.poll()
+            self.assertLess(time.monotonic() - started, 10)
+            time.sleep(0.002)
+        return handle
+
+    def test_C4_an_offer_that_fails_shows_the_pool_faulted_without_another_poll(self):
+        pool = self.make_pool()
+        self.capture(0)
+        with mock.patch.object(pool._slots[0].incoming, 'put_nowait', side_effect=RuntimeError('a secret')):
+            with self.assertRaises(BaseException):
+                pool.offer_next()
+        self.pool = None  # a faulted pool keeps its intake for an explicit shutdown
+        view = pool.health.view()
+        self.assertEqual((True, 'signature_offer_failed', 'RuntimeError'),
+                         (view['faulted'], view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertEqual((1, 0), (view['kept'], view['busy']))  # its job is unknown, not busy
+
+    def test_H1a_an_internal_failure_is_noted_with_its_type_and_no_fault(self):
+        pool = self.make_pool()
+        with mock.patch.object(execution, '_execute_signature_job', side_effect=RuntimeError('a secret')):
+            self.started_on_a_worker(pool)
+            started = time.monotonic()
+            while pool.health.view()['last_failure'] is None:
+                self.assertLess(time.monotonic() - started, 10)
+                time.sleep(0.002)
+        view = pool.health.view()
+        self.assertEqual(('signature_worker_failed', 'RuntimeError', False, 0),
+                         (view['last_failure']['cause'], view['last_failure']['type'], view['faulted'], view['kept']))
+        self.assertNotIn('secret', repr(view))
+
+    def test_H1a_an_unconfirmed_job_is_kept_by_its_worker_while_the_owner_does_not_poll(self):
+        pool = self.make_pool()
+        with mock.patch.object(execution, '_execute_signature_job',
+                               side_effect=execution.SignatureExecutionUnconfirmed(object())):
+            self.started_on_a_worker(pool)
+            started = time.monotonic()
+            while pool.health.view()['kept'] < 1:  # no poll: the worker publishes it
+                self.assertLess(time.monotonic() - started, 10)
+                time.sleep(0.002)
+        self.assertEqual('signature_execution_unconfirmed', pool.health.view()['last_failure']['cause'])
+        # O0c M8 (replacing H1a's "kept, not faulted"): an unknown execution faults its lane, so the
+        # account's self-restart fires.
+        self.assertTrue(pool.health.view()['faulted'])
+        pool.poll()  # the owner acknowledges it: still counted once
+        self.assertEqual(1, pool.health.view()['kept'])
+        self.pool = None  # its worker keeps custody for good; nothing to drain here
+
     def test_two_actual_jobs_keep_returned_fields_until_consumed_with_no_owner_external_waits(self):
         attest_provider(self.fixture.ledger, self.fixture.projects[1], self.fixture.key, "codex", "b" * 64)
         pool = self.make_pool()

@@ -34,8 +34,10 @@ class SourceArchive:
     size: int
 
 # The ledger schema the image is taken at. 14 added only the admission evidence
-# index, which is not part of a project's backup, so the image's tables are 13's.
-SCHEMA_VERSION = 14
+# index (not in a project's backup: derived from what is); 15 added the hold
+# register (O0b RS-A), which is in it, since a crashed release cannot be derived.
+# Schema 16 adds nullable probe provenance to the original records.
+SCHEMA_VERSION = 18
 # The registered backup is a streamed (format 3) SQLite file, read one batch at a
 # time; this bounds its size, not memory. It matches the ledger's own limit.
 MAX_BACKUP_BYTES = 16 * 1024 ** 3
@@ -65,6 +67,7 @@ _KEYS = {
     "account_observation_requests": ("request_key",),
     "account_billing_probe_origins": ("request_key",),
     "account_billing_probe_requests": ("request_key",),
+    "run_holds": ("kind", "identity"),
     "host_run_bindings": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("orchestration_id",),
@@ -108,7 +111,7 @@ def _owner(ledger):
     connection._read_owner()
     if ledger._allow_schema_upgrade is not True:
         raise HistoryError("history_not_authorized")
-    if (ledger._collector_active is not False or ledger._active_readers != 0
+    if (ledger._collector_active is not False or ledger._readers() != 0
             or connection.in_transaction or connection._sql_scope is not None
             or connection._sql_foreign_progress):
         raise HistoryError("history_unavailable")
@@ -174,7 +177,11 @@ def _drained(connection, now, monotonic_ns=None, *, children_only=False):
     # Otherwise an unclaimed run counts until its binding expires: no claim can be
     # admitted after that, so it can never record anything.
     monotonic_ns = time.monotonic_ns() if monotonic_ns is None else monotonic_ns
-    crashed, parameters = crashed_claim("a", now, monotonic_ns)
+    # Only an unreleased earlier-version slot can be decided by its recorded dispatch
+    # deadline; with none (read in this same hold) that branch is left out.
+    legacy = _one(connection, "SELECT 1 FROM active_run_capacity WHERE kind='legacy_unknown' "
+                  "AND released_at_ms IS NULL LIMIT 1") is not None
+    crashed, parameters = crashed_claim("a", now, monotonic_ns, legacy_slots=legacy)
     if children_only:
         crashed = f"({crashed} OR a.kind='legacy_unknown')"
     if ((not children_only and _one(connection,
@@ -205,14 +212,28 @@ def _schema(connection, store):
     # Global account metadata stays with its original owner; unknown tables
     # could hide an unrepresented project partition, so refuse this image.
     # admission_evidence holds only fields derived from the records it indexes.
-    if {row[0] for row in names} != {*_KEYS, "projects", "additive_migrations",
-                                   "owner_key_history", "sqlite_sequence", "admission_evidence"}:
+    # E2a-1: the machine-local wake and starter tables are never part of the image (0.8.60 full-run fixes); each
+    # one present must have exactly its own columns, so it cannot hide an unrepresented partition either.
+    found = {row[0] for row in names}
+    # B4t authority never travels with another project's learning image.
+    local = found & (set(store.LOCAL_TABLE_COLUMNS) | {'runtime_floor', 'runtime_lineage'})
+    if found - local != {*_KEYS, "projects", "additive_migrations",
+                         "owner_key_history", "sqlite_sequence", "admission_evidence", "runtime_takeover"}:
         raise HistoryError("history_incompatible")
+    exact = {**store.LOCAL_TABLE_COLUMNS, **store.OTHER_TABLE_COLUMNS}  # decision 249: the extra tables too
+    for table in sorted(found & set(exact)):
+        cursor = connection.execute("PRAGMA table_xinfo(" + table + ")")  # xinfo also lists generated columns
+        try:
+            rows = cursor.fetchmany(65)
+        finally:
+            cursor.close()
+        if tuple(r[1] for r in rows) != exact[table] or any(r[6] for r in rows):
+            raise HistoryError("history_incompatible")
     for table in ("projects", *_KEYS):
         row = _one(connection, "SELECT type FROM sqlite_master WHERE name=?", (table,))
         if row is None or row[0] != "table":
             raise HistoryError("history_incompatible")
-        cursor = connection.execute("PRAGMA table_info(" + table + ")")
+        cursor = connection.execute("PRAGMA table_xinfo(" + table + ")")
         try:
             rows = cursor.fetchmany(65)
         finally:
@@ -220,7 +241,10 @@ def _schema(connection, store):
         columns = (store._BACKUP_PROJECT_COLUMNS if table == "projects"
                    else ("project_id", *store._BACKUP_TABLE_COLUMNS[table]))
         keys = ("project_id",) if table == "projects" else ("project_id", *_KEYS[table])
-        if (len(rows) > 64 or {r[1] for r in rows} != set(columns)
+        names = {r[1] for r in rows}
+        if table == "projects" and store.LOCAL_PROJECT_COLUMNS <= names:
+            names -= store.LOCAL_PROJECT_COLUMNS  # E2a-1: the machine-local launch record, never in the image
+        if (len(rows) > 64 or names != set(columns) or any(r[6] for r in rows)
                 or tuple(r[1] for r in sorted(rows, key=lambda r: r[5]) if r[5]) != keys):
             raise HistoryError("history_incompatible")
 
@@ -248,21 +272,23 @@ def _page(connection, store, project_id, file_id, table, last):
         parameters.extend(last)
     sql += " ORDER BY " + ",".join(keys) + " LIMIT 32"
     cursor = connection.execute(sql, parameters)
-    rows, used = [], 0
+    rows, encoded, used = [], [], 0
     try:
         for raw in cursor:
             row = {name: store._backup_encode_value(raw[name]) for name in columns}
-            size = len(canonical_json(row))
+            canonical = canonical_json(row)
+            size = len(canonical)
             if size > PAGE_BYTES:
                 raise HistoryError("history_learning_capacity")
             if used + size > PAGE_BYTES:
                 break
             _key(row, keys)
             rows.append(row)
+            encoded.append(canonical)  # the comparison reuses it instead of encoding the row again
             used += size
     finally:
         cursor.close()
-    return rows
+    return rows, encoded
 
 
 def _compare(connection, store, project_id, file_id, backup, limits, now):
@@ -288,15 +314,15 @@ def _compare(connection, store, project_id, file_id, backup, limits, now):
         try:
             last = None
             while True:
-                rows = connection.transaction_read_call(limits,
+                rows, encoded = connection.transaction_read_call(limits,
                     lambda: _page(connection, store, project_id, file_id, table, last))
                 if not rows:
                     if next(expected, None) is not None:
                         raise HistoryError("history_conflict")
                     break
-                for row in rows:
+                for row, canonical in zip(rows, encoded):
                     wanted = next(expected, None)
-                    if wanted is None or canonical_json(row) != canonical_json(wanted):
+                    if wanted is None or canonical != canonical_json(wanted):
                         raise HistoryError("history_conflict")
                 # Resume after the last CONSUMED row if the byte envelope stopped a
                 # page early. A fetched-but-unconsumed row is read again next page.
@@ -355,7 +381,7 @@ def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
     from . import learning_store as store
 
     _owner(ledger)
-    with ledger._lock:
+    with ledger._held():
         custody = _owner(ledger)
         connection = ledger._connection
         _schema(connection, store)

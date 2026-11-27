@@ -177,6 +177,147 @@ class EventRetentionTests(unittest.TestCase):
         self.assertEqual({"linked", "free"}, {row[0] for row in self.connection.execute(
             "SELECT record_id FROM records WHERE project_id=? AND record_type='event'", (self.project,))})
 
+    def _summaries(self):
+        return [json.loads(bytes(row[0])) for row in self.connection.execute(
+            "SELECT content FROM records WHERE project_id=? AND record_type='event_summary' ORDER BY record_id",
+            (self.project,))]
+
+    def _raw_ids(self):
+        return {row[0] for row in self.connection.execute(
+            "SELECT record_id FROM records WHERE project_id=? AND record_type='event'", (self.project,))}
+
+    def test_learning_expire_summarises_the_raw_events_it_removes_before_removing_them(self):
+        # L10.3 (T7 S3): raw events go, summaries stay, through the owner's real learning-expire.
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        for number in range(5):
+            self.append(event(f"e{number}", "tool_started", observed_at_ms=start + number), now_ms=start + number)
+        self.append(event("o", "tool_output_observed", observed_at_ms=start + 9, run_id="run_2"), now_ms=start + 9)
+        self.assertEqual([], self._summaries())
+        self.assertGreaterEqual(self.ledger.expire(self.project, now_ms=start + 8 * DAY), 6)
+        self.assertEqual(set(), self._raw_ids())
+        summaries = self._summaries()
+        totals = {}
+        for summary in summaries:
+            validate_learning_record(summary)
+            self.assertEqual("2026-10-01", summary["day"])
+            for code, count in summary["event_counts"].items():
+                totals[(summary["run_id"], code)] = count
+        self.assertEqual({("run_1", "tool_started"): 5, ("run_2", "tool_output_observed"): 1}, totals)
+
+    def test_learning_expire_and_the_sweep_never_summarise_the_same_events_twice(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        for number in range(4):
+            self.append(event(f"s{number}", "tool_started", observed_at_ms=start + number), now_ms=start + number)
+        later = start + 8 * DAY
+        self.assertEqual(2, self.ledger.sweep_event_retention(now_ms=later, batch=2))
+        self.assertEqual(2, len(self._raw_ids()))
+        self.ledger.expire(self.project, now_ms=later)
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual(4, sum(summary["event_count"] for summary in self._summaries()))
+        before = self._summaries()
+        self.ledger.expire(self.project, now_ms=later)
+        self.assertEqual(0, self.ledger.sweep_event_retention(now_ms=later))
+        self.assertEqual(before, self._summaries())
+
+    def test_an_event_named_by_a_file_that_expire_removes_is_erased_with_no_summary(self):
+        # Decision 200: the file-name check comes before the file registration is removed.
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        self.append(event("named", "tool_started", observed_at_ms=start), now_ms=start)
+        self.append(event("plain", "tool_started", observed_at_ms=start + 1), now_ms=start + 1)
+        (self.ledger.state.artifacts / self.project).mkdir(parents=True, exist_ok=True)
+        (self.ledger.state.artifacts / self.project / "f1").write_bytes(b"x")
+        self.connection.execute(
+            "INSERT INTO stored_files(project_id,file_id,kind,relative_path,content_digest,source_record_id,"
+            "expires_at_ms) VALUES(?,?,?,?,?,?,?)",
+            (self.project, "f1", "artifact", f"artifacts/{self.project}/f1", "0" * 64, "named", start + DAY)).close()
+        self.ledger.expire(self.project, now_ms=start + 8 * DAY)
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual([1], [summary["event_count"] for summary in self._summaries()])
+
+    def test_an_ordinary_record_cannot_take_an_event_summary_identifier(self):
+        start = 1_000_000_000_000
+        with self.assertRaisesRegex(LedgerError, "evsum-"):
+            self.append(event("evsum-" + "a" * 32, "tool_started", observed_at_ms=start), now_ms=start)
+
+    def test_a_reused_event_id_never_shares_a_summary_with_its_predecessor_and_a_taken_id_is_refused(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        for round_ in range(2):  # The same id, run and UTC day both times.
+            self.append(event("same", "tool_started", observed_at_ms=start + round_ * 1000),
+                        now_ms=start + round_ * 1000)
+            self.ledger.expire(self.project, now_ms=start + round_ * 1000 + 8 * DAY)
+        self.assertEqual([1, 1], [summary["event_count"] for summary in self._summaries()])
+        record = self._summaries()[0]
+        with self.assertRaisesRegex(LedgerError, "already taken"):
+            self.ledger._write_event_summary(self.project, record, start)
+
+    def test_one_expire_call_summarises_a_bounded_batch_and_reports_more(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        for number in range(5):
+            self.append(event(f"b{number}", "tool_started", observed_at_ms=start + number), now_ms=start + number)
+        later = start + 8 * DAY
+        with mock.patch.object(learning_store, "EXPIRE_SUMMARY_BATCH", 2):
+            first = self.ledger.expire_report(self.project, now_ms=later)
+            self.assertTrue(first["more"])
+            self.assertEqual(3, len(self._raw_ids()))
+            self.assertEqual(2, sum(s["event_count"] for s in self._summaries()))
+            while self.ledger.expire_report(self.project, now_ms=later)["more"]:
+                pass
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual(5, sum(s["event_count"] for s in self._summaries()))
+
+    def _seed(self, count, start):
+        rows = []
+        for number in range(count):
+            record = validate_learning_record(event(f"m{number}", "tool_started", observed_at_ms=start + number))
+            rows.append((self.project, record["record_id"], "event", "hook", number + 1000, start + number,
+                         start + number, start + 1, json.dumps(record).encode(), "d%063d" % number, 0))
+        with self.connection:
+            self.connection.executemany(
+                "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
+                "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows)
+
+    def test_one_expire_call_drains_a_backlog_of_1501_events(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        self._seed(1501, start)
+        self.assertEqual(1501, self.ledger.expire(self.project, now_ms=start + 8 * DAY))
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual(1501, sum(s["event_count"] for s in self._summaries()))
+
+    def test_collector_sweep_cycles_drain_expired_events_in_bounded_batches(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        self._seed(1501, start)
+        server = learning_store.CollectorServer(self.ledger)
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=start + 8 * DAY):
+            for remaining in (1001, 501, 1, 0):
+                server._sweep_cycle()
+                self.assertEqual(remaining, len(self._raw_ids()))
+                self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual(1501, sum(s["event_count"] for s in self._summaries()))
+
+    def test_the_work_of_one_expire_hold_does_not_grow_with_the_backlog(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        steps = []
+        for count in (1200, 4000):
+            self.connection.execute("DELETE FROM records WHERE project_id=?", (self.project,)).close()
+            self._seed(count, start)
+            calls = [0]
+
+            def tick():
+                calls[0] += 1
+                return 0
+            self.connection.set_progress_handler(tick, 100)
+            try:
+                # The reads that choose what one hold removes, up to the exclusive lock.
+                with mock.patch.object(self.ledger, "_begin_exclusive_maintenance",
+                                       side_effect=LedgerError("stop")), \
+                        self.assertRaisesRegex(LedgerError, "stop"):
+                    self.ledger.expire_report(self.project, now_ms=start + 8 * DAY)
+            finally:
+                self.connection.set_progress_handler(None, 0)
+            steps.append(calls[0])
+        self.assertLess(steps[1], steps[0] * 1.25, steps)
+
     def test_a_summary_is_only_written_with_the_removal_it_describes(self):
         now = 1_000_000_000_000
         for number in range(5):
@@ -252,7 +393,7 @@ class EventRetentionTests(unittest.TestCase):
         sequence = self.connection.execute("SELECT COALESCE(MAX(source_sequence),0)+1 FROM records "
                                            "WHERE project_id=?", (self.project,)).fetchone()[0]
         self.connection.execute(
-            "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (self.project, "early", "event", "app_server", sequence, now, now, now + DAY, b"not json",
              "0" * 64, 0)).close()
         for number in range(5):

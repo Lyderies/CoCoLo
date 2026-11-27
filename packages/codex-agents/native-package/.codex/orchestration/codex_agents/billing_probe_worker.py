@@ -9,16 +9,20 @@ import hashlib
 import os
 from pathlib import Path
 import queue
+import secrets
+from threading import local as _ThreadLocal
 import threading
 import time
 
+from . import lane_health
 from . import bridge
 from .admission_metadata import _headroom_state
+from .billing_probe_contracts import PROBE_INIT_REASONS
 from .history_contracts import _DIGEST, _PROJECT, matches, valid_integer
 from .learning_contracts import canonical_json, parse_bounded_json_value, validate_learning_record
 from .owned_execution import ExecutionTicket, OwnedExecutionKey, OwnedExecutionRegistry
 from .provider_restrictions import BILLING_RANK, merged_restriction
-from .providers import claude_rate_limit_records, client_environment, resolve_client
+from .providers import probe_records, claude_rate_limit_records, client_environment, resolve_client
 
 MAX_PROBE_INPUT_BYTES = 128*1024
 MAX_PROBE_PACKET_BYTES = 16*1024
@@ -82,6 +86,35 @@ class _Job:
     packet_snapshot: tuple | None = None
     workspace: Path | None = None
     cancelled: bool = False
+    token: int = 0  # S1-H1a: counts this job once in the lane's health notes
+    held: bool = False  # S1-H1a: this job has entered the lane's held episode
+
+
+def _held(slot, job, cause, type_name=None, *, faulted=False):
+    """S1-H1a: this worker publishes its own unknown job (and fault) as kept and held. Reporting only;
+    never raises (C1): the whole record, its arguments included, runs inside lane_health.safely.
+    O0c M10: an unknown job faults the lane, so the account's self-restart fires."""
+    def record():
+        changes = {'faulted': True} if faulted or job is not None else {}
+        if job is not None:
+            changes['kept'] = frozenset({job.token})
+        slot.note.publish(**changes)
+        slot.lane.note_failure_named(slot.note, cause, type_name)
+        if job is None or not job.held:
+            if job is not None:
+                job.held = True
+            slot.lane.enter_held()
+    lane_health.safely(record)
+
+
+def _released(slot, job):
+    """S1-H1a C6: this worker's job was confirmed clean: withdraw it from kept and from the held
+    episode; its failure note stays. Never raises."""
+    def record():
+        job.held = False
+        slot.note.publish(kept=frozenset(), faulted=False)  # O0c M10: no longer unknown
+        slot.lane.leave_held()
+    lane_health.safely(record)
 
 
 class _Slot:
@@ -100,6 +133,33 @@ def probe_payload(project, request_key, root, identity, *, deadline_ns, created_
     return raw
 
 
+_CAUGHT = _ThreadLocal()  # per worker thread
+
+
+def _caught(error, step):
+    """S1-H1a C7: keep, for this thread's note of that step's failure, only the type name of the
+    exception a helper caught (no exception object, so no frames are kept). Never raises."""
+    try:
+        kept = getattr(_CAUGHT, 'types', None)
+        if kept is None:
+            kept = _CAUGHT.types = {}
+        kept[step] = type(error).__name__
+    except BaseException:  # noqa: BLE001
+        pass
+
+
+def _take_caught(step=None):
+    """The type name kept for this step (all of them are cleared when step is None). Never raises."""
+    try:
+        kept = getattr(_CAUGHT, 'types', None) or {}
+        if step is None:
+            kept.clear()
+            return None
+        return kept.pop(step, None)
+    except BaseException:  # noqa: BLE001
+        return None
+
+
 def _remove(workspace):
     if workspace is None:
         return True
@@ -108,8 +168,8 @@ def _remove(workspace):
         workspace.lstat()
     except FileNotFoundError:
         return True
-    except BaseException:
-        pass
+    except BaseException as error:
+        _caught(error, 'cleanup')  # S1-H1a C7
     return False
 
 
@@ -162,14 +222,16 @@ def _prepare(payload):
             canonical_json(identity), key, 'hrn_'+digest('probe-native-v1')[:48], value['deadline_ns'],
             hashlib.sha256(payload).hexdigest())
         return prepared, workspace, False
-    except BaseException:
+    except BaseException as error:
+        _caught(error, 'prepare')  # S1-H1a C7: its type, for the worker that notes this failure
         if workspace is not None:
             clean = _remove(workspace)
             return None, None if clean else workspace, not clean
         return None, None, started
 
 
-def _normalized(infos, failure, identity, observed):
+def _normalized(infos, failure, identity, observed, client_version=None):
+    probe_id = secrets.token_hex(32)
     heads, bills, invalid = [], [], 0
     for info in infos:
         try:
@@ -188,9 +250,12 @@ def _normalized(infos, failure, identity, observed):
             records = [*([head] if head['status'] != 'allowed'
                 or _headroom_state('claude', head, observed) not in {'ample', None} else []),
                 *([bill] if bill['paid_usage_usable'] is not False else [])]
-    reason = 'probe_incomplete' if failure is not None else ('probe_invalid_events' if invalid
+    # CI-3: a probe the init check stopped keeps its fixed reason; any other failure stays probe_incomplete.
+    reason = (failure if failure in PROBE_INIT_REASONS else 'probe_incomplete') if failure is not None else ('probe_invalid_events' if invalid
         else 'probe_no_events' if not heads else None)
-    body = canonical_json({'records': records, 'observed_at_ms': observed, 'reason_code': reason})
+    records = probe_records(records, probe_id)
+    body = canonical_json({'records': records, 'observed_at_ms': observed, 'reason_code': reason,
+        'client_version': client_version})
     if len(body) > MAX_PROBE_PACKET_BYTES:
         raise ProbeWorkerError()
     return body, reason
@@ -208,17 +273,21 @@ def _execute(job):
         check_backend(os.environ, Path(value['root']))
         if resolve_client('claude', untrusted=[Path(value['root'])]) != prepared.client_identity:
             raise ProbeWorkerError()
+        seen = {}
         infos, failure = bridge._run_claude_billing_probe(list(prepared.arguments),
             environment=dict(prepared.environment), cwd=prepared.workspace/'export',
-            deadline_seconds=bridge.PROBE_DEADLINE_SECONDS, execution=job.ticket)
+            deadline_seconds=bridge.PROBE_DEADLINE_SECONDS, execution=job.ticket, observed=seen)
         observed = time.time_ns()//1_000_000
         if observed < value['created_at_ms']:
             failure = 'probe_clock_changed'
             observed = value['created_at_ms']  # Incomplete; retain restrictions without shortening their horizon.
         body, reason = _normalized(infos, failure,
-            parse_bounded_json_value(prepared.identity, max_bytes=MAX_PROBE_INPUT_BYTES), observed)
-    except BaseException:
-        body = canonical_json({'records': [], 'observed_at_ms': None, 'reason_code': 'probe_incomplete'})
+            parse_bounded_json_value(prepared.identity, max_bytes=MAX_PROBE_INPUT_BYTES), observed,
+            seen.get('client_version'))
+    except BaseException as error:
+        _caught(error, 'execute')  # S1-H1a C7: its type, for the worker that notes this failure
+        body = canonical_json({'records': [], 'observed_at_ms': None, 'reason_code': 'probe_incomplete',
+            'client_version': None})
     removed = _remove(prepared.workspace)
     return BillingProbePacket(body, prepared.inputs_digest, removed, reason)
 
@@ -234,6 +303,7 @@ def _worker(slot, registry):
             if item is None:
                 return
             operation, handle, job = item
+            _take_caught()  # S1-H1a C7: nothing stale from an earlier item
             if operation == 'prepare':
                 with registry._lock:
                     if job.cancelled:
@@ -243,28 +313,47 @@ def _worker(slot, registry):
                         job = handle = item = None
                         continue
                 prepared, workspace, unknown = _prepare(job.payload)
+                if prepared is None and unknown:
+                    # S1-H1a C6: published before waiting for the registry lock a blocked owner may hold.
+                    _held(slot, job, 'probe_preparation_unknown', _take_caught('prepare') or _take_caught('cleanup'))
                 with registry._lock:
                     job.prepared, job.workspace = prepared, workspace
                     discard = job.cancelled or slot.stop.is_set()
                     job.state = 'discarding' if discard else 'prepared' if prepared is not None else 'unknown' if unknown else 'failed'
                     if prepared is not None:
                         job.snapshot = _prepared_snapshot(prepared)
+                    state = job.state
+                # S1-H1a notes are published outside the registry lock (a blocked owner may hold it).
+                if state == 'unknown' and not job.held:
+                    _held(slot, job, 'probe_preparation_unknown', _take_caught('prepare') or _take_caught('cleanup'))
+                elif state == 'failed':
+                    lane_health.safely(lambda: slot.lane.note_failure_named(slot.note, 'probe_preparation_failed', _take_caught('prepare')))
                 if not discard:
                     job = handle = item = prepared = None
                     continue
                 operation = 'discard'
             if operation == 'discard':
                 removed = _remove(job.workspace)
+                if not removed:
+                    _held(slot, job, 'cleanup_incomplete', _take_caught('cleanup'))  # S1-H1a C6: before the lock
                 with registry._lock:
                     job.workspace = None if removed else job.workspace
                     job.prepared = None
                     job.state = 'cleaned' if removed and job.ticket is None else 'unknown'
+                    state = job.state
+                if state == 'unknown' and not job.held:
+                    _held(slot, job, 'cleanup_incomplete', _take_caught('cleanup'))
+                elif state == 'cleaned' and job.held:
+                    _released(slot, job)  # S1-H1a C6: confirmed clean, so no longer held
                 if slot.stop.is_set():
                     return
             elif operation == 'execute':
                 with registry._lock:
                     job.state = 'active'
                 packet = _execute(job)
+                failed = _take_caught('execute')
+                if failed is not None:  # S1-H1a C7: execution failed inside its helper (reporting only)
+                    lane_health.safely(lambda: slot.lane.note_failure_named(slot.note, 'probe_execution_failed', failed))
                 with registry._lock:
                     job.packet, job.state = packet, 'finishing'
                     job.packet_snapshot = (packet.body, packet.inputs_digest, packet.workspace_removed, packet.reason_code)
@@ -274,7 +363,9 @@ def _worker(slot, registry):
                 if slot.stop.is_set():
                     return
             job = handle = item = None
-    except BaseException:
+    except BaseException as error:
+        # S1-H1a: published first, without the registry lock, so a blocked owner cannot delay it.
+        _held(slot, job, 'probe_worker_failed', type(error).__name__, faulted=True)
         with registry._lock:
             slot.fault = True
             if job is not None:
@@ -289,6 +380,11 @@ class BillingProbeWorkers:
         self._registry, self._limits = registry, ProbeWorkerLimits(limits.workers, limits.retained_bytes)
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._jobs, self._slots, self._closed, self._charged = {}, [_Slot() for _ in range(limits.workers)], False, 0
+        # S1-H1a: published health notes, one slot for this owner and one per worker (reporting only).
+        self.health = lane_health.Lane('probe_worker')
+        self._note = self.health.slot('owner')
+        for index, slot in enumerate(self._slots):
+            slot.lane, slot.note = self.health, self.health.slot(f'worker-{index}')
         registry._register_probe_worker_pool(self)
         try:
             for slot in self._slots:
@@ -324,6 +420,33 @@ class BillingProbeWorkers:
                                                          or self._jobs[slot.current].state == 'unknown'))
                        for slot in self._slots)
 
+    def unproven_children(self, handle=None, ticket=None):
+        """O0c M10: the children these workers (or, given a handle, that one job) started that are not
+        proven gone, as [{'pid', 'why'}]; [] when none can still run.
+
+        A job queued for, inside or just past its execution may hold a child (`running`). Otherwise
+        every execution ticket must be released, confirmed cleaned (its tree proven empty, the normal
+        release's evidence) or never have had a child possible (OwnedExecutionRegistry). `ticket` adds
+        one the job may not hold (issued, then never bound). Owner thread; never raises."""
+        try:
+            with self._registry._lock:
+                if handle is None:
+                    jobs = list(self._jobs.values())
+                else:
+                    job = self._jobs.get(handle) if type(handle) is ProbeWorkerHandle else None
+                    jobs = [] if job is None else [job]
+                if any(job.state in {'queued', 'active', 'finishing'} for job in jobs):
+                    return [{'pid': None, 'why': 'running'}]
+                if handle is None:
+                    return self._registry.unproven_children()
+                return [item for t in {*(job.ticket for job in jobs), ticket} for item in self._registry.ticket_unproven(t)]
+        except Exception:
+            return [{'pid': None, 'why': 'unchecked'}]
+
+    def children_ended(self, handle=None, ticket=None):
+        """O0c M10: whether no child these workers (or that one job) started can still run."""
+        return self.unproven_children(handle, ticket) == []
+
     def prepare(self, payload):
         self._owner()
         if self._closed or type(payload) is not bytes or not 0 < len(payload) <= MAX_PROBE_INPUT_BYTES:
@@ -333,10 +456,12 @@ class BillingProbeWorkers:
             if slot is None or self._charged+PROBE_SLOT_BYTES > self._limits.retained_bytes:
                 raise ProbeWorkerError('probe_worker_full')
             handle = ProbeWorkerHandle()
-            job = _Job(payload, slot)
+            job = _Job(payload, slot, token=lane_health.new_token())
             self._jobs[handle], slot.current = job, handle
             self._charged += PROBE_SLOT_BYTES
             slot.incoming.put_nowait(('prepare', handle, job))
+            # S1-H1a C1/C5: published after it is queued, busy by token (never while kept).
+            lane_health.safely(lambda: self._note.publish(busy_tokens=frozenset(j.token for j in self._jobs.values())))
             return handle
 
     def prepared(self, handle):
@@ -360,8 +485,14 @@ class BillingProbeWorkers:
             job.ticket, job.state = ticket, 'reserved'
             try:
                 self._registry._handoff_worker(ticket, self, handle)
-            except BaseException:
+            except BaseException as error:
                 job.state = 'unknown'
+                # S1-H1a, reporting only; O0c M10: an unknown job faults the lane.
+                lane_health.safely(lambda: self._note.publish(faulted=True, kept=self._note.note.kept | {job.token}))
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_handoff_failed', error))
+                if not job.held:
+                    job.held = True
+                    lane_health.safely(lambda: self.health.enter_held())
                 raise
 
     def submit(self, handle):
@@ -422,6 +553,7 @@ class BillingProbeWorkers:
             self._jobs.pop(handle)
             job.slot.current = None
             self._charged -= PROBE_SLOT_BYTES
+            lane_health.safely(lambda: self._note.publish(busy_tokens=frozenset(j.token for j in self._jobs.values())))
 
     def close(self):
         self._owner()

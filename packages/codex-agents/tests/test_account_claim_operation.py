@@ -350,7 +350,9 @@ class AccountClaimOperationTests(unittest.TestCase):
 
     def test_verified_seven_upgrade_preserves_claims_and_fences_other_old_runs(self):
         first, _ = self.legacy_seven()
-        before = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid")]
+        original = ",".join(row[1] for row in self.ledger._connection.execute("PRAGMA table_info(records)")
+                            if row[1] != "probe_id")
+        before = [tuple(row) for row in self.ledger._connection.execute(f"SELECT {original} FROM records ORDER BY rowid")]
         signed = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_attestations")]
         self.backup_seven()
         self.ledger.close()
@@ -359,7 +361,8 @@ class AccountClaimOperationTests(unittest.TestCase):
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         markers = [tuple(row) for row in self.ledger._connection.execute("SELECT kind,bridge_run_id FROM launch_claims ORDER BY kind")]
         self.assertEqual([("claimed", first["bridge_run_id"]), ("legacy_fenced", None)], markers)
-        self.assertEqual(before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid")])
+        self.assertEqual(before, [tuple(row) for row in self.ledger._connection.execute(f"SELECT {original} FROM records ORDER BY rowid")])
+        self.assertIsNone(self.ledger._connection.execute("SELECT 1 FROM records WHERE probe_id IS NOT NULL").fetchone())
         self.assertEqual(signed, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_attestations")])
         self.assertEqual("claim_already_consumed", self.claim("after-upgrade")["reason_code"])
 

@@ -9,6 +9,7 @@ counts and typed codes; prompts and file contents never reach the ledger.
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import json
 import os
@@ -30,6 +31,11 @@ from .claude_activity import ClaudeActivity, ClaudeActivityError
 from .codex_activity import CodexActivity, CodexActivityError
 from . import event_shapes
 from .contracts import (
+    ADMISSION_STATES,
+    EVIDENCE_FIELDS_RULE,
+    EXECUTION_STATES,
+    RESULT_STATUSES,
+    SEMANTIC_VERDICTS,
     ONE_EVIDENCE_ENTRY_RULE,
     effective_dispatch_bounds,
     effective_dispatch_limits,
@@ -56,6 +62,7 @@ from .host_paths import (
     temp_roots,
 )
 from .learning_contracts import (
+    CLIENT_TOOL_NAMES,
     CLIENT_ERROR_CODES,
     CLIENT_EXIT_CODE_MAX,
     CLIENT_EXIT_CODE_MIN,
@@ -92,6 +99,12 @@ MAX_STREAM_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = MAX_RESULT_BODY_BYTES
 CLAUDE_TOOLS = ("Read", "Glob", "Grep")
+# O10 VF: the client's own output tool under --json-schema. It carries the child's result only, reads
+# nothing, and is allowed to a schema-held run alone; the result is taken from the result frame.
+CLAUDE_OUTPUT_TOOL = "StructuredOutput"
+CLAUDE_RUN_TOOLS = (*CLAUDE_TOOLS, CLAUDE_OUTPUT_TOOL)
+# O10 VF-6: the first client version shown to hold a result to --json-schema (a real run, 2026-11-20).
+CLAUDE_SCHEMA_MIN_VERSION = (2, 1, 311)
 # Known built-in plugins are switched off; the init-frame check still fails
 # closed if any plugin loads, so this list is a convenience, not the control.
 CLAUDE_DISABLED_PLUGINS = (
@@ -100,6 +113,18 @@ CLAUDE_DISABLED_PLUGINS = (
     "cc-plugin-plugin-authoring@builtin",
     "cc-plugin-easel@builtin",
 )
+# CI-4: under COCOLO's own child settings (`claude_settings`: hooks off, the plugins above disabled), Claude
+# Code 2.1.323 lists exactly one built-in plugin in the init frame, `cc-plugin-privacy` (captured with those
+# settings). Its only effect, from the binary's plugin manifest, is a `tool.check` hook that can restrict a
+# call; it adds no tool, reads nothing and fetches nothing. It is accepted only with exactly the keys name,
+# path and source, as a built-in (path "builtin", source "<name>@builtin"). The four built-ins COCOLO disables
+# act when loaded (agents-md injects AGENTS.md and CLAUDE.md as context, telemetry fetches, plugin-authoring
+# can register a tool and a hook): one that is listed means the settings did not apply, so the child stops
+# (`init_plugin_not_disabled`). Any other plugin stops it too (`init_plugin_not_allowed`).
+CLAUDE_ALLOWED_BUILTIN_PLUGINS = frozenset({"cc-plugin-privacy"})
+_CLAUDE_PLUGIN_KEYS = frozenset({"name", "path", "source"})
+# The init `permissionMode` COCOLO sets (--permission-mode and settings), checked when the client reports it.
+CLAUDE_PERMISSION_MODE = "dontAsk"
 CODEX_REROUTE_EVENTS = {"model/rerouted", "model_rerouted", "model.rerouted"}
 # Codex features switched off for every child. `code_mode_host` must stay enabled:
 # disabling it breaks Codex's own tool invocation.
@@ -585,21 +610,27 @@ class _WatchdogOwner:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
 
-    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str, str] | None = None) -> None:
+    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str, str] | None = None,
+              container: dict | None = None) -> None:
         # The child remains unreaped through the acknowledgement, so its pid
         # cannot pass to another process. Output processing waits for verification.
+        # C3: with `container` (container mode, no marker) the watchdog also stops the run's
+        # container through the container primitive once this service has died; it is given the
+        # podman client's own environment variables for that, and nothing else.
+        tail = ("--container", container["argument"]) if container is not None else (marker or ())
+        environment = {"PATH": os.defpath, **(container["environment"] if container is not None else {})}
         try:
             self._process = subprocess.Popen(
                 [
                     sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
-                    str(root), birth, repr(deadline_monotonic), *(marker or ()),
+                    str(root), birth, repr(deadline_monotonic), *tail,
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
                 close_fds=True,
-                env={"PATH": os.defpath},
+                env=environment,
             )
         except OSError as exc:
             raise _Abort("watchdog_unavailable") from exc
@@ -786,17 +817,20 @@ def run_child(
                 execution_bound = True
             except ExecutionCustodyError:
                 raise _Abort("process_tracking_unavailable") from None
-        marker = None
+        marker = container = None
         if _execution is not None:
             # Where the watchdog confirms, before it exits, that the tree it tracked is empty.
             try:
                 marker = _execution.watchdog_marker()
+                # C3: in container mode, the container it stops once this service has died.
+                container = _execution.watchdog_container()
             except ExecutionCustodyError:
                 raise _Abort("watchdog_unavailable") from None
         watchdog.start(
             process.pid, tree.root_birth,
             deadline + WATCHDOG_GRACE_SECONDS,
             *(() if marker is None else ((*marker, run_tag),)),
+            **({} if container is None else {"container": container}),
         )
         if _execution is not None:
             # The project service records the acknowledged watchdog durably, so a
@@ -871,7 +905,11 @@ def run_child(
         # the first nonlocal exit, and never infer custody from a failed step.
         if process is not None:
             if _execution is not None:
-                cleanup_entered, _ = cleanup_step(_execution.begin_cleanup)
+                # C3: why the run is stopped, for its container's one stop action (a stop the
+                # liveness clock asked for keeps its own reason).
+                reason = {"timed_out": "absolute_deadline", "cancelled": "cancel_requested"}.get(
+                    outcome["abort"], "run_ended")
+                cleanup_entered, _ = cleanup_step(lambda: _execution.begin_cleanup(reason))
             cleanup_step(lambda: _stop_child(process, tree))
         elif _execution is not None:
             cleanup_step(_execution.abort_handoff, ignored=(ExecutionCustodyError,))
@@ -881,7 +919,9 @@ def run_child(
         _, watchdog_reaped = cleanup_step(watchdog.reap)
         if not watchdog_reaped and outcome["abort"] is None:
             outcome["abort"] = "watchdog_unavailable"
-        if watchdog_reaped and execution_bound and cleanup_entered:
+        # O0c M1: a child stopped before its bind is confirmed too once its tree was identified.
+        if watchdog_reaped and cleanup_entered and _execution is not None and (
+                execution_bound or (tree is not None and tree.identified)):
             cleanup_step(lambda: _execution.finish(process, tree), ignored=(ExecutionCustodyError,))
         if cleanup_error is not None:
             if original_error is not None and not isinstance(original_error, Exception):
@@ -901,7 +941,7 @@ def _track(tree: ProcessTree) -> Table | None:
     if table is not None:
         tree.update(table)
     else:
-        tree._cleanup_incomplete = True
+        tree.snapshot_failed()
     return table
 
 
@@ -1059,6 +1099,142 @@ def place_worker_result(export: Path, worker_result: dict[str, Any]) -> str:
     return VERIFIER_WORKER_RESULT_PATH
 
 
+def _is_verification_assignment(assignment: Any) -> bool:
+    """A verifier's assignment: the only role whose host-owned fields the host sets (decision 26)."""
+
+    role = assignment.get("role") if isinstance(assignment, dict) else None
+    return isinstance(role, str) and role.endswith("_verification_worker")
+
+
+def narrow_verifier_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The result schema a verifier is held to: only what the host would accept (VF-INV-c).
+
+    The admission is the host's (`unverified` only) and a child cannot attest a timeout. Cross-field
+    rules (status against verdict) are not stated here: a strict client accepts no root-level
+    `anyOf`, and the host sets the status itself from the two axes (VF-INV-d). Returns a copy.
+    """
+
+    narrowed = copy.deepcopy(schema)
+    properties = narrowed.get("properties")
+    if isinstance(properties, dict):
+        if isinstance(properties.get("admission_state"), dict):
+            properties["admission_state"]["enum"] = ["unverified"]
+        execution = properties.get("execution_state")
+        if isinstance(execution, dict) and isinstance(execution.get("enum"), list):
+            execution["enum"] = [state for state in execution["enum"] if state != "timed_out"]
+    return narrowed
+
+
+def result_schema_for(schema: bytes, assignment: Any) -> bytes:
+    """The schema bytes a child of this assignment receives: narrowed for a verifier, else unchanged."""
+
+    if not _is_verification_assignment(assignment):
+        return schema
+    try:
+        parsed = json.loads(schema)
+    except (ValueError, RecursionError):
+        return schema  # the ordinary schema parse refuses it
+    if not isinstance(parsed, dict):
+        return schema
+    return json.dumps(narrow_verifier_schema(parsed), sort_keys=True).encode()
+
+
+def _host_set_verifier_fields(
+    assignment: Any, result: Any
+) -> tuple[Any, list[dict[str, str]]]:
+    """Owner decision 26: the host sets a verifier's admission and overall status.
+
+    A verifier reports its verdict and findings only. Its admission is always `unverified`; its
+    status follows from its execution state and verdict. Only a recognised value is replaced, and
+    each change is returned as fixed words (the child's original stays in the kept raw answer).
+    A verdict is never filled in and a child's timeout claim is never repaired: the validator
+    still refuses both. Any other role's result is returned untouched.
+    """
+
+    if not _is_verification_assignment(assignment) or type(result) is not dict:
+        return result, []
+    changes: list[dict[str, str]] = []
+    repaired = dict(result)
+    admission = result.get("admission_state")
+    if type(admission) is str and admission in ADMISSION_STATES and admission != "unverified":
+        repaired["admission_state"] = "unverified"
+        changes.append({"field": "admission_state", "was": admission, "now": "unverified"})
+    status, execution, verdict = (result.get(name) for name in ("status", "execution_state", "semantic_verdict"))
+    if (type(status) is str and status in RESULT_STATUSES and type(execution) is str
+            and execution in EXECUTION_STATES and type(verdict) is str and verdict in SEMANTIC_VERDICTS):
+        derived = legacy_result_status(execution, verdict)
+        if status != derived:
+            repaired["status"] = derived
+            changes.append({"field": "status", "was": status, "now": derived})
+    return (repaired, changes) if changes else (result, changes)
+
+
+# VF-INV-a: what a kept raw answer must never hold. The runtime had no scrubber, so this is the
+# host's own: credential-shaped text, private-key blocks and the values of the caller's secret
+# variables are replaced before the answer is written.
+_REMOVED = "[removed]"
+_SECRET_PATTERNS = tuple(re.compile(pattern, re.DOTALL) for pattern in (
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
+    r"\bsk-[A-Za-z0-9_-]{16,}",
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}",
+    r"\bgithub_pat_[A-Za-z0-9_]{20,}",
+    r"\bAKIA[0-9A-Z]{16}\b",
+    r"\bAIza[0-9A-Za-z_-]{30,}",
+    r"\bxox[abprs]-[A-Za-z0-9-]{10,}",
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
+    r"\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}",
+))
+_SECRET_ASSIGNMENT = re.compile(
+    r"""((?:api[_-]?key|secret|token|password|passwd|credential)s?(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)[^\s"',}\]\\]{6,}""",
+    re.IGNORECASE,
+)
+_SCRUB_MARGIN_BYTES = 4096
+_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
+
+
+def scrub_child_answer(text: str, environ: Mapping[str, str]) -> tuple[str, bool]:
+    """Return the answer without credential-shaped text, and whether anything was removed."""
+
+    scrubbed = text
+    for name, value in environ.items():
+        if isinstance(value, str) and len(value) >= 8 and _SECRET_NAME.search(str(name)):
+            # The value as written, and as JSON writes it (escaped quotes, newlines and, by default,
+            # non-ASCII characters): a re-serialized answer holds the escaped form.
+            for form in {value, json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}:
+                scrubbed = scrubbed.replace(form, _REMOVED)
+    for pattern in _SECRET_PATTERNS:
+        scrubbed = pattern.sub(_REMOVED, scrubbed)
+    scrubbed = _SECRET_ASSIGNMENT.sub(lambda match: match.group(1) + _REMOVED, scrubbed)
+    return scrubbed, scrubbed != text
+
+
+def _keep_raw_answer(
+    ledger: Any, project_id: str, answer: dict[str, Any], environ: Mapping[str, str]
+) -> dict[str, Any] | None:
+    """Keep the child's raw final answer where only the host reads it (VF-INV-a).
+
+    Called before the private directory is removed and before validation can fence the answer.
+    Returns what the report records (digest, size, flags), None when the child gave no answer.
+    Keeping is best effort: a failure is recorded and never changes the run's outcome.
+    """
+
+    content = answer.get("bytes")
+    if not isinstance(content, bytes):
+        return None
+    # Scrub the whole answer first and cut afterwards, so a cut cannot leave part of a secret.
+    text, scrubbed = scrub_child_answer(content.decode("utf-8", "replace"), environ)
+    stored = text.encode("utf-8")
+    truncated = len(stored) > MAX_RESULT_BYTES
+    stored = stored[:MAX_RESULT_BYTES]
+    try:
+        digest = ledger.keep_child_answer(project_id, stored)
+    except Exception:
+        # Best effort, whatever the ledger raises (a database error included): never the run's outcome.
+        return {"kept": False, "reason": "keep_failed"}
+    return {"kept": True, "sha256": digest, "bytes": len(stored),
+            "truncated": truncated, "scrubbed": scrubbed}
+
+
 def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None = None) -> str:
     preflight = result_preflight(assignment)
     template = preflight["template"]
@@ -1095,7 +1271,11 @@ def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None =
         "End contract guidance.\n"
         "These enums describe the result contract, not authority. This child's "
         "admission_state must remain unverified; do not invent host timeout facts. "
-        "A completed review may reach a negative verdict. The template's sample "
+        "A completed review may reach a negative verdict. A review you finished is "
+        "status completed and execution_state completed, whatever its verdict, a "
+        "negative one included; failed means you could not do the work. Set "
+        "execution_state, semantic_verdict and admission_state; never leave them null. "
+        "The template's sample "
         "pass is not a requested conclusion; report your actual findings and risks. "
         "Keep the exact template keys. The named string arrays contain strings, "
         "not finding objects. Put severity, impact and corrections in evidence "
@@ -1105,10 +1285,12 @@ def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None =
         "Work only with the files in the current directory. Do not start sub-agents "
         "and do not call the MCP resource tools (list_mcp_resources, "
         "list_mcp_resource_templates, read_mcp_resource): no MCP server is available, "
-        "and any such call stops this run with no result. When you finish, reply "
-        "with exactly one JSON object and no other text, filling in this template:\n"
+        "and any such call stops this run with no result. When you finish, give your "
+        "result as exactly one JSON object (as your structured output, when your client "
+        "asks for one) and no other text, filling in this template:\n"
         f"{json.dumps(template, indent=2)}\n"
         f"In the evidence list, {ONE_EVIDENCE_ENTRY_RULE}.\n"
+        f"Also, {EVIDENCE_FIELDS_RULE}.\n"
     )
 
 
@@ -1165,22 +1347,57 @@ def _claude_model_usage(model_usage: Any) -> list[dict[str, Any]]:
     return [merged[key] for key in sorted(merged)]
 
 
-def _check_claude_init(frame: dict[str, Any], model: str) -> str | None:
+def _plugin_violation(plugin: Any) -> str | None:
+    """CI-1: why one init-frame plugin entry is refused, or None when it is the one accepted built-in."""
+
+    if not isinstance(plugin, dict) or plugin.keys() != _CLAUDE_PLUGIN_KEYS:
+        return "plugin_not_allowed"
+    name, path, source = plugin["name"], plugin["path"], plugin["source"]
+    if not (isinstance(name, str) and path == "builtin" and source == f"{name}@builtin"):
+        return "plugin_not_allowed"
+    if name in CLAUDE_ALLOWED_BUILTIN_PLUGINS:
+        return None
+    return "plugin_not_disabled" if f"{name}@builtin" in CLAUDE_DISABLED_PLUGINS else "plugin_not_allowed"
+
+
+def _init_client_version(frame: dict[str, Any]) -> str | None:
+    """CI-4: the client version an init frame reports, only when it is a plain dotted number."""
+
+    version = frame.get("claude_code_version")
+    return version if isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version) else None
+
+
+def _check_claude_init(frame: dict[str, Any], model: str, allowed: tuple[str, ...] = CLAUDE_TOOLS,
+                       *, schema_held: bool = False) -> str | None:
     """Return the first init-frame violation, or None when the frame is clean."""
 
     if frame.get("apiKeySource") != "none":
         return "api_key_source"
     if frame.get("model") != model:
         return "model_mismatch"
-    if frame.get("plugins") != []:
-        return "plugin_loaded"
+    plugins = frame.get("plugins")
+    if not isinstance(plugins, list):
+        return "plugin_not_allowed"
+    violations = {_plugin_violation(plugin) for plugin in plugins} - {None}
+    if violations:
+        # A plugin nothing allows outranks one COCOLO's settings should have disabled.
+        return "plugin_not_allowed" if "plugin_not_allowed" in violations else "plugin_not_disabled"
     if frame.get("mcp_servers") != []:
         return "mcp_server_loaded"
     tools = frame.get("tools")
     if not isinstance(tools, list) or any(
-        not isinstance(tool, str) or tool not in CLAUDE_TOOLS for tool in tools
+        not isinstance(tool, str) or tool not in allowed for tool in tools
     ):
         return "tool_not_allowed"
+    # CI-2: newer clients report these; one that does must report what COCOLO set (older ones report neither).
+    if "permissionMode" in frame and frame["permissionMode"] != CLAUDE_PERMISSION_MODE:
+        return "permission_mode_mismatch"
+    if "additional_directories" in frame and frame["additional_directories"] != []:
+        return "additional_directories_present"
+    # O10 VF-6: a client that reports a version too old to hold its result to the schema stops here.
+    # No version, or one that cannot be read, is refused like an old one (review 040-vf-dr-code).
+    if schema_held and _client_version(frame.get("claude_code_version")) < CLAUDE_SCHEMA_MIN_VERSION:
+        return "client_unsupported"
     return None
 
 
@@ -1212,10 +1429,14 @@ def run_claude(
     deadline_seconds: float,
     max_turns: int,
     executable: str,
+    schema: bytes,
     worker_result_path: str | None = None,
     _execution: ExecutionTicket | None = None,
+    raw_answer: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
+    # O10 VF-1: the same strict schema a Codex child gets, so the client holds the result to it.
+    original_schema, strict_schema = codex_schemas(schema)
     settings = _private_file(
         control / "settings.json", json.dumps(claude_settings(model)).encode()
     )
@@ -1235,6 +1456,7 @@ def run_claude(
         # Partial messages give a long message liveness; fences below apply to them too.
         "--include-partial-messages",
         "--max-turns", str(max_turns),
+        "--json-schema", strict_schema.decode(),
         "--append-system-prompt-file", str(system_prompt),
         # The prompt starts with the assignment's objective; after `--` neither
         # client can read it as an option (`-c...`, `--settings=...`).
@@ -1246,9 +1468,9 @@ def run_claude(
         "result_frame_seen": False, "result_subtype": None, "client_error_code": None,
         "rate_limit_failed": False, "frames": 0,
         "models": set(),
-        "helper_models": set(),
+        "helper_models": set(), "denial_count": 0, "denied_tools": set(),
     }
-    activity = (ClaudeActivity(model, CLAUDE_TOOLS) if type(_execution) is ExecutionTicket
+    activity = (ClaudeActivity(model, CLAUDE_RUN_TOOLS) if type(_execution) is ExecutionTicket
                 and _execution.activity_enabled() else None)
 
     def publish(category: str | None) -> None:
@@ -1275,7 +1497,7 @@ def run_claude(
         if state["init"] is None:
             if kind != "system" or frame.get("subtype") != "init":
                 raise _Abort("missing_init_frame")
-            violation = _check_claude_init(frame, model)
+            violation = _check_claude_init(frame, model, CLAUDE_RUN_TOOLS, schema_held=True)
             if violation is not None:
                 raise _Abort(f"init_{violation}")
             state["init"] = frame
@@ -1316,6 +1538,13 @@ def run_claude(
                 raise _Abort("provider_rejected")
         elif kind == "result":
             state["result"] = frame
+            denials = frame.get("permission_denials")
+            if isinstance(denials, list):
+                state["denial_count"] += len(denials)
+                state["denied_tools"].update(
+                    item["tool_name"] if isinstance(item, dict) and isinstance(item.get("tool_name"), str)
+                    and item["tool_name"] in CLIENT_TOOL_NAMES else "other"
+                    for item in denials)
             usage = frame.get("modelUsage")
             if isinstance(usage, dict):
                 for name in usage:
@@ -1334,7 +1563,7 @@ def run_claude(
                 state["models"].add(str(started["model"]))
             block = event.get("content_block") if event.get("type") == "content_block_start" else None
             # A prohibited tool stops the child as soon as its call starts streaming.
-            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") not in CLAUDE_TOOLS:
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") not in CLAUDE_RUN_TOOLS:
                 raise _Abort("claude_tool_not_allowed")
         if kind == "assistant":
             message = frame.get("message")
@@ -1346,7 +1575,7 @@ def run_claude(
             # them stops the child at once, like a prohibited Codex item.
             if isinstance(content, list) and any(
                 isinstance(block, dict) and block.get("type") == "tool_use"
-                and block.get("name") not in CLAUDE_TOOLS
+                and block.get("name") not in CLAUDE_RUN_TOOLS
                 for block in content
             ):
                 raise _Abort("claude_tool_not_allowed")
@@ -1361,7 +1590,7 @@ def run_claude(
             publish(category)
 
     # Off unless the owner asked for frame shapes; then every frame is noted before any fence.
-    shapes = event_shapes.recorder("claude", requested=model, effort=route["effort"], tools=CLAUDE_TOOLS)
+    shapes = event_shapes.recorder("claude", requested=model, effort=route["effort"], tools=CLAUDE_RUN_TOOLS)
     started = time.monotonic()
     try:
         outcome = run_child(
@@ -1407,25 +1636,83 @@ def run_claude(
             "api_equivalent_cost_usd_estimate": result_frame.get("total_cost_usd"),
         }
         report["model_usage"] = _claude_model_usage(result_frame.get("modelUsage"))
-        denials = result_frame.get("permission_denials")
-        if isinstance(denials, list):
-            report["permission_denials"] = {
-                "count": len(denials),
-                "tools": sorted({
-                    str(item.get("tool_name")) for item in denials
-                    if isinstance(item, dict) and isinstance(item.get("tool_name"), str)
-                }),
-            }
+    # L6.1: denials are kept as they are seen (every result frame), so a later clean frame never erases one.
+    # The client's frame does not tell a refused read/write/network call from a harmless prompt, so any
+    # denial fails closed. Names are the client's known tools or "other", never an arbitrary string.
+    if isinstance(result_frame, dict):
+        report["permission_denials"] = {"count": state["denial_count"], "tools": sorted(state["denied_tools"])}
+    if state["denial_count"] > 0:
+        # A denial wins over a concurrent stop: the stored reason never hides it.
+        return None, {**report, "outcome": "claude_tool_not_allowed"}
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
+    if raw_answer is not None and isinstance(result_frame, dict):
+        structured_answer = result_frame.get("structured_output")
+        if type(structured_answer) is dict:
+            try:
+                _offer_raw_answer(raw_answer, json.dumps(structured_answer, ensure_ascii=False).encode())
+            except (ValueError, RecursionError):
+                pass
+        elif isinstance(result_frame.get("result"), str):
+            _offer_raw_answer(raw_answer, result_frame["result"].encode("utf-8", "replace"))
+    missing = {**report, "outcome": "invalid_result", "result_validation_reason_code": "structured_output_missing"}
+    if isinstance(result_frame, dict) and result_frame.get("subtype") == "error_max_structured_output_retries":
+        # O10 VF-2: the client could not get a schema-valid result; recognised before the exit code,
+        # which may be an error for it (review 040-vf-dr-code).
+        return None, missing
     if outcome["returncode"] != 0 or not isinstance(result_frame, dict):
         return None, {**report, "outcome": "missing_result"}
     if result_frame.get("is_error") is not False or result_frame.get("subtype") != "success":
         return None, {**report, "outcome": "child_reported_error"}
-    result = _result_object(result_frame.get("result"))
-    if result is None:
+    # O10 VF-5: the result is the client's validated object, never the text or a tool call's input,
+    # with the strict schema's optional nulls removed as for Codex; the full validator follows.
+    structured = result_frame.get("structured_output")
+    if type(structured) is not dict:
+        return None, missing
+    try:
+        result = remove_optional_nulls(structured, original_schema)
+    except RecursionError:
         return None, {**report, "outcome": "unparseable_result"}
     return result, {**report, "outcome": "result"}
+
+
+def _offer_raw_answer(sink: dict[str, Any], content: bytes) -> None:
+    """Hand the child's raw final answer to the dispatch that keeps it (VF-INV-a).
+
+    Not cut here: `_keep_raw_answer` scrubs the whole answer and then caps it, so a cut can never
+    leave part of a secret. What is offered is already in memory (a Codex read is bounded).
+    """
+
+    sink["bytes"] = content
+
+
+def _command_limit(route: dict[str, Any], assignment: dict[str, Any]) -> int | None:
+    """The nominal tool-call limit of a Codex run: the lower of the route's and the assignment's.
+
+    A dispatched route always carries its bounds (validate_assignment checks them); a caller that
+    names only a model and effort is held to the assignment's own bound, never refused here. When
+    neither names a limit there is none: None, which the run reports as such (VF-INV-e).
+    """
+
+    limits = [bounds["max_tool_calls"] for bounds in (route.get("bounds"), assignment.get("bounds"))
+              if isinstance(bounds, dict) and type(bounds.get("max_tool_calls")) is int]
+    return min(limits) if limits else None
+
+
+def _count_command(state: dict[str, Any], kind: str, identifier: Any) -> None:
+    """Count one command item once, whether the stream names it, starts it or only completes it."""
+
+    if type(identifier) is str and identifier:
+        if identifier not in state["command_ids"]:
+            state["command_ids"].add(identifier)
+            state["commands"] += 1
+    elif kind == "item.started":
+        state["commands"] += 1
+        state["open_unnamed"] += 1
+    elif state["open_unnamed"] > 0:
+        state["open_unnamed"] -= 1
+    else:
+        state["commands"] += 1
 
 
 def _event_label(value: Any) -> str:
@@ -1440,7 +1727,7 @@ def codex_schemas(schema: bytes) -> tuple[dict[str, Any], bytes]:
     """Use the same schema parse/conversion before readiness and execution."""
     try:
         original_schema = json.loads(schema)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise BridgeRefused("result schema is invalid") from exc
     return original_schema, json.dumps(strict_output_schema(original_schema), sort_keys=True).encode()
 
@@ -1460,6 +1747,7 @@ def run_codex(
     worker_result_path: str | None = None,
     role_prompt: str,
     _execution: ExecutionTicket | None = None,
+    raw_answer: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
     original_schema, strict_schema = codex_schemas(schema)
@@ -1494,8 +1782,12 @@ def run_codex(
         "--",
         child_prompt(assignment, worker_result_path=worker_result_path),
     ]
+    # VF-INV-e: the host counts the child's model turns and commands, and stops it above the
+    # nominal tool-call limit (the client has no limit of its own).
+    command_limit = _command_limit(route, assignment)
     state: dict[str, Any] = {
         "usage": None, "rerouted": False, "observed_model": None, "failed": False,
+        "turns": 0, "commands": 0, "peak_input": None, "command_ids": set(), "open_unnamed": 0,
     }
     activity = (CodexActivity() if type(_execution) is ExecutionTicket
                 and _execution.activity_enabled() else None)
@@ -1513,14 +1805,23 @@ def run_codex(
             item_type = item.get("type") if isinstance(item, dict) else None
             if not isinstance(item_type, str) or item_type not in CODEX_ALLOWED_ITEMS:
                 raise _Abort(f"codex_tool_not_allowed:{_event_label(item_type)}")
+            if item_type == "command_execution" and kind != "item.updated":
+                _count_command(state, kind, item.get("id"))
+                if command_limit is not None and state["commands"] > command_limit:
+                    raise _Abort("tool_call_limit_exceeded")
         for key in ("model", "to_model"):
             value = frame.get(key)
             if isinstance(value, str):
                 state["observed_model"] = value
                 if value != model:
                     state["rerouted"] = True
+        if kind == "turn.completed":
+            state["turns"] += 1
         if kind == "turn.completed" and isinstance(frame.get("usage"), dict):
             usage = frame["usage"]
+            peak = usage.get("input_tokens")
+            if type(peak) is int and peak >= 0:
+                state["peak_input"] = max(state["peak_input"] or 0, peak)
             state["usage"] = {
                 name: usage.get(name)
                 for name in (
@@ -1566,6 +1867,10 @@ def run_codex(
         "read_containment": "advisory",
         "rerouted": state["rerouted"],
         "usage": state["usage"],
+        "codex_turns": state["turns"],
+        "codex_commands": state["commands"],
+        "peak_turn_input_tokens": state["peak_input"],
+        "command_limit": command_limit,
     }
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
@@ -1578,7 +1883,11 @@ def run_codex(
     with os.fdopen(descriptor, "rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             return None, {**report, "outcome": "missing_result"}
-        raw = handle.read(MAX_RESULT_BYTES + 1)
+        # A little past the cap: the kept answer is scrubbed before it is cut, and a secret that
+        # straddles the cap must be seen whole.
+        raw = handle.read(MAX_RESULT_BYTES + 1 + _SCRUB_MARGIN_BYTES)
+    if raw_answer is not None:
+        _offer_raw_answer(raw_answer, raw)
     if len(raw) > MAX_RESULT_BYTES:
         return None, {**report, "outcome": "unparseable_result"}
     result = _result_object(raw.decode("utf-8", "replace"))
@@ -1714,14 +2023,19 @@ PROBE_DEADLINE_SECONDS = 120
 MAX_PROBE_EVENTS = 64
 
 
-def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, execution=None):
-    """Fixed probe protocol; retain partial restrictions without claiming success."""
+def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, execution=None, observed=None):
+    """Fixed probe protocol; retain partial restrictions without claiming success.
+
+    `observed`, when given, receives the client version the init frame reported (CI-4), even when the
+    init check then stops the probe."""
     state: dict[str, Any] = {"init": False, "infos": [], "result": False}
 
     def on_frame(frame: dict[str, Any]) -> None:
         if not state["init"]:
             if frame.get("type") != "system" or frame.get("subtype") != "init":
                 raise _Abort("missing_init_frame")
+            if observed is not None:
+                observed["client_version"] = _init_client_version(frame)
             violation = _check_claude_init(frame, PROBE_MODEL)
             if violation is not None or frame.get("tools") != []:
                 raise _Abort(f"init_{violation or 'tool_not_allowed'}")
@@ -1871,6 +2185,8 @@ def dispatch(
     ):
         raise BridgeRefused("bridged children are read-only")
     validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
+    # VF-INV-c: a verifier's child is held to the schema the host would accept.
+    result_schema = result_schema_for(result_schema, assignment)
     admission = ledger.host_run_admission(project_id, run_handle)
     if admission["provider"] != provider:
         raise BridgeRefused("host run admission differs from the route provider")
@@ -1939,6 +2255,8 @@ def dispatch(
             raise BridgeRefused("provider client version differs from the admitted client")
         if not ledger.client_version_reviewed(provider, identity["client_version"]):
             raise BridgeRefused("provider client version is not reviewed")
+        if provider == "claude" and _client_version(identity["client_version"]) < CLAUDE_SCHEMA_MIN_VERSION:
+            raise BridgeRefused("provider client cannot hold its result to the schema")  # O10 VF-6
         # The child is launched from the client the re-check just read.
         executable, digest = resolve_client(provider, untrusted=[project_root])
         if (executable, digest) != (identity["client_path"], identity["client_sha256"]):
@@ -1964,14 +2282,15 @@ def dispatch(
             project_id, run_handle=run_handle, agent_id=intent["bridge_run_id"]
         )
         execution = ledger._new_owned_execution(project_id, run_handle, intent["bridge_run_id"])
+        raw_answer: dict[str, Any] = {}
         if provider == "claude":
             result, report = run_claude(
                 ledger=ledger, project_id=project_id, run_handle=run_handle,
                 route=route, assignment=assignment, role_prompt=role_prompt,
                 export=export, control=control, environ=environ,
                 deadline_seconds=deadline_seconds, max_turns=max_turns,
-                executable=executable, worker_result_path=worker_result_path,
-                _execution=execution,
+                executable=executable, schema=result_schema, worker_result_path=worker_result_path,
+                _execution=execution, raw_answer=raw_answer,
             )
             if report["rate_limit_record_failed"]:
                 report.setdefault("observations_unavailable", []).append(
@@ -1990,7 +2309,7 @@ def dispatch(
                 schema=result_schema, environ=environ,
                 deadline_seconds=deadline_seconds, executable=executable,
                 worker_result_path=worker_result_path, role_prompt=role_prompt,
-                _execution=execution,
+                _execution=execution, raw_answer=raw_answer,
             )
             try:
                 ledger.observe_provider(
@@ -2004,6 +2323,9 @@ def dispatch(
                     ledger, project_id, run_handle, provider, "after",
                     observation_failure_reason(exc), report,
                 )
+        # VF-INV-a: the child's raw answer outlives this private directory, and is kept
+        # before validation can fence it.
+        report["raw_answer"] = _keep_raw_answer(ledger, project_id, raw_answer, environ)
         _record_usage(ledger, project_id, run_handle, provider, route["model"], report)
     finally:
         remove_private_directory(workspace)
@@ -2039,7 +2361,14 @@ def prepare_dispatch_result(assignment, result, report):
     caller, process-cleanup or account-release authority.
     """
     reviewed = True
-    result_validation_reason_code = None
+    # Owner decision 26 (VF-INV-d): a verifier's admission and status are the host's to set.
+    result, host_set = _host_set_verifier_fields(assignment, result)
+    if host_set:
+        report["host_set_fields"] = host_set
+    # O10 VF-2: a run that ended with no result may already carry its fixed reason.
+    result_validation_reason_code = (report.get("result_validation_reason_code") if result is None
+                                     and report.get("result_validation_reason_code") in RESULT_VALIDATION_REASON_CODES
+                                     else None)
     if result is not None and report.get("rerouted"):
         # A reroute means the work was not done by the routed model: its verdict
         # is unknown, and the result stays unreviewed. Validate before annotating:
@@ -2098,8 +2427,11 @@ def _unrecordable(
     # Raw child results cannot grant their own admission or attest a timeout.
     # Match host commitment before binding an immutable child-result digest;
     # real bridge timeouts get their authoritative fence later in dispatch.
-    if axes["admission_state"] != "unverified" or axes["execution_state"] == "timed_out":
-        return "invalid_result", "inconsistent_axes"
+    # (VF-INV-b: one fixed reason per branch.)
+    if axes["admission_state"] != "unverified":
+        return "invalid_result", "child_set_admission"
+    if axes["execution_state"] == "timed_out":
+        return "invalid_result", "child_set_timeout"
     # Host outcomes keep one digest per criterion plus the assignment/result
     # bindings. Fence before binding if that existing durable limit cannot fit.
     if len(result["evidence"]) + 2 > MAX_OUTCOME_EVIDENCE_DIGESTS:
@@ -2233,3 +2565,10 @@ def _codex_role_prompt(bundle_root: Path, route: dict[str, Any]) -> str:
     ):
         raise BridgeRefused("installed Codex agent differs from the routed configuration")
     return prompt
+
+
+def _client_version(text: Any) -> tuple[int, ...]:
+    """A client's version as numbers, (0,) when it cannot be read (so it is refused as too old)."""
+    import re
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", text) if isinstance(text, str) else None
+    return tuple(int(part) for part in match.groups()) if match else (0,)
