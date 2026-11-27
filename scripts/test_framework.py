@@ -246,7 +246,7 @@ def combine_measurements(reports):
                           discovery_seconds=sum(r['discovery_seconds'] for r in reports),
                           preflight_seconds=sum(r['preflight_seconds'] for r in reports), invocation_id=first['invocation_id'],
                           expected_fragments=first['plan'].get('expected_fragments'),
-                          origin='ci' if all(r.get('origin', 'ci') == 'ci' for r in reports) else 'local')
+                          origin='ci' if all(r.get('origin') == 'ci' for r in reports) else 'local')
     result['metadata_errors'] = sorted({error for report in reports for error in report.get('metadata_errors', [])})
     outcomes = {key: value for row in rows for key, value in row.get('outcomes', {}).items()}
     result['requirements'] = coverage(first['plan']['catalogue'], outcomes)

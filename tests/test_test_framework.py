@@ -381,6 +381,19 @@ class ReviewCoreTests(unittest.TestCase):
         self.assertEqual(['root:m'], ci['debt_retirement_required'])
         self.assertEqual([], ci['debt_retirable_local'])
 
+    def test_A8c_record_without_origin_is_local_evidence_not_ci(self):
+        row = dict(suite='root', unit='m#0', seconds=1., names=['m.a'], returncode=0, timed_out=False)
+        options = dict(layers={'root:m': 'unit'}, stages={'root:m': 'unit'}, jobs=1, elapsed=1., selection=['root:m'],
+                       budget_debt={'modules': {'root:m': 10.}}, expected_fragments={'root:m':['m#0']}, invocation_id='fixture-origin')
+        legacy = self.fw.measurements([row], origin='ci', **options)
+        del legacy['origin']
+        merged = self.fw.combine_measurements([legacy])
+        self.assertEqual('local', merged['origin'])
+        self.assertEqual([], merged['debt_retirement_required'])
+        self.assertEqual(['root:m'], merged['debt_retirable_local'])
+        explicit = self.fw.combine_measurements([self.fw.measurements([row], origin='ci', **options)])
+        self.assertEqual(['root:m'], explicit['debt_retirement_required'])
+
     def test_A11_empty_method_rationale_falls_back_to_class(self):
         fw = self.fw
         class Case(unittest.TestCase):
