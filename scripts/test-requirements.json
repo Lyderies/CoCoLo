@@ -3551,10 +3551,6 @@
  },
  "RSF-S3-1": {
   "checks": [
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_resumed_classification_keeps_original_wall_and_monotonic_evidence",
    "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
    "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
@@ -3566,9 +3562,6 @@
  },
  "RSF-S3-2": {
   "checks": [
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished",
    "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
    "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
@@ -3579,12 +3572,8 @@
  },
  "RSF-S3-3": {
   "checks": [
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_migration_context_is_reset_after_adoption_and_validation_exceptions",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_pending_refusal_gives_plain_next_step_and_update_command",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_resume_refuses_missing_kept_before_copy_without_writes",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished",
    "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
@@ -3597,11 +3586,6 @@
  },
  "RSF-S3-4": {
   "checks": [
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_resumed_classification_keeps_original_wall_and_monotonic_evidence",
    "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished",
    "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
@@ -3615,10 +3599,6 @@
  },
  "RSF-S3-5": {
   "checks": [
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
-   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
    "codex:tests.test_rsf_s3_resumable_account.ResumableAccountTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
    "codex:tests.test_rsf_s3_resumable_project_kill.ResumableProjectKillTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
